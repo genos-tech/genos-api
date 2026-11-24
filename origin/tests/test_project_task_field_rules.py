@@ -56,7 +56,10 @@ class ReadWriteTests(ProjectTaskFieldRulesTestBase):
     def test_rules_start_empty_with_owner_id(self):
         resp = self.get_rules()
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data, {"rules": {}, "ownerUserId": str(self.user.id)})
+        self.assertEqual(
+            resp.data,
+            {"rules": {}, "ownerUserId": str(self.user.id), "canManage": True},
+        )
 
     def test_owner_put_round_trips(self):
         put = self.put_rules(FULL_RULES)
@@ -86,9 +89,7 @@ class ReadWriteTests(ProjectTaskFieldRulesTestBase):
     def test_missing_project_id_is_400(self):
         resp = self.client.get(reverse("project_task_field_rules"))
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        resp = self.client.put(
-            reverse("project_task_field_rules"), {"rules": {}}, format="json"
-        )
+        resp = self.client.put(reverse("project_task_field_rules"), {"rules": {}}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_unknown_project_is_404(self):
@@ -120,6 +121,19 @@ class PermissionTests(ProjectTaskFieldRulesTestBase):
         resp = self.put_rules({"priority": {"required": True}})
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["rules"], {"priority": {"required": True}})
+
+    def test_read_says_whether_the_caller_may_manage(self):
+        # MIP-2336: the client shows "Customize Task Fields" from this flag, so it must match the PUT gate:
+        # owner and editor yes, viewer no.
+        self.assertIs(self.get_rules().data["canManage"], True)
+        row = ProjectMembers.objects.get(project=self.project, attendee=self.user2)
+        self.authenticate(self.user2)
+        self.assertIs(self.get_rules().data["canManage"], False)
+        row.member_role = "editor"
+        row.save(update_fields=["member_role"])
+        self.assertIs(self.get_rules().data["canManage"], True)
+        # The save response carries it too, so the client's cache stays right after a PUT.
+        self.assertIs(self.put_rules({}).data["canManage"], True)
 
     def test_non_member_cannot_read(self):
         outsider_project = ProjectMaster.objects.create(

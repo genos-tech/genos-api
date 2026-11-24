@@ -3,10 +3,13 @@ each must return the right manual section; no model call; the tool is on core an
 
 from __future__ import annotations
 
+from unittest import skipUnless
+
 from django.test import SimpleTestCase, override_settings
 
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext, ToolError
 from origin.services import guide_help
+from origin.services.guide_manual import load_manual
 from origin.views.public.mcp import surfaces
 from origin.views.public.mcp.tools import BY_NAME
 
@@ -73,9 +76,21 @@ class GuideHelpAnswers(SimpleTestCase):
         result = guide_help.answer("notifications")
         self.assertIn("https://app.example.test/?settings=notifications", str(result["settings"]))
 
-    def test_a_japanese_question_is_answered_from_the_english_manual_until_a_copy_exists(self):
+    def test_a_japanese_question_is_answered_from_the_japanese_manual_when_one_is_vendored(self):
+        # Without a vendored `manual.ja.json` the English manual answers; with one, the Japanese text does.
+        expected = "ja" if load_manual("ja") else "en"
         result = guide_help.answer("通知をオフにしたい")
-        self.assertEqual(result["text_language"], "en")
+        self.assertEqual(result["text_language"], expected)
+        self.assertEqual(guide_help.answer("通知をオフにしたい", "en")["text_language"], "en")
+
+    @skipUnless(load_manual("ja"), "needs the vendored Japanese manual")
+    def test_a_japanese_answer_carries_japanese_text_and_the_same_settings_link(self):
+        result = guide_help.answer("ダークモードにするには?")
+        self.assertEqual(result["text_language"], "ja")
+        self.assertTrue(any("ダーク" in m["text"] for m in result["matches"]))
+        self.assertTrue(any(s["link"].endswith("/?settings=general") for s in result["settings"]))
+        # The same question forced to English still answers from the English manual.
+        self.assertEqual(guide_help.answer("dark mode", "en")["text_language"], "en")
 
     def test_language_can_be_forced(self):
         result = guide_help.answer("通知", "en")

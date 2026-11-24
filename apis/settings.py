@@ -1740,7 +1740,7 @@ SEARCH_ENGINE = {
         },
         # Pro reads as: Genos ORGANIZES (composite writes — a milestone
         # + task tree in one approval), deep reasoning + adaptive
-        # effort, team memory, + GitHub, weekly digest.
+        # effort, team memory, + GitHub.
         "pro": {
             "llm_ask_daily": 250,
             "web_search_daily": 60,

@@ -32,11 +32,22 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
-      - name: Fail clearly when the token is missing
+      - name: Check that the token exists
+        id: token
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
+          if [ -n "$GH_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = "pull_request" ]; then
+            # A PR that only edits this job or the script cannot be compared without the secret; the weekly
+            # run (schedule) and workflow_dispatch still fail loudly so a missing secret never hides drift.
+            echo "::warning::FRONTEND_READ_TOKEN is not set: the comparison with frontend main was SKIPPED on this PR. The weekly run fails until the secret is added."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
             echo "::error::Repository secret FRONTEND_READ_TOKEN is not set, so the frontend's manual cannot be read. Add it (Contents: read on genos-tech/genos-frontend)."
             exit 1
           fi
       - name: Compare the copy with frontend main
+        if: steps.token.outputs.present == 'true'
         run: python scripts/sync_manual.py --github main --check

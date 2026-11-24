@@ -1,4 +1,7 @@
-"""Team note templates (MIP-1697): list, read, create, update, delete, and set a folder default.
+"""Note templates (MIP-1697, MIP-2337): list, read, create, update, delete, set a folder default.
+
+Two kinds share the table. A TEAM template has `team` set. A PERSONAL template has no team and is
+owned by `created_by`: only that user ever lists, reads, edits or deletes it; anyone else gets 404.
 
 ACL: any team member lists, reads and creates; the creator (or the team owner, for a departed
 creator) updates and deletes; setting a folder default also takes Editor on that folder. A caller
@@ -8,6 +11,7 @@ outside the team, or a bad team id, gets 404 (never 403), so a guessed id confir
 import json
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -34,9 +38,17 @@ def _bad(msg):
     return Response({"error": msg}, status=status.HTTP_400_BAD_REQUEST)
 
 
+SCOPE_PERSONAL = "personal"
+
+
+def _is_personal_request(data) -> bool:
+    return data.get("scope") == SCOPE_PERSONAL
+
+
 def template_dict(t: NoteTemplate, *, with_body: bool, names=None) -> dict:
     out = {
         "templateId": t.template_id,
+        "scope": SCOPE_PERSONAL if t.team_id is None else "team",
         "teamId": str(t.team_id) if t.team_id else None,
         "name": t.name,
         "title": t.title,
@@ -62,14 +74,28 @@ def _member_team(request, team_id):
 def _can_modify(t: NoteTemplate, team_id, user_id) -> bool:
     if str(t.created_by_id) == str(user_id):
         return True
+    if t.team_id is None:
+        return False
     return TeamMaster.objects.filter(team_id=team_id, owner=user_id).exists()
 
 
-def _get(template_id, team_id):
+def _get(template_id, team_id, user_id):
+    """A team template of `team_id`, or the caller's own personal one. Nothing else."""
     tid = as_int(template_id)
     if tid is None:
         return None
-    return NoteTemplate.objects.filter(template_id=tid, team=team_id).first()
+    mine = Q(team__isnull=True, created_by=user_id)
+    if team_id is not None:
+        mine |= Q(team=team_id)
+    return NoteTemplate.objects.filter(mine, template_id=tid).first()
+
+
+def _resolve_team(request, data):
+    """(team_id or None, ok). A personal request needs no team; a team one needs membership."""
+    if _is_personal_request(data):
+        return None, True
+    team_id = _member_team(request, data.get("team_id"))
+    return team_id, team_id is not None
 
 
 def _validate_fields(data, *, partial):
@@ -126,17 +152,19 @@ def _apply_default(t, folder):
 
 class NoteTemplateView(AuthenticatedAPIView):
     def get(self, request):
-        team_id = _member_team(request, request.GET.get("team_id"))
-        if team_id is None:
+        team_id, ok = _resolve_team(request, request.GET)
+        if not ok:
             return _nf()
         if request.GET.get("template_id") not in (None, ""):
-            t = _get(request.GET.get("template_id"), team_id)
+            t = _get(request.GET.get("template_id"), team_id, request.user.id)
             if t is None:
                 return _nf()
             return Response(template_dict(t, with_body=True))
-        rows = list(
-            NoteTemplate.objects.filter(team=team_id).defer("body").order_by("name", "template_id")
-        )
+        # One query: the team's templates plus the caller's own personal ones (never anyone else's).
+        mine = Q(team__isnull=True, created_by=request.user.id)
+        if team_id is not None:
+            mine |= Q(team=team_id)
+        rows = list(NoteTemplate.objects.filter(mine).defer("body").order_by("name", "template_id"))
         names = {
             str(r["id"]): r["username"]
             for r in CustomUser.objects.filter(
@@ -146,14 +174,16 @@ class NoteTemplateView(AuthenticatedAPIView):
         return Response([template_dict(t, with_body=False, names=names) for t in rows])
 
     def post(self, request):
-        team_id = _member_team(request, request.data.get("team_id"))
-        if team_id is None:
+        team_id, ok = _resolve_team(request, request.data)
+        if not ok:
             return _nf()
         clean, err = _validate_fields(request.data, partial=False)
         if err:
             return err
         folder = None
         if request.data.get("default_folder_id") is not None:
+            if team_id is None:
+                return _bad("A personal template cannot be a folder default.")
             folder, err = _resolve_default_folder(
                 request, team_id, request.data.get("default_folder_id")
             )
@@ -167,16 +197,20 @@ class NoteTemplateView(AuthenticatedAPIView):
                 t.save()
         except IntegrityError:
             return Response({"error": "Conflict."}, status=status.HTTP_409_CONFLICT)
-        change_feed.bump_notes(team_id, personal=True)
+        if team_id is not None:
+            change_feed.bump_notes(team_id, personal=True)
         return Response(template_dict(t, with_body=True), status=status.HTTP_201_CREATED)
 
     def put(self, request):
-        team_id = _member_team(request, request.data.get("team_id"))
-        if team_id is None:
+        team_id, ok = _resolve_team(request, request.data)
+        if not ok:
             return _nf()
-        t = _get(request.data.get("template_id"), team_id)
+        t = _get(request.data.get("template_id"), team_id, request.user.id)
         if t is None:
             return _nf()
+        # The row decides the kind, not the request: a team id sent for a personal row (or the
+        # other way round) never turns one into the other.
+        team_id = str(t.team_id) if t.team_id else None
         if not _can_modify(t, team_id, request.user.id):
             return Response(
                 {"error": "Only the creator or the team owner can change this template."},
@@ -191,6 +225,8 @@ class NoteTemplateView(AuthenticatedAPIView):
         if "default_folder_id" in request.data:
             if request.data.get("default_folder_id") is None:
                 t.default_for_folder = None
+            elif team_id is None:
+                return _bad("A personal template cannot be a folder default.")
             elif as_int(request.data.get("default_folder_id")) != t.default_for_folder_id:
                 # Only a CHANGE needs Editor on the folder: renaming a template whose default
                 # folder you can no longer edit must still work.
@@ -206,22 +242,25 @@ class NoteTemplateView(AuthenticatedAPIView):
                 t.save()
         except IntegrityError:
             return Response({"error": "Conflict."}, status=status.HTTP_409_CONFLICT)
-        change_feed.bump_notes(team_id, personal=True)
+        if team_id is not None:
+            change_feed.bump_notes(team_id, personal=True)
         return Response(template_dict(t, with_body=True))
 
     def delete(self, request):
         data = request.data if request.data else request.GET
-        team_id = _member_team(request, data.get("team_id"))
-        if team_id is None:
+        team_id, ok = _resolve_team(request, data)
+        if not ok:
             return _nf()
-        t = _get(data.get("template_id"), team_id)
+        t = _get(data.get("template_id"), team_id, request.user.id)
         if t is None:
             return _nf()
+        team_id = str(t.team_id) if t.team_id else None
         if not _can_modify(t, team_id, request.user.id):
             return Response(
                 {"error": "Only the creator or the team owner can delete this template."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         t.delete()
-        change_feed.bump_notes(team_id, personal=True)
+        if team_id is not None:
+            change_feed.bump_notes(team_id, personal=True)
         return Response(status=status.HTTP_204_NO_CONTENT)
