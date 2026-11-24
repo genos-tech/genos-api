@@ -1,0 +1,671 @@
+{
+    "language": "en",
+    "topics": [
+        {
+            "id": "api-keys",
+            "title": "API keys and webhooks, step by step",
+            "settings": ["developer"],
+            "markdown": "## Connect an AI app (no API key)\n\nTo connect Claude, ChatGPT or another AI app, you do not need a key. Open Settings → Developer → Connected apps → \"Connect your AI\", pick your app, and follow the steps. The app signs in to Genos as you. On the approval page you choose the teams it may use and what it may do: read, make changes, and deleting, which starts unticked. Then press Allow. Connecting needs the Core plan or above.\n\nThe address to paste is shown in that panel. It looks like `https://<your Genos API address>/api/public/v1/mcp/core`. Paste it whole, including the path, with nothing after it.\n\nTo end an app's access, open Settings → Developer → Connected apps and press Revoke. It stops working on its next request. \"Connecting Genos to other tools: API, MCP, and realtime\" has the steps for each app.\n\n## Making a key\n\n1. Open Settings → Developer → API keys.\n2. Type what the key is for, for example \"CI bot\".\n3. Choose Read or Read & write.\n4. Choose when it expires (\"Expires after\": 30, 90, 180 or 365 days). The default is 90 days, and no key lasts longer than a year. After that, you make a new key.\n5. For a Read & write key only, you can tick \"Also allow actions that can't be undone or that change who has access\". This covers deleting calendar events, milestones, sprints, notes and note folders, adding people to projects or approving their requests to join, and sharing notes. It is off by default. Leave it off unless the key really needs it.\n6. Press \"Create key\". Genos asks for your password again (\"Confirm it's you\") and does not ask again for 10 minutes. Accounts that sign in only with Google or GitHub have no password and are not asked.\n\n- The key is shown once (\"Copy your API key now\"). Copy it straight into wherever it will live. You cannot read it again later. If you lose it, revoke it and make another.\n- Keys begin with `gnos_`, so you can spot one in a log. The list shows only the first characters.\n- Genos emails you when a key is created on your account. If it was not you, revoke the key.\n- A key acts as you: anything you can see, it can see. Treat it like a password. Never put it in a public repository or in code that runs in a browser.\n- Revoking a key stops it on its very next request, and a revoked key cannot be turned back on. This is the right response to a key you think has leaked.\n- Keys made before every key had to expire say \"Never expires — replace it with a new key\". Replace them.\n\n## Team API keys\n\nA team key is tied to one team instead of to you. Only a team owner or editor can create one, through the API. Owners and editors see every live team key under Team API keys, with who made it. The owner can revoke any team key. An editor can revoke a viewer's key or their own. A team key also stops working when its creator leaves the team.\n\n## Using a key\n\nSend the header `Authorization: ApiKey <your key>`. The scheme is the word ApiKey. Bearer is for the app's own sign-in and is refused here. A key also cannot create or delete keys, so a leaked key cannot make more of itself.\n\n- `GET /api/public/v1/me/`: who the key acts as, its scope and its team. Start here to prove the key works.\n- `GET /api/public/v1/projects/`: your projects.\n- `GET` and `POST /api/public/v1/tasks/`: list tasks, or create one.\n- `GET` and `PATCH /api/public/v1/tasks/<id>/`: read or update one task.\n- `GET /api/public/v1/openapi.json`: the machine-readable description of all of the above. It is the one address that needs no key.\n- Each key may make 120 REST requests a minute.\n- A personal key belongs to you, not to one team, so each request must say which team it means. That is why `me/` shows no team for it. A team key carries its own team.\n\n## Limits by plan\n\n- REST API keys work on every plan.\n- MCP (an AI agent using your key, or a connected AI app) needs the Core plan or above.\n- Your Genos can also limit AI-app use by plan. When those limits are turned on: MCP calls per minute, per key or connected app, are 60 on Core, 120 on Pro and 240 on Max. Calls per day, per person, are 3,000, 10,000 and 30,000. Active API keys and connected apps are each capped at 3, 10 and 25. Only new ones are refused; the ones you have keep working.\n\n## Webhooks\n\nA webhook is Genos telling your server when something happens, instead of your script checking on a timer. In Settings → Developer → Webhooks, a team owner or editor adds one:\n\n1. Type an https address. It must be a public address.\n2. Tick the events it should receive: task.created, task.updated, task.completed, task.comment_created, message.created.\n3. Optional: choose projects. If you choose none, every project counts.\n4. For message.created, you must choose the channels to watch, because message text is sent to your address. If you choose none, no chat events are sent. Direct messages can never be sent to a webhook.\n5. Press \"Add webhook\". Genos asks for your password again, as for a key, and emails you that a webhook was added.\n\n- The signing secret is shown once (\"Copy your signing secret now\"). Use it to check the X-Genos-Signature header on each delivery.\n- If your address fails 10 times in a row, Genos switches the webhook off. It then shows \"Disabled after repeated failures\". Fix your endpoint, delete the webhook, and add it again. Adding it again creates a new secret.\n- Webhooks count per team: none on Free, 3 on Core, 10 on Pro, 25 on Max. The team's plan or the team owner's plan, whichever is better, decides. A disabled webhook still counts until you delete it. Existing webhooks keep delivering after a downgrade.\n\n## The team's view (owners and editors)\n\nBelow your own keys, Settings → Developer also shows a few sections to team owners and editors:\n\n- **Team API keys**: every key that can act on this team (see above).\n- **Connected AI apps**: AI apps that members connected and that can work in this team. The owner can end any of them; an editor can end a viewer's. \"End access to this team\" removes only this team; that person's other teams keep working.\n- **AI app use** (owner only): how much each member's AI apps did in this team, by week. Counts only: what they read or searched is not shown.\n- **Security log** (owner only): sensitive changes to this team, newest first. It covers members joining and leaving, role and ownership changes, invites, API keys, webhooks and alerts. Entries are kept for 365 days.\n\n## Things that don't exist yet\n\n- Public links. Nothing in your workspace can be opened by someone who is not signed in and allowed. A link you paste anywhere still checks the reader's access.\n- Spreadsheet export. Settings → Account → \"Download my data\" exports your own data as JSON, and a note can be exported as Markdown from its menu. There is no CSV export of tasks or chat.\n- Live connections to Slack, Notion, Jira and Asana. Google and GitHub are the two integrations. You can import tasks from CSV, Jira and Notion exports, notes from a Notion export folder, and (team owner) a Slack export into group chats.\n\n## The full reference\n\nThe \"Read the API docs →\" link in Settings → Developer opens the Genos Developers page. It is the complete reference for everything above, with every field, every event payload, and examples.\n"
+        },
+        {
+            "id": "basics",
+            "title": "Genos basics: layout and navigation",
+            "settings": [
+                "general.theme",
+                "general.colorTheme",
+                "general.density",
+                "general.language",
+                "general.sidebar"
+            ],
+            "markdown": "## What Genos is\n\nGenos puts chat, tasks and notes in one workspace, with an AI called Genos that can read all three. You don't switch between a chat app, a task tracker and a wiki. Everything sits in one place and stays connected: a chat thread can become a task, a task has its own notes and discussion, and Genos can answer questions across all of it.\n\n## The sidebar\n\nThe left sidebar has these entries, top to bottom:\n\n- **Genos**: the Genos page, a full page for asking Genos questions or asking it to do work. Your earlier conversations are listed under Ask history, where you can search them and pin them. This entry is always shown.\n- **Inbox**: things that are waiting for you (see below).\n- **Chats**: direct messages, group chats and one chat for each project.\n- **Tasks**: projects, tasks, milestones, sprints, the board and the table.\n- **Notes**: My Notes, Team Notes, notes shared with you, and notes attached to tasks and chats.\n- **To-Do**: your personal to-do list. It opens over the page you are on. Use **Move to page** to open the full list.\n- **History**: the chats, tasks and notes you opened recently, on three tabs.\n- **Settings** and **Sign out**.\n\nYour team is at the top of the sidebar. Click it to switch teams if you belong to more than one. Your avatar at the bottom opens your profile.\n\nYou can hide Inbox, Chats, Tasks, Notes and To-Do in Settings → General → Sidebar. Genos is always shown. The choice syncs across your devices.\n\n## The Inbox\n\nThe Inbox has two tabs:\n\n- **Activities**: things that happened. These include mentions, replies, reactions and task updates. Reminders you set also land here when they come due, as do reports from your Genos Assist Schedules and the free-trial notice.\n- **Requests**: things someone is waiting on you to decide. These include requests to join your team, project or group chat, and requests for access to your note. Team ownership claims, connection requests from other teams and items another team shared with yours land here too.\n\nUse **Mark all as read** on Activities, and **Sync inbox** to fetch items that arrived while the page was open.\n\n## Works everywhere\n\n- Press Cmd+K on a Mac (Ctrl+K on Windows and Linux) anywhere to open Spotlight. Spotlight is the quick-ask box: type to search your chats, tasks and notes, or press Enter to ask Genos.\n- On a phone, you can install Genos as an app. In Safari, tap Share, then **Add to Home Screen**. On an iPhone, notifications only work in the installed app.\n- Choose the app language in Settings → General → Language: English, 日本語, Español, Français, 中文 or हिन्दी. Some translations may be incomplete. Anything missing shows in English.\n- Choose Light, Dark or System under Settings → General → Appearance. System follows your device. You can also choose a color theme (the accent color) and a density (row height in lists and tables).\n- Paste a Genos link to a task, milestone, note, chat or thread into a message. Clicking it opens a preview window over the page, so you don't lose your place. **Move to page** opens the item itself.\n"
+        },
+        {
+            "id": "chat",
+            "title": "Chat: messages, threads, and mentions",
+            "settings": [
+                "chat",
+                "chat.messageLayout",
+                "chat.quickReactions",
+                "chat.doubleClickTodo",
+                "mentionGroups",
+                "customEmoji"
+            ],
+            "markdown": "## Kinds of conversations\n\nThe chat list has these sections: Direct Messages, Group Messages, Project Updates, Flagged Messages and Recent Activities.\n\n- **Direct messages (DM)**: one-to-one. For a quick talk with several people, start a multi-user DM (at least 3 people) without creating a group.\n- **Group messages**: named group chats. When you create one, you choose whether it is public or private. A private group can also be hidden, so only its members can see that it exists. **Browse group chats** lists the public groups you can join. To join a private group, you send a request, and the group's members get it in their Inbox.\n- **Project chats** (under Project Updates): every project has one. Task updates appear there as cards. Click a card to open the task.\n\nThe owner of a group can archive it. An archived group keeps everything but is read-only until it is unarchived. The owner can also delete the group.\n\n## Everyday messaging\n\n- **Threads:** use **Reply in thread** to keep side discussions out of the main flow. A thread opens in its own pane. Cmd+click a message on a Mac (Alt+click elsewhere) to open its thread.\n- **Mentions:** type @ to mention someone. They are notified in the app and by push. If your Genos has email notifications turned on, they also get an email while they are away. A mention group lets one @ reach a set of people. Any team member except guests manages them in Settings → Mention groups.\n- **Reactions:** hover a message to pick one of the three quick reactions, or open the emoji picker. Change the quick three in Settings → Chat → Quick reactions.\n- **Custom emoji and GIFs:** any team member can upload custom emoji in Settings → Custom emoji (PNG, JPG, GIF, WebP or SVG, up to 512 KB). Only the person who uploaded an emoji can delete it. Type /gif in the message editor to search GIPHY, when your Genos has it turned on.\n- **Flags:** use **Flag for later** to keep a message as a personal follow-up. Flagged messages are listed under Flagged Messages. **Mark done** when you have handled one, and use **View completed flags** to see past ones.\n- **Reminders:** use **Remind me…** on a message to pick a time, such as in 1 hour or tomorrow morning. When it comes due, you get a notification and an item in your Inbox. Task comments have the same option.\n- **To-Do:** **Add to To-Do** puts a message on your personal to-do list. Double-clicking a message does the same, unless you turn it off in Settings → Chat → Double-click action.\n- **Ask Genos about this message** asks Genos with that message attached. You can also select text inside a message and ask about just that text.\n- **Copy message link** gives a link that opens that exact message.\n\n## Your chat list and layout\n\n- Pin a chat to keep it at the top of your list. **Remove from sidebar** hides a chat for you only, until a new message arrives.\n- Group chats can carry personal tags. Tags are private to you, and you can filter the group list by them. The **Unread** filter shows only chats with unread messages.\n- Recent Activities shows the last 30 days of replies, mentions, reactions and task activity, with filters.\n- Mute a chat with the bell icon in its header.\n- **Message layout** in Settings → Chat chooses Compact (full-width rows, the default) or Bubble.\n- **Message actions** in Settings → Chat chooses up to 4 actions to keep on the toolbar that appears when you hover a message. The rest stay in the … menu.\n\n## Finding things again\n\n- Press Cmd+K (Ctrl+K) to search messages, tasks and notes, or ask Genos in plain language.\n- Search people and groups from the box at the top of the chat list.\n- On some plans, older messages are hidden. A banner in the chat says so.\n"
+        },
+        {
+            "id": "company-organising",
+            "title": "Organising a large workspace: one team, many departments",
+            "settings": ["mentionGroups", "general.sidebar"],
+            "markdown": "## The idea in one minute\n\nKeep the whole company in one Genos team, and build each department out of four things that share a name. Search, the AI and @mentions work inside one team, so one team lets everyone find what they are allowed to see. Teams are for separate companies; to work with another company, see \"Working with another company: cross-team sharing\".\n\n## A department is four things with one name\n\nTake a department called Payments:\n\n- **A project tag \"Payments\".** Put it on each of the department's projects (open a project, then Edit tags). The Tasks sidebar sorts projects by tag and can filter by it, so a person sees their department's projects together.\n- **A mention group \"payments\".** Settings → Mention groups → New group, then add the people. Writing @payments in a chat message, a task comment or a task body notifies all of them.\n- **A team folder \"Payments\".** In Notes, under Team Notes, make a folder and choose who can open it: everyone, or only people you add. You can add a whole mention group at once. This is where the department's knowledge lives: runbooks, policies, meeting notes. Folders nest, so a sub-team gets a subfolder.\n- **A public group chat \"payments · general\".** Use New Group Message and choose Public Group. Anyone in the team can find it and join.\n\nA sub-team repeats the same four things with a longer name: @payments-billing, a \"Billing\" subfolder, \"payments · billing\", and the tag on its projects.\n\n## Keeping something inside a smaller group\n\nUse the private version. What each one does today:\n\n- **A private group chat**: only people you add, or whose request to join you approve, are in it.\n- **A private project**: only its members open it. Anyone else can ask to join.\n- **A private team folder**: it opens only for the people you add, and it does not appear in anyone else's folder list.\n\nThe name of a private project still shows to everyone in the team (in Join Project, and in Spotlight when someone types #). The name of a private group chat shows in the chat search box, with a lock. To hide the name as well, tick \"Hidden: only members can see it exists\" when you create the project or group chat. Only a private project or chat can be hidden. Then non-members cannot find it or ask to join; members must add people themselves.\n\n## Where does it go?\n\n- Talk about one piece of work: that project's chat.\n- A decision or spec for one task: the task's note, so it stays with the work.\n- What the whole department should know: a note in its team folder.\n- A meeting recap: a note in the department's folder, or on the chat.\n- A topic with no project: a public group chat named \"department · topic\". Leave it when it is over.\n- Your own drafts and your day: My Notes and To-Do.\n\nName chats \"department · topic\". Then searching for the department's name lists all of them together.\n\n## Join little, find everything\n\n- Join your own sub-team's projects and chats, plus two or three others. You do not need to join something to find it.\n- Press Cmd-K (Ctrl-K on Windows) for Spotlight. Type # to pick a project, task, note or group chat, and @ for people and mention groups. Public projects you have not joined show up there too.\n- In the Tasks sidebar, Join Project lists the team's projects you have not joined.\n- In the chat sidebar menu, \"Browse group chats\" lists the team's public group chats, with a search box and a Join button. Typing a group's name in the chat search box also finds it.\n\n## Keeping your own sidebar short\n\n- Pin the few chats you open all day (Pin Chat). The rest sort by latest message.\n- Mute a noisy chat with the bell in its header.\n- Tag group chats for yourself (the ⋮ menu on a chat, Tags). The tags are private to you and filter your list.\n- Star the milestones, notes and folders you return to (Favorites), and save the task filters you keep rebuilding (Saved Filters).\n- Hide the parts of Genos you do not use: Settings → General → Sidebar.\n\n## Tidying up\n\nA project or a group chat you no longer use can be archived instead of deleted.\n\n## A ready-made example\n\nIf you kept \"Include sample instruction data\" ticked when you created the team, you already have one: the tag \"Sample dept\", @sample-dept, the \"Sample dept\" folders, two projects and two group chats. Open the note \"How the sample dept keeps its work tidy\" in Team Notes, copy what is useful, and delete the rest. To remove all of the sample data at once, the team owner opens Team Profile and chooses \"Remove sample data…\".\n"
+        },
+        {
+            "id": "company-setup",
+            "title": "Setting up Genos for your company: an owner's checklist",
+            "settings": ["mentionGroups", "security", "planUsage", "developer"],
+            "markdown": "## Before you start\n\nThis is a short list and some clicking, not a project. Read \"Organising a large workspace: one team, many departments\" first; this note is the checklist for building it. Inviting people (step 6) needs the team owner or editor role. Steps 8 to 10 are for the team owner.\n\n## 1. Write down the departments\n\nMake a short list, spelled the same way everywhere (payments, billing, growth). Each name becomes the tag, the @group, the folder and the chat, so keep names short and lowercase. You can rename any of them later. If you are creating the team now, type the list into the \"Departments (optional)\" box on the create-team page. Genos then makes the project tag, the mention group, the team folder and the public chat for each one, and you can skip steps 2 to 4 for them.\n\n## 2. Make the mention groups\n\nSettings → Mention groups → New group, one per department (and per sub-team). Add the people. This is also how you will reach a whole department in one message.\n\n## 3. Make the team folders\n\nNotes → Team Notes: one folder per department, with subfolders for sub-teams. Choose who can open each one. Use a private folder for HR, finance or security. Add the mention group instead of adding people one by one.\n\n## 4. Make the group chats\n\nEvery team starts with a public chat for the whole company called \"general\". Add one public chat per department (\"payments · general\"), unless the \"Departments\" box already made it. Add private chats only where a small group needs them. Nobody is added to a chat for you: people find public ones with \"Browse group chats\" in the chat sidebar menu, or by name in the chat search.\n\n## 5. Make the projects and tag them\n\nCreate the projects (Tasks sidebar → New Project) and put the department's tag on each (open the project, then Edit tags). Make a project private only when its contents must stay inside. Its name is still visible to the team unless you also make it hidden.\n\n## 6. Invite people\n\nOpen the Team menu (top left), choose Show Team Profile, then click Invite members. Then add each person to their department's mention group, folder, chat and projects. Guests are invited to one project only, from that project (\"Invite guests\"); they do not see the rest of the workspace.\n\n## 7. Teach three habits\n\n- Where does it go? (the list in \"Organising a large workspace\")\n- Join little, find everything: Cmd-K, then # and @.\n- Name things \"department · topic\" so a search finds them together.\n\n## 8. Set up billing\n\nEach person has their own plan in Settings → Plan & Usage. To pay for everyone at once, the team owner uses the \"Team plan\" section there (Team Core, Team Pro or Team Max). It is billed per seat, and only the team owner sees it. \"Manage team billing\" changes or cancels it.\n\n## 9. Secure sign-in\n\nAsk everyone, starting with yourself and your editors, to turn on two-step verification in Settings → Security. After the password, Genos then asks for a 6-digit code from an authenticator app. Keep the recovery codes somewhere safe. It applies to signing in with email and password. People who sign in with Google or GitHub turn it on in that account instead. Genos cannot require it for the whole team, so check with people directly.\n\n## 10. Decide about AI apps, and keep watch\n\nMembers can connect AI apps such as Claude or ChatGPT to Genos (Core plan and above). An app only sees what its member can see. To connect one, see \"Connecting Genos to other tools: API, MCP, and realtime\".\n\nAs the owner, you can check what is connected in Settings → Developer:\n\n- **Connected AI apps**: every AI app that can work in this team, and who connected it. You can end any of them for this team (\"End access to this team\"). An editor can end a viewer's.\n- **AI app use**: how much each member's AI apps did in this team, by week. It shows counts only, never what was read or searched.\n- **Team API keys**: every key that can act on this team. You can revoke any of them.\n- **Security log**: members joining and leaving, role and ownership changes, invites, API keys, webhooks and alerts. Kept for 365 days.\n- **Webhooks**: addresses that receive this team's events. Only owners and editors can add one.\n\nOwner, editor and viewer roles are explained in \"Teams, members, and roles\".\n"
+        },
+        {
+            "id": "connecting",
+            "title": "Connecting Genos to other tools: API, MCP, and realtime",
+            "settings": ["developer", "integrations"],
+            "markdown": "## Connect an AI app (no API key)\n\nYou can let an AI app such as Claude or ChatGPT work in Genos as you. The app signs in with your Genos account, so you do not need an API key. When you approve the connection, you choose which teams the app may use and what it may do. Deleting stays off unless you tick it.\n\nThe quickest way is Settings → Developer → Connected apps → \"Connect your AI\". It has one tab per app (Claude Code, claude.ai & Desktop, ChatGPT), each with its steps and the exact address to paste. It also shows whether an app is connected and when one last did something in Genos.\n\nThe address looks like `https://<your Genos API address>/api/public/v1/mcp/core`. Copy it from the panel. Paste the whole address, including the path at the end, with no slash and nothing after it. Without the full path, Claude says it signed in and then reports that Genos refused its request.\n\n**Claude Code**\n\n1. In the Claude Code chat, run the two commands shown in the panel. They add the Genos plugin.\n2. Run /mcp, sign in to Genos, then choose the team and what Claude may do.\n3. Run /genos:setup. It checks the connection. If you say yes, it saves the Genos rules to your memory file.\n\nIf you do not want the plugin, the panel also shows one terminal command, `claude mcp add --transport http genos <address>`, which connects Genos on its own. The plugin adds ready-made skills you call by name, such as /genos:catchup.\n\n**claude.ai and Claude Desktop**\n\n1. In Claude, open Customize, then Connectors. Add Genos from the directory. If it is not listed yet, choose Add custom connector and paste the address.\n2. Sign in to Genos when Claude asks. Choose the team and what Claude may do, then press Allow.\n\nTo add the plugin there instead, download the zip from the panel and upload it under Customize, Plugins.\n\n**ChatGPT**\n\nGenos is being listed in ChatGPT's directory. Until it is listed, on a ChatGPT plan that allows custom MCP servers, add one with the address and choose sign-in with OAuth. Then sign in to Genos and press Allow. This path has not been tested end to end with ChatGPT yet.\n\n**What to know**\n\n- Connecting an AI app needs the Core plan or above. On Free, the approval page says it is not on your plan. An app you connected earlier shows as Paused, and it works again once you are on Core or above.\n- Before you approve an app, Genos asks for your password again (\"Confirm it's you\"). It does not ask again for 10 minutes. Accounts that sign in with Google or GitHub have no password, so they are not asked. Genos also emails you when a new app is connected to your account.\n- Manage your apps under Settings → Developer → Connected apps. For each app you can change what it may do, add or remove teams, pick the default team, or press Revoke. A revoked app stops working on its next request.\n- The app only sees what you can see in the teams you chose.\n- When your Genos uses AI credits, a search by an AI app spends your credits, like a question asked in Genos. If you have no credits left, the search still answers, as a plain search.\n\n## Who this page is for\n\nThis page is for anyone connecting Genos to something else: an AI app, a script, or another service. The section above needs no programming. If none of this is you, skip this page; nothing else in Genos depends on it.\n\nAn AI app or an API key acts as the person who connected or created it, so it only sees what that person can see. The realtime stream acts as whoever is signed in. Webhooks are the exception: a team owner or editor sets one up for the whole team, and it carries that team's events no matter who created it.\n\n## Scripts and automation (API key)\n\nEverything from here to the end of this page is the API-key way. It is for a script, another app, or an AI agent that cannot sign in to Genos.\n\n## Getting a key\n\n- Create keys in Settings → Developer → API keys. A key is shown once, when you create it. Copy it then, because you cannot read it again later. Revoke a key at any time, and it stops working on its next request.\n- Choose Read or Read & write. A Read key sees what you can see and changes nothing. A Read & write key can also create and update.\n- Keys made on that screen are personal. They act as you in every team you belong to, so each request has to name the team it means. Team keys, which are tied to one team, can only be made through the API, and only by a team owner or editor. Owners and editors see every team key under Team API keys.\n\n\"API keys and webhooks, step by step\" has the details.\n\n## Which one to use\n\n- **The REST API**: for a script or another app that reads or creates Genos data when it needs to. It covers your projects, their tasks, and creating or updating single tasks. Use it for reports, imports, and anything you run on a schedule.\n- **Webhooks**: when you would rather Genos told you. A team owner or editor gives Genos a public https address. Genos posts there when tasks change, or when messages arrive in the channels they choose.\n- **MCP with an API key**: for an AI agent that cannot sign in. Add Genos to the agent as an HTTP MCP server at `https://<your Genos API address>/api/public/v1/mcp?team_id=<your team's id>`, with no slash before the question mark. Send the header `Authorization: ApiKey <your key>`. The scheme is the word ApiKey, not Bearer. A team key does not need the `team_id` part. MCP needs the Core plan or above.\n- **The realtime stream**: for something live, such as a dashboard or a bot that reacts the moment a message arrives. It carries the same live events the Genos app uses: messages, reactions, read receipts and who is online. It signs in with a Genos login, not an API key. Use realtime where a person is signed in, and webhooks for one server talking to another.\n\n## What an AI app can do\n\nThe address in the \"Connect your AI\" panel (ending in `/mcp/core`) gives an app 34 tools for day-to-day work: tasks, comments, notes, milestones, inbox, mentions, to-dos and calendar events. The full address (ending in `/mcp`) offers the whole catalog of 110 tools. Six of those appear only when your Genos has the matching feature turned on. Read access lets an app read; \"Make changes\" lets it write; deleting needs its own tick.\n\n## Checking it works\n\nStart with `GET /api/public/v1/me/`. It returns the person, the key's name and scope, and the key's team. For a personal key the team is empty. That means you must name the team on each request yourself.\n\n- The \"Read the API docs →\" link in Settings → Developer opens the Genos Developers page. It is the full reference for the REST API, MCP, webhooks and realtime events, with examples.\n\n## Other connections\n\n- Google: connect it in Settings → Integrations for Google Calendar.\n- GitHub: connect it in Settings → Integrations to link pull requests to tasks.\n- There are no live connections to Slack, Notion, Jira or Asana. You can import from them: tasks from a CSV, Jira or Notion export (\"Import tasks from CSV…\" in a project's menu), a whole Notion export folder as notes (Notes → Import → Whole folder), and, for a team owner, a Slack export as group chats (\"Import from Slack…\" in Team Profile).\n"
+        },
+        {
+            "id": "cross-team",
+            "title": "Working with another company: cross-team sharing",
+            "settings": [],
+            "markdown": "## What this is for\n\nSometimes the people you need in a chat, a project or a folder of notes work for another company: a client, an agency, a contractor. Genos lets you share one item with another team. They do not get into the rest of your workspace, and nobody needs a second account.\n\nIt works in two steps. First you connect the two teams, once. Then you share single items. A connection on its own gives the other team access to nothing.\n\n## Step 1: connect the two teams\n\n1. Ask the other company for their Team ID. They find it under Team ID in their Team Profile (team menu > **Show Team Profile**). On its own the Team ID grants nothing.\n2. Open your own Team Profile, go to **Connected teams**, paste their ID and choose **Request connection**. The row shows \"Waiting for them to approve\".\n3. Their team owner gets a **Team connection** card in their Inbox, under **Requests**. An owner or editor of their team can also answer from **Connected teams** in their own Team Profile, with **Approve** or **Decline**.\n4. Once approved, each team sees the other under Connected teams as \"Connected\". A chip on the row says who asked: **Owner** means they invited your team, **Guest** means your team invited them. Who owns a shared item is shown on the item itself.\n\n- You do this once per company, however much you share later.\n- Only an owner or editor can request or approve a connection. Anyone in the team can see the list.\n- Nothing arrived? Check that they sent their Team ID (not a user ID or a project ID). The card goes to their team owner.\n\n## Step 2: share one item\n\nOnly an owner or editor of your team can share an item.\n\n- **A chat**: when you create a group chat, turn on **Include another organization** and pick connected teams. You can also share an existing group chat or multi-person DM from its profile, under **Teams with access**, if you are in that chat. A one-to-one DM and a project chat cannot be shared. An external chat is always private.\n- **A project**: open the project profile and use **Teams with access** > **Share with a connected team**. Its tasks, task comments, files, task notes, milestones and project chat come with it.\n- **A note folder**: in a Team Notes folder's access settings, choose **Share with another organization** (offered only when your team has a connection) and pick connected teams. A shared folder is always restricted to the people let in.\n- When you share, you choose what they can do: **Edit** or **View only**. That is the highest role their people can get on that item. On a project, people from the other team always join as guests, whatever you chose: they work in its tasks but cannot manage its members.\n- The other team's owner gets a **Shared with your team** card in their Inbox. An owner or editor of that team accepts it. The person who accepts is let in at once, so they can open the item and decide who else on their side needs it.\n\n## Where the shared item turns up\n\nYou find it in your own workspace, in the usual place for that kind of item.\n\n- A shared project appears in your project list, marked as shared. Hover the mark to see which team shared it.\n- An external chat appears in your chat list with an **External** badge.\n- A shared note folder appears in your Team Notes with a **Shared** badge.\n- Only people who were let in see it. Colleagues who were not added see nothing.\n- Nothing there? Someone on your team has to add you. Ask whoever accepted the share.\n\n## Each side manages its own people\n\nAfter a share is accepted, the other team's owner or editor adds and removes their own colleagues on that item whenever they like. They do not need to ask you again.\n\n- Open the item (the project profile, the chat profile or the folder's access settings) and find **Teams with access**. Your own team's row has **Add someone from your team**.\n- They can add only people who are members of their own team, and never above the role you allowed.\n- You can remove any single person from another team at any time. You cannot add their people for them.\n- When someone leaves the other team, they lose access to your shared items at once.\n\n## What stays with the owning team\n\n- Renaming or deleting the shared project, chat or folder, and changing who in the owning team can reach it.\n- Sharing it further. A team you shared with cannot pass the item to a third team, and can add only its own members.\n- Ending the share. Either team can choose **Stop sharing with this team**. Everyone that team had on the item loses access at once. What they wrote inside stays with the owning team.\n\n## What people from the other team do not see\n\n- Only what was shared: that project, not your other projects; that chat, not your other chats; that folder, not your other notes. Never your member list.\n- Search and Genos follow the same boundary. They get results and answers only from the items they were let into.\n- Each person's AI use counts against their own plan and credits. Sharing an item does not give anyone your plan.\n\n## Ending a connection\n\n- Stop sharing one item from its **Teams with access** section.\n- To end everything, a team owner (on either side) chooses **Disconnect** under Connected teams. This ends every chat, project and note folder shared between the two teams, in both directions. Genos asks you to confirm, then says how many people were removed.\n- Either side can end a share or a connection without the other's agreement. You can connect again later, but the old shares do not come back by themselves.\n"
+        },
+        {
+            "id": "fixes",
+            "title": "Fixes for specific problems",
+            "settings": [
+                "notifications",
+                "notifications.master",
+                "notifications.quietHours",
+                "notifications.email",
+                "notifications.mutedChat",
+                "notifications.mutedItem",
+                "planUsage",
+                "aiCreditUsage",
+                "security",
+                "account"
+            ],
+            "markdown": "## Notifications\n\n- **Nothing arrives at all**: open Settings > **Notifications**. Check that Web notifications is on and that notifications are not paused (a moon on your avatar means they are paused). Then check **Browser permission**. If the browser blocks Genos, no setting in the app can override that.\n- **Nothing on an iPhone**: iOS delivers notifications only to the installed app. In Safari, tap Share and choose \"Add to Home Screen\", open Genos from the home screen, sign in, and allow notifications.\n- **Quiet for one conversation only**: it is probably muted. Settings > **Notifications** lists your muted chats and muted items (threads, tasks, notes). Unmute them from there.\n- **Too much email**: email has its own switch and categories, apart from in-app and desktop notifications. Every notification email also has an unsubscribe link.\n- **A toast instead of a desktop notification**: that is how it works. When the Genos tab is in front, you get an in-app toast. Desktop notifications are for when the tab is in the background.\n\n## Access\n\n- **A project or note won't open**: you are probably not a member. Where it is offered, use request access. The owner approves or declines it from their Inbox.\n- **You can't invite anyone**: inviting needs the team owner or an editor. Ask the owner to make you an Editor.\n- **The owner has gone quiet**: an editor can choose **Request ownership** in the Team Profile. If the owner does not answer within 30 days, the editor can choose **Take ownership**.\n- **An invite link doesn't work**: invites work only for the email address they were sent to and expire after 7 days. If you are signed in as someone else, choose **Sign out and continue**. If it expired, ask for a new invite.\n- **Account deletion is refused**: you still own a team that has other members. Transfer ownership of that team from its Team Profile, then delete.\n\n## \"Your plan doesn't include…\"\n\n- **Connecting an AI app shows \"Not on your plan\"**: connecting AI apps starts at Core. See Settings > **Plan & Usage**.\n- **A connected app shows \"Paused\"**: your plan does not include connected apps right now. It stays in the list and works again on Core or above.\n- **A schedule says it is paused because of your plan**: scheduled reports start at Core. Your schedules are kept and resume when you upgrade.\n- **\"Webhooks aren't included in your team's plan\"**: webhooks start at Core. The team's plan or the team owner's plan counts.\n- **An HTML page won't import**: HTML pages start at Core. A page over your plan's size limit is refused too.\n- **\"Your plan keeps up to … skills\"**: delete a skill or upgrade.\n- **An effort level says \"Upgrade to unlock\"**: Free goes up to Low, Core up to Medium, Pro and up to High.\n- **\"You've created all … for this month\"**: you reached the monthly task or note limit. It resets on the 1st (UTC).\n\n## Genos and AI credits\n\n- **Out of credits**: Genos says \"You've used all your AI credits, so Genos can't answer right now.\" Choose **Buy credits** for a pack that never expires, or **Upgrade plan**. Monthly credits reset on the 1st (UTC). Settings > **AI credit usage** shows what used them.\n- **A long answer stopped partway**: your balance ran low during the request. Buy credits or wait for the monthly reset.\n- **Out of asks for today** (when Genos does not use credits): the count resets at midnight UTC. Settings > **Plan & Usage** shows where you stand.\n- **It can't find something you just made**: indexing takes a moment. Try again shortly.\n- **It says it can't see something you can see**: check that you are in the right team. Each team's content is separate. Only one team can be active in a browser at a time. If a tab says you signed in to another team in another tab, reload it.\n- **It answered from something out of date**: fix the note it used. Answers follow the notes.\n- **A provider shows \"Available soon\"**: that provider is not offered yet.\n\n## Signing in\n\n- **Forgot your password**: on the sign-in page choose **Forgot password?** and use the link in the email. This works only for accounts that sign in with email and password. A Google or GitHub account has no Genos password: sign in with that provider.\n- **\"Too many wrong codes\"**: after 5 wrong two-step codes in a row the account is locked for 15 minutes. Each further wrong code makes the wait longer, up to 24 hours. Wait, then try again.\n- **\"That sign-in expired\"**: the code step must be done within a few minutes of entering your password. Enter your password again.\n- **Lost your phone**: on the code step choose **Use a recovery code** and enter one of your recovery codes. Each code works once. Then open Settings > **Security**, choose **Turn off** and **Turn on** to set up your new phone, and save the new recovery codes.\n- **Lost your phone and your recovery codes**: email support. Support checks that the account is yours before turning two-step verification off.\n\n## Everything else\n\n- **An upload was refused**: the file is over your plan's per-file size limit.\n- **The page looks stale or a button does nothing**: reload the tab. A tab left open for days keeps running the code it started with.\n- **You deleted a note's content by accident**: open the note's history and restore an earlier version.\n- **You deleted the in-app guide and want it back**: it is not re-created by itself. Ask support to restore it.\n- Still stuck: genos.support@genosai.dev\n"
+        },
+        {
+            "id": "genos-ai",
+            "title": "Genos AI: ask, act, and stay ahead",
+            "settings": [
+                "spotlight",
+                "spotlight.provider",
+                "spotlight.effort",
+                "spotlight.model",
+                "spotlight.aiAnswers",
+                "spotlight.webSearch",
+                "spotlight.contentLength",
+                "spotlight.sharedAnswers",
+                "spotlight.noteActivity"
+            ],
+            "markdown": "## Where you ask Genos\n\nGenos is the AI in your workspace. You can ask it from three places:\n\n- **Spotlight**, the quick-ask box. Press Cmd-K (Ctrl-K on Windows and Linux) anywhere. Type a few words to search, or write a question and press Enter to ask Genos.\n- **The Genos page.** Click Genos in the left sidebar. The page has the same box, a few \"Try asking\" starter questions, and your Ask history beside the conversation.\n- **On the thing itself.** A thread and a note each have an Ask button in their header. It shows a summary first, and then you can ask follow-up questions about that one thread or note. A task or milestone has \"Ask Genos about this task\" (or milestone) in its ... menu, and that conversation stays with the task. A chat message has \"Ask Genos about this message\", and you can also select text and choose \"Ask Genos about the selected text\". Calendar events, projects (\"Ask Genos about progress\") and sprints have their own Ask entries too.\n\nGenos reads only what you can open yourself: your chats, tasks, notes and to-dos. It cannot see a teammate's private notes or a chat you are not in.\n\n## Asking well\n\n- Type @ to pick a person or a mention group, and # to pick a task, project, note or chat. This tells Genos exactly what you mean.\n- Answers link to their sources. Click a link to open the source and check it.\n- Under an answer you can Copy answer, Save as note (it goes to My Notes), or Save as task. You can also rate the answer with Good answer or Needs work.\n- If you close Spotlight, a thread window or a note window while an answer is still being written, Genos keeps working. When it finishes you get a \"Your AI answer is ready\" notification. You can turn this off under AI answer ready in Settings > Notifications.\n\n## What Genos can do on your plan\n\nWhat Genos can do depends on your plan:\n\n- **Free:** Genos answers, searches and summarizes. It cannot create or change anything. If you ask it to make a task or a note, it writes the full text for you to paste.\n- **Core:** Genos can also make one change at a time, for example create or update a task, write or edit a note, add a comment, add a to-do, or manage a calendar event once Google Calendar is connected. It can search the web, and it can look back through your past Genos conversations.\n- **Pro and Max:** Genos can also make larger changes in one step. For example, it can create a milestone with all of its tasks, update many tasks at once, or set task dependencies. It can also read GitHub pull requests once GitHub is connected.\n\n## Nothing changes without your approval\n\n- Before every change, Genos shows a card titled \"Approval required\" with exactly what it will create or change. Click Approve or Reject.\n- For many changes you can click Edit and fix a title, a date or a sentence before you approve.\n- A card marked \"Can't be undone\" tells you before you approve that this change cannot be reversed.\n- After you approve, many changes show an Undo button. Undo puts back what that one change did. It works for up to 7 days, as long as nothing has changed the item since then. Undo cannot take back notifications, messages or emails that were already sent.\n\n## Skills\n\nA skill is a note of written steps with a name. In the box, type / at the start of your question to pick a skill and run it. A skill is either \"Read only\" or \"Read and propose changes\". If it proposes a change, the change still waits for your approval. You write and share skills in Settings > Genos > Skills. Skills are there only when your Genos has them turned on.\n\n## AI use and credits\n\n- Each ask, summary and AI report uses your plan's AI allowance. Depending on how your Genos is set up, this is either monthly AI credits or daily ask limits. Settings > Plan & Usage shows which one applies to you, and Settings > AI credit usage shows what used your credits.\n- When credits run low, a long request may stop partway. When they run out, Genos cannot answer until they renew, or until you buy credits or upgrade. Search still works.\n\n## Settings for Genos\n\nAll of these are in Settings > Genos. The gear in Spotlight and on the Genos page opens the first three, plus What Genos remembers.\n\n- **AI model:** which model answers you. On some Genoses this shows an Effort choice (Low, Medium or High) instead. Free can use Low, Core can go up to Medium, and Pro and above can use High. Providers marked \"Available soon\" cannot be chosen yet.\n- **Genos answers:** AI answers lets the Ask button send your question to Genos. When it is off, Spotlight shows search results only. Web search lets Genos use the web when it answers. It is off until you turn it on, needs AI answers to be on, and is included from Core up.\n- **How much Genos writes:** Short, Standard or Long. This sets the length of the tasks, milestones, notes and plans Genos writes for you. Chat answers stay short at every level.\n- **Genos Assist Schedules (Core and above):** Genos prepares a report at times you choose and puts it in your Inbox, or posts it in a chat. The reports are Group chat catch-up, Project updates, Milestone updates, Team activity, What is left from last week, What you did, What to do today, and Run a skill (where Skills are on). Core can have 5 schedules, Pro and Max 20. Click Run now to get a report straight away. A schedule pauses itself after 3 failed runs in a row.\n- **What Genos remembers:** see and delete your Genos conversations. Here you also choose whether your answers may help teammates (\"Let my answers help teammates\") and whether Genos notes what your connected AI apps do (\"Note my activity\", kept 180 days). You can see and delete what Genos stored, and set how Genos weighs things when it ranks your tasks.\n"
+        },
+        {
+            "id": "notes",
+            "title": "Notes: personal, team, and shared",
+            "settings": [],
+            "markdown": "## Where notes live\n\n- **My Notes**: private to you. Organize them with folders and subfolders.\n- **Team Notes**: team folders. Each folder sets who can use it. **Open to the team** means any teammate can read and write in it. **Restricted** limits it to the people you choose. A subfolder can inherit its parent's setting, and every note inside follows its folder.\n- **Shared with me**: notes other people shared with you.\n- **Task notes**: attached to a task. Members of the project can read and edit them, so plans live next to the work.\n- **Chat notes**: attached to a chat or thread, for shared minutes and decisions. People in the chat can read and edit them.\n- Star notes and folders to add them to **Favorites**.\n\n## Editing\n\n- The editor is a block editor. It has headings, bulleted and numbered lists, checkboxes, code blocks, tables and images. You can @-mention people and leave comments on text.\n- Notes are edited together in real time. Several people can edit at once and see each other's changes as they happen.\n- **Version history** keeps earlier versions. Pick one to preview it, and restore it if needed. Restoring adds a new version, so nothing is lost. Only the note's owner and editors can restore.\n- **Note templates:** team templates appear next to the built-in ones in the New note menu. A template can be the default for a folder.\n\n## Import and export\n\n- **Import Markdown…** creates a note from a .md file. Choose **Whole folder** to import a folder tree, such as a Notion export. Every subfolder becomes a note folder, every Markdown file becomes a note, and images come along.\n- When your Genos has HTML pages turned on, the same dialog also takes a .html file and saves it as an HTML page.\n    - The page is shown in a sandbox, and you can't edit it in the note editor.\n    - Parts the sandbox blocks, such as scripts or styles loaded from other addresses, are listed when you import.\n    - HTML pages need the Core plan or higher, and each plan has a size limit.\n- **Export as Markdown** saves one note. **Export folder as .zip** saves a whole folder as Markdown files with their images, and the zip can be imported back.\n\n## Sharing and access\n\n- Use **Share** on a note to add teammates as **Editor** (can change the note) or **Viewer** (can only read). Only the owner can add or remove people.\n- If you open a note you can't see, use **Request Access**. The owner gets the request in their Inbox and can approve it there.\n- Search (Cmd+K or Ctrl+K) covers every note you can read.\n"
+        },
+        {
+            "id": "notifications",
+            "title": "Notifications: in-app, push, and email",
+            "settings": [
+                "notifications",
+                "notifications.master",
+                "notifications.quietHours",
+                "notifications.group",
+                "notifications.category",
+                "notifications.email",
+                "notifications.emailCategory",
+                "notifications.mutedChat",
+                "notifications.mutedItem"
+            ],
+            "markdown": "## The three channels\n\n- **In-app:** your Inbox, plus a toast when the tab is open but you are on another screen.\n- **Push:** a desktop or phone notification when the tab is in the background or Genos is closed. Allow it next to \"Browser permission\" in Settings > Notifications. The device you are looking at does not get a push for news it already shows, but your other devices still do. On an iPhone, notifications work only after you add Genos to your Home Screen.\n- **Email:** for when you are away. Genos waits until you have been away for a while, then sends one email with what you missed, not one email per event. Anything you read in the app before then is left out. Email is sent only when your Genos has email turned on.\n\n## Settings > Notifications\n\n- **Web notifications:** the main switch. When it is off, no category notifies you, and that includes email.\n- **Pause notifications:** silences in-app, push and email notifications. Pause For 30 minutes, For 1 hour, For 2 hours, Until tomorrow, Until next week, or pick a date and time. Under On a schedule you can pause every day during set hours, for example 17:00 to 09:00. While you are paused, others see a moon on your avatar. The status menu on your avatar also has quick pause choices.\n- **Groups:** Chats, Thread replies, Mentions, Task comments, Inbox, and What my AI apps do. Each group has its own switch, and some open to finer switches:\n    - Mentions: one switch for each place you can be mentioned (chat message, thread reply, task description, task comment, My Notes, task note, chat note).\n    - Inbox: requests and notices, AI answer ready (an AI answer finished after you closed its window), Message reminders and To-do reminders. If you turn a reminder switch off, the reminder still appears in your Inbox, just without a notification.\n    - What my AI apps do: what AI apps connected to Genos (for example Claude) do for you. By default you are alerted only for risky actions: deletes, changes to who can open a note or who is in a project, many refused requests, a new app or API key connected, and changes to 10 or more items at once. You can turn on alerts for other actions too.\n- **Email notifications:** a separate switch for email, with its own categories. These are on by default: Mentions in chat, Mentions in threads, Mentions in tasks, Mentions in notes, Thread replies, Task comments, and Requests & notices. Being assigned a task also emails you. \"Every chat message\" and \"Reactions\" are off by default. A finished AI answer is never emailed. If you turn off a group above, its emails stop too.\n- **Muted chats** and **Muted items:** everything you have muted, with an Unmute button for each.\n\n## Muting one conversation or item\n\n- To mute a chat, click the bell in the chat header.\n- To mute one thread, task or note, use its header or its ⋮ menu.\n\n## Unsubscribing from email\n\nEvery notification email has an unsubscribe link. It turns email notifications off. You can turn them back on in Settings > Notifications.\n\nThe old daily email digest and the 8am Inbox digest no longer exist. For a regular summary, set up a Genos Assist Schedule in Settings > Genos (Core and above).\n"
+        },
+        {
+            "id": "plans",
+            "title": "Plans, limits, and what happens when you hit one",
+            "settings": ["planUsage", "aiCreditUsage", "spotlight.effort", "spotlight.webSearch"],
+            "markdown": "## Where to look\n\nSettings > **Plan & Usage** shows your plan and how much of each limit you have left. **Compare plans** opens the plans page. It compares every plan and has the upgrade buttons. Payment goes through Stripe. **Manage billing** opens the Stripe portal, where you can change plan, update the payment method or cancel.\n\n- **Your plan is your own.** Each person has a personal plan.\n- **Team plan.** A team owner can also buy a per-seat team plan (**Team Core**, **Team Pro** or **Team Max**) on the plans page. Only the team owner sees that section. Every member of the team then gets at least that plan. Guests do not.\n- **Which plan counts.** Genos uses the best of your own plan and the plans of every team you are a member of. Plan & Usage says \"via team …\" when a team's plan is the one that counts.\n- **First month free.** When your Genos has it turned on, a new account gets Core free for its first 30 days, with no card. Plan & Usage then shows a **Free trial** chip and the end date. Genos also leaves an Inbox notice 5 days before the end and 1 day before. After that you go back to Free. Your data stays. Connected apps and scheduled reports pause until you are on a paid plan again.\n- **Changing plan.** An upgrade takes effect at once and you pay the difference. A downgrade takes effect at the end of the billing period. If you cancel, you keep your plan until the end of the billing period.\n\n## What each plan includes\n\nThese are the limits your Genos ships with. Plan & Usage shows the numbers that apply to you.\n\n- **Free**: 20 AI asks a day; 50 tasks and 50 notes created a month; 180 days of message history; files up to 5 MB; 30 days of Genos conversation history. Genos answers questions, at Low effort, and sees only your workspace (no web search). No scheduled reports, no connected AI apps or MCP, no webhooks, no HTML notes, up to 3 skills.\n- **Core**: 100 AI asks and 25 web searches a day; 200 tasks and 200 notes a month; 365 days of message history; files up to 25 MB; 180 days of Genos history. Genos can take actions for you, at up to Medium effort, and remembers your own history. It can search the web and use Google Calendar. Connected AI apps (MCP), up to 5 scheduled reports, up to 25 skills.\n- **Pro**: 250 AI asks and 60 web searches a day; 500 tasks and 500 notes a month; unlimited message history; files up to 50 MB; 365 days of Genos history. Genos can organize whole plans, at up to High effort (tuned automatically), and draws on your team's knowledge. GitHub as well. Up to 20 scheduled reports, up to 100 skills.\n- **Max**: 500 AI asks and 150 web searches a day; unlimited tasks and notes; unlimited message history; files up to 100 MB; unlimited Genos history. Same reach and depth as Pro. Up to 20 scheduled reports, unlimited skills.\n- **Enterprise**: unlimited asks, searches, tasks and notes; files up to 200 MB; unlimited Genos history. Arranged through **Contact sales**, not bought in the app.\n\nWhen Genos is not using AI credits, daily caps for premium AI models also apply, by plan.\n\nBefore Genos creates or changes anything for you in the app, it shows you what it will do and waits for your approval.\n\n## Other limits by plan\n\n- **Webhooks, per team**: Free none, Core 3, Pro 10, Max 25, Enterprise unlimited. The team's plan or the team owner's plan counts, whichever is better.\n- **Scheduled reports, per person**: Free none, Core 5, Pro 20, Max 20, Enterprise 20.\n- **Skills you own** (when your Genos has Skills turned on): Free 3, Core 25, Pro 100, Max and Enterprise unlimited.\n- **HTML notes** (when your Genos has them turned on): not on Free; Core up to 512 KB a page and 100 HTML notes; Pro and up 1 MB a page and 500 HTML notes.\n- **Connected AI apps and API keys**: Core and up. New connected apps and new API keys per person: Core 3, Pro 10, Max 25. Calls per minute for each key or app: Core 60, Pro 120, Max 240. Calls per day for each person: Core 3,000, Pro 10,000, Max 30,000. Enterprise has no limits. These limits are enforced only when your Genos is set to enforce them. Existing apps and keys keep working.\n\n## AI credits\n\nWhen your Genos uses AI credits, the monthly credits are your AI limit instead of the daily asks and web searches. Plan & Usage then shows a credit meter instead of the daily counts.\n\n- Monthly credits: Free 5, Core 30, Pro 70, Max 150, Enterprise unlimited. They reset on the 1st of each month (UTC). Unused monthly credits do not carry over.\n- These use credits: asking Genos (including running a skill), summaries of threads and notes, the AI sentences in scheduled reports, and AI searches run by your connected apps (Claude, ChatGPT or an API key). A simple question uses fewer credits; deeper work uses more. Searching in Spotlight without asking Genos uses none.\n- One request costs at most 5 credits.\n- Skills have an effort level (Low, Medium, High). When your balance is low, a skill run starts one level lower and says so.\n- Settings > **AI credit usage** shows credits left, what you used this month by job, and recent charges.\n- **Buy credits.** The plans page has **Need more credits?** with packs of 10, 50 or 100 credits. Your monthly credits are used first. Bought credits never expire. Packs are not sold on plans with unlimited credits, or when your Genos does not use credits.\n\n## Hitting a limit\n\n- **Low on credits**: you see \"Running low — a long request may stop partway.\" You can still ask. A long request may stop partway when your balance runs out.\n- **Out of credits**: Genos says \"You've used all your AI credits, so Genos can't answer right now.\" and offers **Buy credits** and **Upgrade plan**. Summaries stop too. Scheduled reports still arrive, without their AI sentences. Searches by your connected apps still answer, as plain searches without AI, and say so.\n- **Daily limits** (when Genos does not use credits): asks and web searches reset at midnight UTC. Nothing is lost.\n- **Monthly task and note limits**: you see \"You've created all … for this month.\" The count resets on the 1st (UTC). Deleting a task or note does not give you the count back.\n- **History limits hide; they do not delete.** Messages and Genos conversations older than your plan's window stop showing. Upgrading brings them back.\n- **Upload refused as too large**: that is your plan's per-file limit, not a broken file. The limit is per file, not per day.\n- **Over a count limit** (webhooks, scheduled reports, skills, connected apps, API keys): only new ones are refused. What you already have keeps working after a downgrade. Paused schedules and connected apps work again once you are back on a plan that includes them.\n"
+        },
+        {
+            "id": "playbooks",
+            "title": "Playbooks: how different kinds of work fit Genos",
+            "settings": ["tasks.autoCloseOnPrMerge", "integrations", "spotlight"],
+            "markdown": "## How to read this page\n\nGenos does not assume you write software. Below is one starting shape for each kind of work. Pick the closest one and ignore the rest. They all use the same three pieces, chat, tasks and notes, arranged in different ways.\n\n## Engineers\n\n- Make one project per service or repository.\n- Connect GitHub in Settings → Integrations. If your team uses the Genos GitHub App, a team owner or editor installs it once for the team, and then each person presses Authorize. The app is read-only and has no access to code. A connection made the old way shows a note and a Reconnect button. Press Reconnect to switch to narrower, per-repository access.\n- To close tasks automatically, turn on \"Close my tasks when their PR merges\" in Settings → Tasks. It is off by default. When a pull request merges, Genos closes the task whose ID is in the PR's branch name (for example, branch `feature/GEN-42-foo` closes GEN-42). It only closes tasks assigned to you. If a task has several PRs, it closes when the last open one merges.\n- Use dependencies for real blockers. If you mark task B \"Blocked by\" task A, Genos sets B to Blocked. When A finishes, Genos moves B back to Open. \"Open task graph\" shows what is holding a milestone up.\n- Keep design docs in the task's own notes, so the plan stays with the work.\n- Ask Genos, for example \"what changed in the API project this week?\", instead of reading the whole channel.\n- To let Claude Code or another AI app work on your tasks, see \"Connecting Genos to other tools: API, MCP, and realtime\".\n\n## Product and project managers\n\n- Use milestones for dated outcomes, sprints for a regular rhythm, and the task table when you need a spreadsheet view.\n- When you rebuild the same filters again and again, use Saved Filters → \"Save current filters…\". A saved filter is shared with everyone in the project.\n- In Customize Task Fields, add the custom fields your process needs and mark them required. Then a task cannot be created without them.\n- Task Weight, Team Capacity and Velocity on the dashboard help you check whether a plan is realistic.\n- For a regular status report, add one in Settings → Genos → Genos Assist Schedules (Core and up). At the times you choose, Genos sends the report to your Inbox or posts it in a chat. Available reports include project and milestone updates, team activity, and what to do today.\n- Ask for status instead of putting it together yourself: \"what's at risk before Friday?\", \"what did we close last sprint?\"\n\n## Marketing\n\n- Make one project per campaign or channel, with a milestone for each launch date. Tag tasks by medium (blog, email, social, paid), then filter to one medium at a time.\n- Draft copy in notes, where several people can write in the same document at once. Put the brief in the task's note, above the drafts.\n- Keep approvals in the campaign's chat, so they stay with the work. Turn the decisions that need follow-up into tasks.\n\n## Research and analysis\n\n- Write one note per source or interview, with a folder per study. Make one task per open question. The notes hold the material; the tasks hold what you still owe.\n- Genos shows the sources it used for an answer. Click a source to open the exact note before you quote it.\n- To ask questions about one long document, use the Ask button in the note's header.\n- To bring in existing material, use Notes → Import. \"Whole folder\" turns a folder tree, such as a Notion export, into note folders and notes.\n\n## Students\n\n- Make one project per course, a milestone per exam or deadline, and a notes folder per subject. Due dates put every course on one calendar.\n- To-Do is a checklist for each day, separate from your coursework tasks. It suits study sessions.\n- Before an exam, ask about your own notes: \"explain what I wrote about elasticity\". Use group chats for study groups.\n\n## Operations, back office, and support\n\n- Keep recurring procedures as checklists in notes, with one task per run. Project templates (in the project menu) give each run the same starting text.\n- Make one project per process, such as onboarding, invoicing or vendor reviews. Use required fields for details that must never be missing.\n- In chat, \"Flag for later\" keeps a message as a personal follow-up, and \"Remind me…\" brings it back at a time you choose. Turn requests that need tracking into tasks.\n- Every task keeps a history of who changed what and when.\n- To move work over from another tool, use \"Import tasks from CSV…\" in the project's menu. It reads CSV files, including Jira and Notion database exports, and Jira JSON files. A team owner can also bring a Slack export into group chats with \"Import from Slack…\" in Team Profile.\n\n## Repeat your own steps with Skills\n\nIf your Genos has Skills turned on, you can write a set of steps once and run it again later. Open Settings → Genos → Skills and create a skill. A skill can be just for you or shared with your team. To run it, type / at the start of a question in Spotlight and pick the skill. A Genos Assist Schedule can also run a skill at set times. It runs the published version, which only reads and changes nothing.\n\n## Whatever the work is\n\nThe pattern under all of these is the same. Discussion goes in chat, commitments become tasks, and lasting knowledge goes in notes. Genos reads all three, so you can ask instead of hunting. Start with one real project rather than a perfect structure. The structure is easy to change later.\n\n## A whole company\n\nSetting Genos up for a company with many departments? Read \"Organising a large workspace: one team, many departments\" and \"Setting up Genos for your company: an owner's checklist\".\n"
+        },
+        {
+            "id": "searching",
+            "title": "Searching and asking: how to get better answers",
+            "settings": [],
+            "markdown": "## One box, two jobs\n\nPress Cmd-K (Ctrl-K) to open Spotlight. As you type, Genos searches your messages, tasks, notes and to-dos and shows the results below the box. No AI answer is written while you type. When you press Enter or click Ask, Genos reads the matching material and answers your question. Use a few words to search, and a full sentence to ask.\n\nIf AI answers are turned off in Settings > Genos, the box only searches.\n\n## Narrowing a search\n\n- Use the chips under the box to show only Chats, Tasks, Notes, Todos or Genos answers (answers Genos gave before).\n- Use the project picker to limit results to one or more projects. Todos and Genos answers have no project, so you cannot use them together with a project filter.\n- There is no search syntax. Quotation marks, AND, OR, a leading minus and field:value are read as ordinary words. Use the chips instead. Search matches meaning as well as exact words, so a plain phrase usually works best.\n- To find one task, type only its id, for example MIP-890. That task appears at the top.\n- Archived items still show up, marked Archived. Items in a deleted project do not show up.\n- You only ever see what your account can open, and so does Genos.\n\n## Asking well\n\n- Name things in the question: @ for a person, # for a task, project, note or chat. \"What's left on #WRD before Friday?\" works better than \"what's left\".\n- Ask where the material is. A thread and a note each have their own Ask button. A task has \"Ask Genos about this task\" in its ... menu. These limit the question to that one item.\n- Answers link to their sources. Click a link to check it.\n- Click a search result to open a preview over your list, so you keep your place. Cmd-click (Ctrl-click) opens the full page instead.\n- Save a good answer with Save as note. It goes to My Notes and can be found by search later.\n\n## When it can't find something\n\n- New content takes a moment to become searchable. If something you just made does not show up, wait a little and try again.\n- Web search is separate from workspace search. Turn it on under Web search in Settings > Genos. It is included from Core up. When it is off, Genos answers only from your workspace.\n\n## Finding an answer you already had\n\nThe Genos page lists your past conversations under Ask history. It shows your 20 most recent conversations. Two things reach past that:\n\n- **Search past asks.** The search box above the list matches every question in a conversation, not just the first one shown on the row. It searches your whole history, not only the 20 rows on screen.\n- **Pin.** Click Pin this ask on a row to keep it at the top under Pinned, above Recent. Pinned conversations do not count toward the 20 recent ones. Click Unpin to remove the pin.\n\nHow far back your history goes depends on your plan: 30 days on Free, 180 days on Core, 365 days on Pro, and no limit on Max. Pinning does not keep a conversation past that limit. The conversation is hidden, not deleted, and it comes back (still pinned) if you upgrade.\n"
+        },
+        {
+            "id": "security",
+            "title": "Security and sign-in",
+            "settings": ["security", "account", "developer"],
+            "markdown": "## Two-step verification\n\nTwo-step verification makes Genos ask for a 6-digit code from an authenticator app after your password. A stolen or guessed password alone can no longer open your account.\n\n- It applies when you sign in with your email and password. If you sign in with Google or GitHub, turn on two-step verification in that account instead. There is nothing to set up in Genos.\n- It is off until you turn it on.\n\nTo turn it on:\n\n1. Open Settings > **Security** and choose **Turn on**.\n2. Enter your password.\n3. Scan the QR code with an authenticator app (Google Authenticator, 1Password, Authy or any app that makes 6-digit codes). If you can't scan it, type the setup key into the app.\n4. Enter the 6-digit code the app shows. The code changes every 30 seconds.\n5. Save your 10 recovery codes (**Copy all** or **Download**), confirm with \"I have saved these codes\", and choose **Done**. They are shown only this once. Keep them apart from your password.\n\nWhen you sign in, enter the code from the app. If you don't have your phone, choose **Use a recovery code**. Each recovery code works once. Settings > **Security** shows how many are left. **Get new recovery codes** replaces the whole set, and the old codes stop working.\n\n**Turn off**, **Turn on** and **Get new recovery codes** all ask for your password.\n\nAfter 5 wrong codes in a row, the account is locked for 15 minutes. Each further wrong code makes the wait longer, up to 24 hours.\n\n## If you lose your phone\n\n1. Sign in with your password, then choose **Use a recovery code** and enter one of your codes.\n2. Open Settings > **Security**, choose **Turn off**, then **Turn on** again with your new phone.\n3. Save the new recovery codes.\n\nIf you have lost your recovery codes too, email genos.support@genosai.dev. Support checks that the account is yours before turning two-step verification off. Then you sign in with your password and can set it up again.\n\n## Your password is asked again\n\nBefore you add an API key or a webhook, connect an AI app, or give a connected app more access, Genos asks for your password (\"Confirm it's you\"). After that it does not ask again for 10 minutes. Accounts that sign in with Google or GitHub have no password to enter, so they are not asked.\n\nGenos also emails the address you signed up with whenever an API key, a webhook or an AI-app connection is created on your account.\n\n## Password and email\n\n- There is no way to change your password while signed in. Sign out, choose **Forgot password?** on the sign-in page, and use the link in the email. This works only for accounts that sign in with email and password.\n- Resetting your password signs you out everywhere. It also ends your connected AI apps and your API keys. Reconnect your apps and create new keys when you need them.\n- Your email address cannot be changed in the app.\n\n## See what happened\n\n- **Your security activity** (Settings > **Account**): your recent sign-ins, sign-outs, data exports, connected accounts and API keys, plus failed attempts to sign in to your account. If something there wasn't you, reset your password.\n- **Security log** (Settings > **Developer**, team owner only): sensitive changes to the team, newest first: members joining and leaving, role and ownership changes, invites, API keys, webhooks and alerts. Entries are kept for 365 days.\n\n## Export or delete your account\n\n- **Export your data** (Settings > **Account** > **Download my data**): a JSON file of everything you created: your profile, notes, to-dos, tasks, messages and comments. Team content written by other people is not included.\n- **Delete your account** (Settings > **Account** > **Delete account**): type DELETE, and your password if your account has one. Your name, email and profile are erased and you are signed out everywhere. Your private notes, to-dos and AI history are deleted. Teams where you were the last member are closed. Work you did with teammates stays in their workspace, shown as \"Deleted user\". This cannot be undone.\n- You cannot delete your account while you own a team that has other members. Transfer ownership from each team's profile first. To leave one team and keep the rest, use **Your teams** in Settings > **Account**.\n"
+        },
+        {
+            "id": "settings",
+            "title": "Settings: every option, and where to find it",
+            "settings": [
+                "general",
+                "general.theme",
+                "general.colorTheme",
+                "general.density",
+                "general.language",
+                "general.sidebar",
+                "general.shareUsage",
+                "planUsage",
+                "aiCreditUsage",
+                "chat",
+                "chat.messageLayout",
+                "chat.quickReactions",
+                "chat.doubleClickTodo",
+                "tasks",
+                "tasks.quickAddRequiredFields",
+                "tasks.autoCloseOnPrMerge",
+                "tasks.autoSyncCalendar",
+                "mentionGroups",
+                "customEmoji",
+                "shortcuts",
+                "security",
+                "account",
+                "integrations",
+                "developer"
+            ],
+            "markdown": "## Opening Settings\n\nClick Settings in the left sidebar. On a phone, tap More, then Settings. Settings opens on top of what you were doing, so you do not lose your place. It has 14 tabs, in this order: General, Plan & Usage, AI credit usage, Genos, Chat, Tasks, Notifications, Mention groups, Custom emoji, Shortcuts, Security, Account, Integrations, Developer. The \"Settings A-Z\" page of this manual lists every setting with who can change it, the plan it needs and its default.\n\n## General\n\n- **Appearance:** Theme (Light, Dark or System; System follows your device and changes with it), Color theme (the accent color), and Density (row height in lists and tables).\n- **Language:** English, 日本語, Español, Français, 中文 or हिन्दी. Genos also answers you in this language. Text that is not translated yet appears in English.\n- **Sidebar:** show or hide Inbox, Chats, Tasks, Notes and To-Do in the left sidebar. Genos is always shown. This syncs across your devices.\n- **Privacy & analytics:** Share usage data. It is off until you accept.\n\n## Plan & Usage\n\nYour plan, how much of each limit you have left, and buttons to upgrade, switch or cancel your plan or open Manage billing. Only the team owner sees the Team plan section (per-seat billing for the whole team). Where offered, you can buy one-off credit packs here. Bought credits never expire.\n\n## AI credit usage\n\nYour own AI credits: how many are left, what you used this month, which jobs used them, and recent charges. If your plan counts daily AI requests instead of credits, this tab says so.\n\n## Genos\n\nSettings for the AI (the tab was called Spotlight before):\n\n- AI model (or Effort)\n- Genos answers (AI answers and Web search)\n- How much Genos writes\n- Genos Assist Schedules\n- What Genos remembers\n- Skills\n\nThe Skills card appears only when your Genos has Skills turned on. See the Genos AI page of this manual for what each one does.\n\n## Chat\n\n- **Message layout:** Bubble or Compact.\n- **Quick reactions:** your three one-click emoji.\n- **Message actions:** pin up to 4 actions to the hover toolbar of messages. The rest stay in the … menu.\n- **Double-click action:** whether double-clicking a message adds it to your To-Do list.\n\n## Tasks\n\n- **Quick task creation:** whether the quick-add row in the task table requires the project's required fields.\n- **Auto-close on PR merge:** close your tasks when their pull request merges. This needs GitHub connected.\n- **Auto-sync to Google Calendar:** add your tasks that have due dates to Google Calendar as all-day events, and Sync existing tasks now. This needs Google Calendar connected.\n\n## Notifications\n\nThe main switch, Pause notifications, browser permission, notification groups, Email notifications, and your muted chats and items. See the Notifications page of this manual.\n\n## Mention groups and Custom emoji\n\n- **Mention groups:** a name such as @design that notifies every member of the group when it is mentioned in chat, task comments or task descriptions.\n- **Custom emoji:** your team's own emoji. Names use a-z, 0-9, \\_, + and -, up to 50 characters. Files must be .png, .jpg, .gif, .webp or .svg, up to 512 KB. Anyone on the team can add one. Only the person who uploaded an emoji can delete it.\n\n## Shortcuts\n\nA list of the keyboard shortcuts, for reading only. Shortcuts cannot be changed.\n\n## Security\n\nTwo-step verification. When it is on, Genos asks for a 6-digit code from an authenticator app after your password. You get recovery codes for when you lose your phone. It applies to email-and-password sign-in. If you sign in with Google or GitHub, turn on two-step verification in that account instead. See the Security and sign-in page of this manual.\n\n## Account\n\n- **Export your data:** download what you created as a JSON file.\n- **Your security activity:** your recent sign-ins, sign-outs, data exports, connected accounts and API keys, plus failed attempts to sign in to your account.\n- **Your teams:** leave a team. If you own the team, transfer ownership from its profile first.\n- **Delete your account:** type DELETE (and your password, if your account has one). Genos will not delete your account while you own a team that has other members.\n\n## Integrations\n\nConnect Google (for Google Calendar) and GitHub, and choose which repositories Genos can see. The tab is there only when integrations are turned on in your Genos.\n\n## Developer\n\nConnect your AI (Claude or ChatGPT, from Core up), Connected apps, and personal API keys. Creating a key asks for your password again. Team owners and editors also see team keys, connected AI apps and webhooks. Owners also see AI app use and the Security log. Webhooks are not included on Free. See the Connecting page of this manual.\n\n## Your profile (not part of Settings)\n\nClick your avatar and choose My Profile to change your picture, name, job title and status. The status menu on your avatar also lets you pause notifications or choose Set Always Offline.\n\n## Things people look for that aren't there\n\n- Changing your password while signed in: there is no screen for this. Use the forgotten-password link on the sign-in page.\n- Changing your email address: not available in the app.\n- A time zone picker: Genos reads your time zone from your device. You can see it under Settings > Genos > What Genos remembers > Settings Genos uses.\n- Task table columns and sorting: these are in the task table's own column settings, not in Settings.\n"
+        },
+        {
+            "id": "shortcuts",
+            "title": "Keyboard shortcuts, in full",
+            "settings": [],
+            "markdown": "## Mac and Windows/Linux keys\n\nWhere a shortcut uses a modifier key, the Mac key and the Windows/Linux key often differ. Each shortcut below gives both. Settings > Shortcuts shows the same list for your computer. The list is for reading only: shortcuts cannot be changed.\n\n## Anywhere in Genos\n\n- Cmd-K (Ctrl-K): open Spotlight. On the Genos page it puts the cursor in that page's own box instead.\n- Escape: closes whatever is on top: a menu, a window, or an @ list before the window it is in.\n- Switch between parts of Genos: hold Cmd (Alt on Windows/Linux) and tap Ctrl. Each tap moves through Inbox, Chats, Tasks, Notes, Genos and To-Do in the order you last used them, so one tap takes you back to where you were. Add Shift to go backwards. Let go of the held key to switch, or press Escape to stay where you are.\n- Cmd-Z (Ctrl-Z): undo a deletion while its Undo message is still showing.\n- / on the Notes page: jump to the filter box of the notes list. It does nothing while you are typing in a text field.\n\n## Jump straight to an action\n\nHold Ctrl and Cmd together on a Mac (Ctrl and Alt on Windows/Linux), then press a letter:\n\n- T: open Tasks and start a new task.\n- N: open Notes and start a new note in My Notes.\n- X: open your To-Do list.\n- C: open the compact calendar.\n- M: copy a new Meet link to your clipboard.\n- H: open History.\n- G: open the task graph for the task you are previewing.\n\nOn Windows and Linux these letter shortcuts do nothing while you type in an editor or text field. That way the editor keeps its own Ctrl+Alt keys (Ctrl+Alt+C makes a code block).\n\n## In the Spotlight / Genos box\n\n- Up and Down: move through the results.\n- Enter: open the highlighted result as a preview. If no result is highlighted, Enter sends your question to Genos.\n- Shift-Enter: start a new line in a long question without sending it.\n- Cmd-click (Ctrl-click) a result: open the full page instead of a preview.\n\n## In chat\n\n- Cmd-Enter or Ctrl-Enter: send. Either key works on every computer. Plain Enter starts a new line, so a half-written message is not sent by accident.\n- The same keys send a thread reply or a task comment.\n- Cmd-click (Alt-click on Windows/Linux) a message: open its thread without leaving the conversation.\n- Cmd-Shift-Left/Right (Alt-Shift-Left/Right on Windows/Linux): move between chat tabs. Use Up/Down instead to move through the chat list. These do nothing while you are typing in a field.\n\n## Creating tasks\n\n- Quick-add row: Enter creates the task, and Escape removes the row.\n- The full new-task form: Cmd-Enter on a Mac, Ctrl-Enter on Windows/Linux. Unlike chat, only that one key works on each computer.\n\n## Task table\n\nPress Tab to move into the table or out of it. Inside the table:\n\n- Arrow keys: move between cells.\n- Home / End: go to the first or last cell in the row. Ctrl+Home / End: go to the first or last cell in the table.\n- PageUp / PageDown: move a page up or down.\n- Enter or Space: open the cell's editor. Esc: close the editor without saving.\n\n## Task board\n\nTab moves between columns, one stop per column. Inside the board:\n\n- Arrow keys: move between cards and columns.\n- Home / End: go to the first or last card in the column. Ctrl+Home / End: go to the first or last card on the board.\n- Enter: open the card's preview.\n- Space: pick up a card. Then the arrow keys move it, Space drops it, and Esc cancels.\n\n## Calendar\n\nTab moves into the calendar and out of it. The month view is one stop. The week and day views have one stop per day.\n\n- Arrow keys: move between days and weeks (month view), or between events and days (week and day views).\n- Home / End: first or last day of the week (month view), or first or last event of the day (week and day views).\n- PageUp / PageDown: previous or next month (month view).\n- Enter: open the day's events or the event. On an empty day, Enter starts a new event.\n"
+        },
+        {
+            "id": "tasks",
+            "title": "Tasks and projects",
+            "settings": [
+                "tasks",
+                "tasks.quickAddRequiredFields",
+                "tasks.autoCloseOnPrMerge",
+                "tasks.autoSyncCalendar",
+                "integrations"
+            ],
+            "markdown": "## Projects\n\nA project holds tasks, milestones and sprints, and it has its own chat. Create one with **New Project** in the Tasks sidebar. Choose Public Project (the team can see it) or Private Project (members only). A private project can also be hidden, so only its members can see that it exists. Each project has a short code, so its tasks get readable IDs like WRD-12.\n\n- **Customize Task Fields** sets which fields are required and their default values for new tasks and milestones. Only the project owner and editors can change these.\n- **Custom fields** (Tag, Text, Date or Member) apply to every task, sub-task and milestone in the project. They show in the task panel and as table columns. Owners and editors manage them.\n- **Templates:** any project member can add task and milestone templates for the project.\n- **Labels:** project labels group projects in the Tasks sidebar, and you can filter the sidebar by label.\n- **Import tasks from CSV…** brings in tasks from a CSV file. A Jira or Notion export is recognized, and a Jira JSON export also brings comments. Only the owner or an editor of the project can import.\n- **Archiving:** the owner can archive a project. It keeps everything but is read-only until it is unarchived.\n\n## Tasks\n\n- A task has a status (Open, WIP, Pending, Blocked or Closed), a priority, an effort level, an assignee, optional collaborators, start and due dates, tags and a description. Collaborators must be members of the project.\n- A task has four tabs: Comments, Notes, Attachments and Activity. Activity records every change to the task, and you can restore an earlier description from it.\n- **Sub-tasks:** break work down with sub-tasks. A task's page shows the sub-tasks under it.\n- **Dependencies:** under Dependencies, mark which tasks a task is **Blocked by** and which it is **Blocking**. Tasks in other projects of the same team can be linked too. While a task has an open blocker, Genos sets it to Blocked. When the last blocker closes, it returns to Open. This only happens if its status is still Blocked; if you set another status yourself, Genos leaves it alone.\n- **Task graph:** shows the task tree and its dependencies. Open it with **Open task graph**, or with Ctrl+Cmd+G on a Mac (Ctrl+Alt+G elsewhere) while a task is open in the preview.\n- **Task Weight (1–25):** combines priority with time pressure, and a bigger effort level starts the pressure earlier. It drives the **By weight** order in Up Next and **Top by Weight**. Team Capacity and Velocity show the load and pace of the project.\n- **Comments:** comments support @-mentions and reactions.\n\n## Milestones, sprints and views\n\n- **Milestones:** a milestone groups tasks toward one goal and shows their progress. Assign tasks to it, then use **Start Milestone** and **Complete Milestone**. Milestones can sit in folders, and you can star them into Favorites.\n- **Sprints:** **Sprint settings** sets a project's sprint length and start day, and can generate upcoming sprints automatically.\n- **Views:** the **Sprint Board** shows tasks in columns by status. The **Task Table** is a sortable, filterable grid. Both work from the keyboard (see Settings → Shortcuts).\n- **Saved filters:** **Saved Filters** saves the current filters under a name. Everyone in the project can use it.\n- **Quick add:** in the task table, a quick task needs only a title. To apply the project's required fields there too, turn on Settings → Tasks → Quick task creation.\n\n## GitHub and Google Calendar\n\n- Connect GitHub in Settings → Integrations. When your Genos has the GitHub App turned on:\n    - A team owner or editor installs the Genos GitHub App for the team.\n    - Each person then authorizes it.\n    - The app is read-only and has no code access. It sees only the repositories chosen in the team's installation.\n    - An older GitHub connection shows as a legacy connection, with **Reconnect**.\n- Paste a pull request link into a task's Links field to see its state and checks on the task.\n- Settings → Tasks → **Close my tasks when their PR merges** closes a task you are assigned to when a pull request whose branch name contains the task ID merges. It is off by default.\n- Settings → Tasks → **Auto-sync task due dates** adds tasks with due dates to your Google Calendar as all-day events. It only works one way: deleting an event in Google doesn't change your tasks.\n"
+        },
+        {
+            "id": "teams",
+            "title": "Teams, members, and roles",
+            "settings": ["account"],
+            "markdown": "## Find your team's settings\n\nOpen the team menu and choose **Show Team Profile**. The Team Profile shows the team name, the Team ID, the owner, the members, pending invites, **Connected teams**, and, for the owner, **Sample data** and **Import from Slack**.\n\n## Add people\n\n- **Invite by email.** In the Team Profile, choose **Invite members**, type one or more addresses and choose **Send invites**. Each person gets a link that works only for their own email address. The link expires after 7 days. New members join as Viewers. Only the team owner or an editor can invite.\n- **Pending invites** lists the invites that are not yet accepted, who sent each one and when it expires. An owner or editor can cancel one, and the link stops working at once.\n- **Request to join.** Someone outside the team can open **Team Management**, search by Team ID and choose **Request to Join**. The request goes to the team owner's Inbox, under **Requests**. An owner or editor can approve it.\n- **Guests.** To bring in someone from outside the company for one project only, open the project and choose **Invite guests**. A guest sees only that project. Guests do not see your other projects, your member list or anything else in the team. They do not get the team's plan. A project owner or editor can invite guests.\n- Each person's time zone comes from their browser. Each person picks their own language under Settings > **General** > Language.\n\n## Roles\n\nTeams, projects and group chats use the same four roles.\n\n- **Owner**: one per team, project or group chat. Only the owner can transfer ownership. In a team, only the owner can remove an editor, disconnect a connected team, remove sample data, import from Slack, buy a team plan and see the team's **Security log**.\n- **Editor**: helps run the team day to day. Editors invite and add members, cancel invites, rename the team, change its image, set members' roles (Editor or Viewer), remove viewers and guests, and request or approve team connections. An editor cannot remove another editor or the owner. Make a second person an Editor early, so the team does not depend on one account.\n- **Viewer**: the default for new members. Viewers work in the team's chats, projects and notes they belong to. They cannot invite, remove or change members, and they cannot edit the team.\n- **Guest**: an outside collaborator added to one project. Guests can work in that project and see nothing else.\n\nIn a project, the owner and editors can change **Customize Task Fields** (required fields and default values for new tasks and milestones).\n\n## Remove people, leave a team\n\n- To remove a member, an owner or editor opens the Team Profile and chooses **Remove** next to the person. Genos asks whether to unassign their open work. The owner cannot be removed: transfer ownership first.\n- To leave a team yourself, open Settings > **Account** > **Your teams** and choose **Leave**. You lose access to that team's chats, projects and notes. Your account and your other teams stay. The owner cannot leave: transfer ownership first.\n- There is no screen for deleting a team.\n\n## Hand over or recover ownership\n\n- **Transfer ownership**: the owner opens the Team Profile, chooses **Transfer ownership** and picks a member. The old owner becomes a regular member.\n- **Request ownership**: if the owner has left or stopped responding, an editor can choose **Request ownership**. The owner gets an **Ownership claim** card in their Inbox and can approve or decline it.\n- If the owner does neither within 30 days, the editor can choose **Take ownership**. Everyone in the team is told when that happens.\n- If the owner declines, the same editor can ask again only after 60 days.\n- A team with only an owner and viewers has nobody who can request ownership. Give someone the Editor role before you need it.\n\n## Other team tools\n\n- **Connected teams**: connect with another company's team so you can share single chats, projects or note folders with them. See \"Working with another company: cross-team sharing\".\n- **Import from Slack** (owner only): upload a Slack workspace export ZIP to bring its channels, messages and threads into the team as group chats. People are matched to members by email address. Direct messages are not imported. Files become links back to Slack. **Undo this import…** removes what an import added.\n- **Sample data** (owner only): a team created with \"Include sample instruction data\" gets example projects, chats, notes and to-dos. **Remove sample data…** shows what will be removed and what will stay, then removes it in one step. Anything you added or changed stays.\n\n## Billing for a team\n\nBilling is under Settings > **Plan & Usage**. Each person has their own plan. The team owner can also buy a per-seat team plan (Team Core, Team Pro or Team Max) on the plans page; every member then gets at least that plan. See \"Plans, limits, and what happens when you hit one\".\n"
+        },
+        {
+            "id": "tips",
+            "title": "Tips, shortcuts, and getting unstuck",
+            "settings": ["shortcuts", "notifications.master", "notifications.quietHours"],
+            "markdown": "## Fast moves\n\n- **Cmd+K (Ctrl+K)** opens Spotlight from anywhere, to search or ask Genos.\n- The letter shortcuts are Ctrl+Cmd+letter on a Mac and Ctrl+Alt+letter on Windows and Linux:\n    - **T**: open Tasks and start a new task\n    - **N**: create a new My Note\n    - **X**: open the To-Do list\n    - **H**: open History\n    - **G**: open the task graph for the task in the preview\n    - **C**: open the calendar\n    - **M**: copy a new Google Meet link\n\n    On Windows and Linux they do nothing while you type in a text field.\n\n- **Hold Cmd and tap Ctrl** (Alt and Ctrl elsewhere) to cycle through Genos, Inbox, Chats, Tasks, Notes and To-Do.\n- **Cmd+Z or Ctrl+Z** undoes a deletion while its Undo message is still showing.\n- **/** on the Notes page jumps to the filter box of the notes list.\n- **Cmd+Enter or Ctrl+Enter** sends a message or comment, and creates the task in the new-task form.\n- The task table, the sprint board and the calendar work from the keyboard. Tab moves into them, and the arrow keys move inside.\n- Settings → Shortcuts lists every shortcut. The list is read-only: shortcuts can't be changed.\n- Paste a Genos link into a message, and clicking it opens a preview over the page, so you never lose your place.\n- In a thread, **New task linked to this thread** turns a \"we should do this\" conversation into tracked work. A thread can have one task.\n- The sprint board, the task table and the task graph are three views of the same tasks. Use the one that fits the moment.\n\n## When something seems off\n\n- **Not getting notifications?**\n    - Open Settings → Notifications. Check that notifications are on, that they are not paused (a paused person has a moon on their avatar), and that the browser permission says Granted.\n    - Check that the chat or item is not muted.\n    - On an iPhone, install Genos to the home screen and allow notifications there.\n- **Can't see a project, group chat or note?** You may not be a member. Ask the owner to add you, or use **Request to Join** or **Request Access** where it is offered.\n- **Something looks out of date?** Reload the tab. A tab you signed in to another team from elsewhere also asks you to reload, because only one team can be active per browser.\n\n## More help\n\nQuestions this manual doesn't answer: genos.support@genosai.dev\n"
+        },
+        {
+            "id": "settings-reference",
+            "title": "Settings A-Z",
+            "settings": [
+                "general",
+                "general.theme",
+                "general.colorTheme",
+                "general.density",
+                "general.language",
+                "general.sidebar",
+                "general.shareUsage",
+                "planUsage",
+                "aiCreditUsage",
+                "spotlight",
+                "spotlight.provider",
+                "spotlight.effort",
+                "spotlight.model",
+                "spotlight.aiAnswers",
+                "spotlight.webSearch",
+                "spotlight.contentLength",
+                "spotlight.sharedAnswers",
+                "spotlight.noteActivity",
+                "chat",
+                "chat.messageLayout",
+                "chat.quickReactions",
+                "chat.doubleClickTodo",
+                "tasks",
+                "tasks.quickAddRequiredFields",
+                "tasks.autoCloseOnPrMerge",
+                "tasks.autoSyncCalendar",
+                "notifications",
+                "notifications.master",
+                "notifications.quietHours",
+                "notifications.group",
+                "notifications.category",
+                "notifications.email",
+                "notifications.emailCategory",
+                "notifications.mutedChat",
+                "notifications.mutedItem",
+                "mentionGroups",
+                "customEmoji",
+                "shortcuts",
+                "security",
+                "account",
+                "integrations",
+                "developer"
+            ],
+            "markdown": "Every Settings tab and every setting inside it, as the app has them today. Open Settings from the gear at the bottom of the sidebar (on a phone: Account, then Settings).\n\nA setting marked \"when your Genos has it turned on\" is behind a server switch; if you do not see it, your Genos does not have it on.\n\n## General\n\nAppearance, Language, Sidebar, Privacy & analytics\n\nWho can change it: You. Plan: All plans.\n\n| Setting | Who | Plan | Default |\n| --- | --- | --- | --- |\n| Theme (Light, Dark, System) | You | All plans | System |\n| Color theme | You | All plans | Purple |\n| Density | You | All plans | Default |\n| Language | You | All plans | Browser language |\n| Sidebar sections | You | All plans | Inbox, Chats, Tasks, Notes and To-Do all shown |\n| Share usage data | You | All plans | Off until accepted |\n\n## Plan & Usage\n\nPlan, usage, upgrade, billing, team plan, credit packs\n\nWho can change it: You. Plan: All plans.\n\n## AI credit usage\n\nCredits meter, by job, recent charges (read-only)\n\nWho can change it: You. Plan: When AI credits are on.\n\n## Genos\n\nAI model, Genos answers, How much Genos writes, Schedules, What Genos remembers, Skills\n\nWho can change it: You. Plan: All plans.\n\n| Setting | Who | Plan | Default |\n| --- | --- | --- | --- |\n| AI model: Provider | You | All plans; limits differ by plan | Gemini Flash |\n| Effort | You | All plans; limits differ by plan | Low |\n| AI model: Model | You | All plans; limits differ by plan | Gemini Flash |\n| Genos answers (Ask button) | You | All plans | On (this device) |\n| Web search | You | All plans; limits differ by plan | Off |\n| How much Genos writes | You | All plans | Standard |\n| Let my answers help teammates | You | All plans | On |\n| Note my activity | You | All plans | On |\n\n## Chat\n\nMessage layout, Quick reactions, Message actions, Double-click\n\nWho can change it: You. Plan: All plans.\n\n| Setting | Who | Plan | Default |\n| --- | --- | --- | --- |\n| Message layout | You | All plans | Compact |\n| Quick reactions | You | All plans | Thumbs up, eyes, check mark |\n| Double-click adds to To-Do | You | All plans | On |\n\n## Tasks\n\nQuick task creation, Auto-close on PR merge, Google Calendar sync\n\nWho can change it: You. Plan: All plans.\n\n| Setting | Who | Plan | Default |\n| --- | --- | --- | --- |\n| Quick task creation: required fields | You | All plans | Off |\n| Close my tasks when their PR merges | You | All plans | Off |\n| Sync task due dates to Google Calendar | You | All plans | Off |\n\n## Notifications\n\nMaster, Pause, browser permission, groups, email, mutes\n\nWho can change it: You. Plan: All plans.\n\n| Setting | Who | Plan | Default |\n| --- | --- | --- | --- |\n| Web notifications (master switch) | You | All plans | On |\n| Pause and quiet hours | You | All plans | Not paused |\n| Notification groups | You | All plans | On |\n| Notification categories | You | All plans | On |\n| Email notifications | You | All plans; when your Genos has it on | On |\n| Email categories | You | All plans | On for mentions, assignments, thread replies, task comments and inbox; Off for chats, reactions and finished background answers |\n| Muted chats | You | All plans | Nothing muted |\n| Muted items | You | All plans | Nothing muted |\n\n## Mention groups\n\nTeam @groups (name, description, members)\n\nWho can change it: Any member. Plan: All plans.\n\n## Custom emoji\n\nTeam emoji (any member adds; the uploader deletes)\n\nWho can change it: Any member. Plan: All plans.\n\n## Shortcuts\n\nRead-only list\n\nWho can change it: Read-only. Plan: All plans.\n\n## Security\n\nTwo-step verification (off)\n\nWho can change it: You. Plan: All plans.\n\n## Account\n\nExport, security activity, your teams, delete\n\nWho can change it: You. Plan: All plans.\n\n## Integrations\n\nGoogle, GitHub, repository access (hidden when integrations are off in the build)\n\nWho can change it: You. Plan: All plans. Only when your Genos has it turned on.\n\n## Developer\n\nConnect your AI, Connected apps, API keys, team keys, webhooks. Connected apps and webhooks need Core and up; contents are role-gated\n\nWho can change it: You. Plan: All plans.\n"
+        }
+    ],
+    "settings": [
+        {
+            "id": "general",
+            "tab": "general",
+            "label": "General",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Appearance, Language, Sidebar, Privacy & analytics",
+            "serverSwitch": null
+        },
+        {
+            "id": "general.theme",
+            "tab": "general",
+            "label": "Theme (Light, Dark, System)",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "System",
+            "serverSwitch": null
+        },
+        {
+            "id": "general.colorTheme",
+            "tab": "general",
+            "label": "Color theme",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Purple",
+            "serverSwitch": null
+        },
+        {
+            "id": "general.density",
+            "tab": "general",
+            "label": "Density",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Default",
+            "serverSwitch": null
+        },
+        {
+            "id": "general.language",
+            "tab": "general",
+            "label": "Language",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Browser language",
+            "serverSwitch": null
+        },
+        {
+            "id": "general.sidebar",
+            "tab": "general",
+            "label": "Sidebar sections",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Inbox, Chats, Tasks, Notes and To-Do all shown",
+            "serverSwitch": null
+        },
+        {
+            "id": "general.shareUsage",
+            "tab": "general",
+            "label": "Share usage data",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Off until accepted",
+            "serverSwitch": null
+        },
+        {
+            "id": "planUsage",
+            "tab": "planUsage",
+            "label": "Plan & Usage",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Plan, usage, upgrade, billing, team plan, credit packs",
+            "serverSwitch": null
+        },
+        {
+            "id": "aiCreditUsage",
+            "tab": "aiCreditUsage",
+            "label": "AI credit usage",
+            "kind": "tab",
+            "who": "self",
+            "plan": "whenCreditsOn",
+            "default": "Credits meter, by job, recent charges (read-only)",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight",
+            "tab": "spotlight",
+            "label": "Genos",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "AI model, Genos answers, How much Genos writes, Schedules, What Genos remembers, Skills",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.provider",
+            "tab": "spotlight",
+            "label": "AI model: Provider",
+            "kind": "row",
+            "who": "self",
+            "plan": "perCap",
+            "default": "Gemini Flash",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.effort",
+            "tab": "spotlight",
+            "label": "Effort",
+            "kind": "row",
+            "who": "self",
+            "plan": "perCap",
+            "default": "Low",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.model",
+            "tab": "spotlight",
+            "label": "AI model: Model",
+            "kind": "row",
+            "who": "self",
+            "plan": "perCap",
+            "default": "Gemini Flash",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.aiAnswers",
+            "tab": "spotlight",
+            "label": "Genos answers (Ask button)",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On (this device)",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.webSearch",
+            "tab": "spotlight",
+            "label": "Web search",
+            "kind": "row",
+            "who": "self",
+            "plan": "perCap",
+            "default": "Off",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.contentLength",
+            "tab": "spotlight",
+            "label": "How much Genos writes",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Standard",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.sharedAnswers",
+            "tab": "spotlight",
+            "label": "Let my answers help teammates",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On",
+            "serverSwitch": null
+        },
+        {
+            "id": "spotlight.noteActivity",
+            "tab": "spotlight",
+            "label": "Note my activity",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On",
+            "serverSwitch": null
+        },
+        {
+            "id": "chat",
+            "tab": "chat",
+            "label": "Chat",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Message layout, Quick reactions, Message actions, Double-click",
+            "serverSwitch": null
+        },
+        {
+            "id": "chat.messageLayout",
+            "tab": "chat",
+            "label": "Message layout",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Compact",
+            "serverSwitch": null
+        },
+        {
+            "id": "chat.quickReactions",
+            "tab": "chat",
+            "label": "Quick reactions",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Thumbs up, eyes, check mark",
+            "serverSwitch": null
+        },
+        {
+            "id": "chat.doubleClickTodo",
+            "tab": "chat",
+            "label": "Double-click adds to To-Do",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On",
+            "serverSwitch": null
+        },
+        {
+            "id": "tasks",
+            "tab": "tasks",
+            "label": "Tasks",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Quick task creation, Auto-close on PR merge, Google Calendar sync",
+            "serverSwitch": null
+        },
+        {
+            "id": "tasks.quickAddRequiredFields",
+            "tab": "tasks",
+            "label": "Quick task creation: required fields",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Off",
+            "serverSwitch": null
+        },
+        {
+            "id": "tasks.autoCloseOnPrMerge",
+            "tab": "tasks",
+            "label": "Close my tasks when their PR merges",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Off",
+            "serverSwitch": null
+        },
+        {
+            "id": "tasks.autoSyncCalendar",
+            "tab": "tasks",
+            "label": "Sync task due dates to Google Calendar",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Off",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications",
+            "tab": "notifications",
+            "label": "Notifications",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Master, Pause, browser permission, groups, email, mutes",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications.master",
+            "tab": "notifications",
+            "label": "Web notifications (master switch)",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications.quietHours",
+            "tab": "notifications",
+            "label": "Pause and quiet hours",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Not paused",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications.group",
+            "tab": "notifications",
+            "label": "Notification groups",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications.category",
+            "tab": "notifications",
+            "label": "Notification categories",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications.email",
+            "tab": "notifications",
+            "label": "Email notifications",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On",
+            "serverSwitch": "EMAIL_NOTIFICATIONS_ENABLED"
+        },
+        {
+            "id": "notifications.emailCategory",
+            "tab": "notifications",
+            "label": "Email categories",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "On for mentions, assignments, thread replies, task comments and inbox; Off for chats, reactions and finished background answers",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications.mutedChat",
+            "tab": "notifications",
+            "label": "Muted chats",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Nothing muted",
+            "serverSwitch": null
+        },
+        {
+            "id": "notifications.mutedItem",
+            "tab": "notifications",
+            "label": "Muted items",
+            "kind": "row",
+            "who": "self",
+            "plan": "all",
+            "default": "Nothing muted",
+            "serverSwitch": null
+        },
+        {
+            "id": "mentionGroups",
+            "tab": "mentionGroups",
+            "label": "Mention groups",
+            "kind": "tab",
+            "who": "anyMember",
+            "plan": "all",
+            "default": "Team @groups (name, description, members)",
+            "serverSwitch": null
+        },
+        {
+            "id": "customEmoji",
+            "tab": "customEmoji",
+            "label": "Custom emoji",
+            "kind": "tab",
+            "who": "anyMember",
+            "plan": "all",
+            "default": "Team emoji (any member adds; the uploader deletes)",
+            "serverSwitch": null
+        },
+        {
+            "id": "shortcuts",
+            "tab": "shortcuts",
+            "label": "Shortcuts",
+            "kind": "tab",
+            "who": "readOnly",
+            "plan": "all",
+            "default": "Read-only list",
+            "serverSwitch": null
+        },
+        {
+            "id": "security",
+            "tab": "security",
+            "label": "Security",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Two-step verification (off)",
+            "serverSwitch": null
+        },
+        {
+            "id": "account",
+            "tab": "account",
+            "label": "Account",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Export, security activity, your teams, delete",
+            "serverSwitch": null
+        },
+        {
+            "id": "integrations",
+            "tab": "integrations",
+            "label": "Integrations",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Google, GitHub, repository access (hidden when integrations are off in the build)",
+            "serverSwitch": "GITHUB_APP_ENABLED"
+        },
+        {
+            "id": "developer",
+            "tab": "developer",
+            "label": "Developer",
+            "kind": "tab",
+            "who": "self",
+            "plan": "all",
+            "default": "Connect your AI, Connected apps, API keys, team keys, webhooks. Connected apps and webhooks need Core and up; contents are role-gated",
+            "serverSwitch": null
+        }
+    ]
+}

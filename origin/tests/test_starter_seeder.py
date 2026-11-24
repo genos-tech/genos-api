@@ -78,15 +78,14 @@ class StarterWorkspaceTests(BaseAPITestCase):
         self.assertEqual(TaskDependency.objects.filter(team=team).count(), 2)
         from origin.services.guide_notes import (
             GUIDE_FOLDER_NAME,
-            GUIDE_NOTES,
             JAPANESE_GUIDE_FOLDER_NAME,
-            JAPANESE_GUIDE_NOTES,
+            current_guide_notes,
         )
 
         self.assertEqual(
             PersonalNoteMaster.objects.filter(team=team, owner=self.user).count(),
             # The guide notes in both languages, plus the example department's three team notes.
-            len(GUIDE_NOTES) + len(JAPANESE_GUIDE_NOTES) + 3,
+            len(current_guide_notes("en")) + len(current_guide_notes("ja")) + 3,
         )
         from origin.models.note.personal_note_models import PersonalNoteFolder
 

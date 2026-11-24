@@ -27,6 +27,12 @@ repaired; this also adds Japanese for users who received the English-only
 guide before the Japanese edition shipped. Re-seeding both deleted
 editions is a deliberate `force=True` support action.
 
+Where the text comes from (MIP-2324): the manual is written once, in genos-frontend, and copied into
+`origin/services/manual/` by `scripts/sync_manual.py`. For every language that has a copy,
+`current_guide_notes` renders the notes from it (`guide_manual`), and the hand-written lists below are
+NOT used for that language. A language without a copy (the frontend has not exported it yet) keeps
+the hand-written lists, so a new member always gets a guide. Edit the manual in the frontend, not here.
+
 Content rule: everything below describes SHIPPED behavior in plain
 instructional prose. When the product changes, change the guide — new
 users seed the new text (existing copies are the user's own notes and
@@ -50,7 +56,7 @@ from django.utils import timezone
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
-from origin.services import mcp_oauth, start_here_note
+from origin.services import guide_manual, mcp_oauth, start_here_note
 from origin.services.collab_push import push_note_body_now
 from origin.services.demo_seeder import _body
 from origin.services.guide_company_notes import COMPANY_NOTES
@@ -3747,9 +3753,13 @@ def _insert_before_heading(body: list, anchor: str, blocks: list) -> list:
 
 
 def current_guide_notes(locale: str) -> list[tuple[str, list]]:
-    """The notes of one edition ("en" or "ja") as they are written today: the static
-    lists, with the OAuth section in front of the key way in the two MCP notes when the
+    """The notes of one edition ("en" or "ja") as they are written today: the vendored
+    manual when this language has a copy (MIP-2324), otherwise the static lists, with the OAuth section in front of the key way in the two MCP notes when the
     OAuth way is on. Fresh block ids on the notes that got the section."""
+    from_manual = guide_manual.manual_notes(locale)
+    if from_manual is not None:
+        # The manual already says how to connect an AI app, in its own words.
+        return from_manual
     section_cache = None
     notes = []
     for title, body in _EDITIONS[locale][1]:
@@ -3931,6 +3941,12 @@ def seed_guide_notes(user, team, *, force: bool = False) -> bool:
     return notes_created > 0
 
 
+def _company_notes(locale: str) -> list[tuple[str, list]]:
+    """The two company notes as the current guide has them (from the manual when there is one)."""
+    titles = {title for title, _ in COMPANY_NOTES[locale]}
+    return [note for note in current_guide_notes(locale) if note[0] in titles]
+
+
 @dataclass
 class AddReport:
     """What `add_company_guide_notes` found (and, with `apply`, did)."""
@@ -3958,7 +3974,7 @@ def add_company_guide_notes(*, apply: bool = False, team_id=None) -> AddReport:
         if team_id:
             folders = folders.filter(team_id=team_id)
         for folder in folders:
-            for title, body in COMPANY_NOTES[locale]:
+            for title, body in _company_notes(locale):
                 if PersonalNoteMaster.objects.filter(
                     owner_id=folder.owner_id,
                     team_id=folder.team_id,

@@ -20,6 +20,7 @@ from origin.services.guide_notes import (
     GUIDE_NOTES,
     JAPANESE_GUIDE_FOLDER_NAME,
     JAPANESE_GUIDE_NOTES,
+    current_guide_notes,
     seed_guide_notes,
 )
 from origin.tests.test_base import BaseAPITestCase
@@ -112,9 +113,9 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         resp = self._join(self.user, self.fresh_team)
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         notes = self._guide_notes(self.user, self.fresh_team)
-        self.assertEqual(notes.count(), len(GUIDE_NOTES))
+        self.assertEqual(notes.count(), len(current_guide_notes("en")))
         japanese_notes = self._guide_notes(self.user, self.fresh_team, JAPANESE_GUIDE_FOLDER_NAME)
-        self.assertEqual(japanese_notes.count(), len(JAPANESE_GUIDE_NOTES))
+        self.assertEqual(japanese_notes.count(), len(current_guide_notes("ja")))
         note_ids = list(notes.values_list("note_id", flat=True)) + list(
             japanese_notes.values_list("note_id", flat=True)
         )
@@ -125,7 +126,7 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
                 user=self.user,
                 note_id__in=note_ids,
             ).count(),
-            len(GUIDE_NOTES) + len(JAPANESE_GUIDE_NOTES),
+            len(current_guide_notes("en")) + len(current_guide_notes("ja")),
         )
         member = TeamMembers.objects.get(team=self.fresh_team, attendee=self.user)
         self.assertIsNotNone(member.guide_seeded_at)
@@ -135,12 +136,16 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         # every-team-switch join call is where existing users get theirs.
         resp = self._join(self.user, self.team)
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
+        self.assertEqual(
+            self._guide_notes(self.user, self.team).count(), len(current_guide_notes("en"))
+        )
 
     def test_repeat_joins_do_not_duplicate(self):
         self._join(self.user, self.team)
         self._join(self.user, self.team)
-        self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
+        self.assertEqual(
+            self._guide_notes(self.user, self.team).count(), len(current_guide_notes("en"))
+        )
         self.assertEqual(
             PersonalNoteFolder.objects.filter(
                 team=self.team,
@@ -163,9 +168,11 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         self.assertTrue(seed_guide_notes(self.user, self.team))
         self.assertEqual(
             self._guide_notes(self.user, self.team, JAPANESE_GUIDE_FOLDER_NAME).count(),
-            len(JAPANESE_GUIDE_NOTES),
+            len(current_guide_notes("ja")),
         )
-        self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
+        self.assertEqual(
+            self._guide_notes(self.user, self.team).count(), len(current_guide_notes("en"))
+        )
 
     def test_deleted_guide_stays_deleted(self):
         # Personal-folder deletion is a HARD recursive delete; the
@@ -182,10 +189,12 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         self.assertEqual(self._guide_notes(self.user, self.team).count(), 0)
         # force=True is the deliberate re-seed lever.
         seed_guide_notes(self.user, self.team, force=True)
-        self.assertEqual(self._guide_notes(self.user, self.team).count(), len(GUIDE_NOTES))
+        self.assertEqual(
+            self._guide_notes(self.user, self.team).count(), len(current_guide_notes("en"))
+        )
         self.assertEqual(
             self._guide_notes(self.user, self.team, JAPANESE_GUIDE_FOLDER_NAME).count(),
-            len(JAPANESE_GUIDE_NOTES),
+            len(current_guide_notes("ja")),
         )
 
     def test_joining_someone_else_seeds_nothing(self):
@@ -199,10 +208,12 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         self._join(self.user, self.team)
         self._join(self.user2, self.team)
         for user in (self.user, self.user2):
-            self.assertEqual(self._guide_notes(user, self.team).count(), len(GUIDE_NOTES))
+            self.assertEqual(
+                self._guide_notes(user, self.team).count(), len(current_guide_notes("en"))
+            )
             self.assertEqual(
                 self._guide_notes(user, self.team, JAPANESE_GUIDE_FOLDER_NAME).count(),
-                len(JAPANESE_GUIDE_NOTES),
+                len(current_guide_notes("ja")),
             )
 
     def test_demo_users_are_excluded(self):
