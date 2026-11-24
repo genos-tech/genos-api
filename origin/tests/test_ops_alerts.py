@@ -108,7 +108,7 @@ class TestEveryCronReports(TestCase):
         crons = _crons()
         # Not vacuous: the ts file and the tomls were both found.
         self.assertGreaterEqual(len(_ts_crons()), 15)
-        self.assertGreaterEqual(len(_tomls()), 13)
+        self.assertGreaterEqual(len(_tomls()), 12)
         for label, start in crons:
             with self.subTest(cron=label):
                 self.assertTrue(start, "no startCommand")
@@ -186,6 +186,47 @@ class TestEveryCronReports(TestCase):
             "LOG_FORMAT",
         ):
             self.assertIn(f"{var}: preserve()", block)
+
+    def test_the_data_retention_crons_are_scheduled_apply_beat_and_are_watched(self):
+        # MIP-2251: these commands existed and were never scheduled, so every retention period
+        # was "forever". Each passes `--apply` (they default to a dry run), beats under its own
+        # name, is watched, and has no toml (a new service cannot use one).
+        expected = {
+            "retention-purge": ("0 4 * * *", "retention_purge --apply"),
+            "housekeeping-prune": ("10 3 * * *", "prune_housekeeping --apply"),
+            "tombstone-prune": ("20 3 * * *", "prune_old_tombstones --apply"),
+            "member-memory-sweep": ("25 3 * * *", "prune_member_memory --apply"),
+        }
+        for name, (schedule, command) in expected.items():
+            with self.subTest(service=name):
+                block = _ts_blocks()[name]
+                self.assertIn(f'cronSchedule: "{schedule}"', block)
+                self.assertIn(
+                    f'startCommand: "python /app/manage.py {command} --heartbeat {name}"', block
+                )
+                self.assertIn('restartPolicyType: "NEVER"', block)
+                self.assertFalse((REPO / f"railway-{name}.toml").exists())
+                self.assertEqual(ops_alerts.CRON_SCHEDULES[name], timedelta(hours=26))
+                self.assertIn("DATABASE_URL: preserve()", block)
+        block = _ts_blocks()["retention-purge"]
+        for var in (
+            "RETENTION_AGENT_RUNS_DAYS",
+            "RETENTION_EMAIL_NOTIFICATION_EVENTS_DAYS",
+            "RETENTION_SECURITY_EVENTS_HIGH_VOLUME_DAYS",
+        ):
+            self.assertIn(f"{var}: preserve()", block)
+            self.assertNotRegex(block, rf'{var}: "')
+
+    def test_commands_that_delete_uploaded_files_are_not_crons(self):
+        # The media volume is mounted on backend-django only: a cron container would delete
+        # the rows and leave the files. Revisit when uploads move to object storage.
+        text = (REPO / ".railway" / "railway.ts").read_text()
+        for command in (
+            "purge_deleted_tasks",
+            "purge_orphaned_task_files",
+            "purge_detached_note_attachments",
+        ):
+            self.assertNotIn(command, text)
 
     def test_the_collab_orphan_sweep_beats_from_outside_django(self):
         # MIP-1823 / MIP-1858: genos-collab's sweep is not a Django command, so it
@@ -450,6 +491,49 @@ class TestMissedCrons(_NoReconnect, TestCase):
         CronHeartbeat.objects.create(name="reminder-tick", first_seen_at=now - timedelta(hours=1))
         ops_alerts.check_crons(now=now)
         self.assertIn("never succeeded", OpsAlert.objects.get(key="cron:reminder-tick").summary)
+
+    def test_a_cron_that_never_started_is_missed_once_the_tick_has_run_a_schedule_long(self):
+        # MIP-2251: a service that was never created has no row, and used to page nobody.
+        now = timezone.now()
+        CronHeartbeat.objects.create(
+            name=ops_alerts.TICK_NAME, first_seen_at=now - timedelta(days=3)
+        )
+        overdue = ops_alerts.check_crons(now=now)
+        self.assertIn("email-notify", overdue)
+        alert = OpsAlert.objects.get(key="cron:email-notify")
+        self.assertEqual(alert.kind, OpsAlertKind.CRON_MISSED)
+        self.assertIn("never reported", alert.summary)
+
+    def test_a_cron_that_has_reported_is_not_reported_as_never_started(self):
+        now = timezone.now()
+        CronHeartbeat.objects.create(
+            name=ops_alerts.TICK_NAME, first_seen_at=now - timedelta(days=3)
+        )
+        CronHeartbeat.objects.create(
+            name="email-notify",
+            first_seen_at=now - timedelta(days=3),
+            last_succeeded_at=now - timedelta(minutes=1),
+        )
+        self.assertNotIn("email-notify", ops_alerts.check_crons(now=now))
+
+    def test_nothing_is_never_started_before_the_tick_itself_has_run_a_schedule_long(self):
+        now = timezone.now()
+        CronHeartbeat.objects.create(
+            name=ops_alerts.TICK_NAME, first_seen_at=now - timedelta(minutes=10)
+        )
+        self.assertEqual(ops_alerts.check_crons(now=now), [])
+
+    def test_without_a_tick_row_nothing_is_never_started(self):
+        self.assertEqual(ops_alerts.check_crons(), [])
+
+    def test_a_cron_added_to_the_code_before_its_service_is_waited_for_until_its_date(self):
+        tick_since = timezone.now() - timedelta(days=30)
+        CronHeartbeat.objects.create(name=ops_alerts.TICK_NAME, first_seen_at=tick_since)
+        expected = ops_alerts.CRON_FIRST_EXPECTED["retention-purge"]
+        before = ops_alerts.check_crons(now=expected + timedelta(hours=1))
+        self.assertNotIn("retention-purge", before)
+        after = ops_alerts.check_crons(now=expected + timedelta(hours=27))
+        self.assertIn("retention-purge", after)
 
     def test_an_unknown_name_is_not_checked(self):
         # A hand run with a made-up --heartbeat must not page forever.
