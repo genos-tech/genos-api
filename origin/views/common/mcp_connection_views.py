@@ -25,7 +25,13 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMembers
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import agent_quiet, credential_guard, mcp_connections, mcp_oauth
+from origin.services import (
+    agent_quiet,
+    credential_guard,
+    mcp_connections,
+    mcp_oauth,
+    recent_auth,
+)
 from origin.services.member_roles import OWNER, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
@@ -138,6 +144,17 @@ class McpConnectionDetailView(_Base):
         default = str(body.get("default_team_id", connection.default_team_id))
         if default not in team_ids:
             return _problem("invalid_request", "The default team must be one of the chosen teams.")
+
+        # Widening what an app may do is the same foothold as connecting it: raising it from read
+        # to write, switching deleting on, or adding a team. A stolen session must not be able to
+        # do that without the password (MIP-2240). Narrowing and re-choosing the default are free.
+        widens = (
+            (scope == "write" and connection.scope != "write")
+            or (destructive and not connection.allow_destructive)
+            or any(t not in connection.team_ids for t in team_ids)
+        )
+        if widens and (refused := recent_auth.refusal(request)):
+            return refused
 
         with transaction.atomic():
             connection.scope = scope

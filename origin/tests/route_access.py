@@ -575,6 +575,9 @@ REGISTRY = {
     "origin.views.common.team_views.TeamMembersView": checked("is_team_member"),
     "origin.views.common.team_views.TeamProfileImageView": checked("can_manage"),
     # views.common.user_views
+    "origin.views.common.recent_auth_views.ConfirmPasswordView": self_only(
+        "checks the caller's own password and answers a short-lived token for them alone"
+    ),
     "origin.views.common.user_views.AccountDeletionView": self_only(
         "deletes the caller's own account"
     ),
