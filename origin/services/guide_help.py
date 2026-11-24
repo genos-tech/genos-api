@@ -36,6 +36,7 @@ _STOP = frozenset(
 _JA_TERMS: dict[str, str] = {
     "テーマ": "theme",
     "ダークモード": "dark theme",
+    "ダーク": "dark theme",
     "ライトモード": "light theme",
     "配色": "color theme",
     "カラー": "color",
@@ -120,6 +121,9 @@ _PLAN = {
 }
 
 
+_HIRAGANA_ONLY_RE = re.compile(r"[぀-ゟ]+")
+
+
 def _stem(word: str) -> str:
     for suffix in ("ing", "es", "ed", "s"):
         if len(word) > len(suffix) + 2 and word.endswith(suffix):
@@ -134,7 +138,14 @@ def _tokens(text: str) -> list[str]:
 
 def _cjk_pairs(text: str) -> list[str]:
     runs = re.findall(r"[぀-ヿ㐀-鿿]+", text)
-    return [r[i : i + 2] for r in runs for i in range(len(r) - 1)]
+    pairs = (r[i : i + 2] for r in runs for i in range(len(r) - 1))
+    # A pair of only hiragana is a particle or an ending (には, する, たい): it matches everything.
+    return [p for p in pairs if not _HIRAGANA_ONLY_RE.fullmatch(p)]
+
+
+def _norm_ja(text: str) -> str:
+    """Spacing and 二/2 vary in the manual's Japanese (`2 段階認証`, `2段階認証`): compare without them."""
+    return text.replace(" ", "").replace("二段階", "2段階")
 
 
 def _is_ja(text: str) -> bool:
@@ -165,6 +176,8 @@ def _index(lang: str) -> tuple[list[dict], list[dict]]:
                     "topic": topic["title"],
                     "heading": heading.strip(),
                     "body": body.strip(),
+                    "n_heading": _norm_ja(heading),
+                    "n_body": _norm_ja(body),
                     "h_tokens": set(_tokens(heading)) | set(_cjk_pairs(heading)),
                     "t_tokens": set(_tokens(topic["title"])) | set(_cjk_pairs(topic["title"])),
                     "b_tokens": _tokens(body) + _cjk_pairs(body),
@@ -173,6 +186,7 @@ def _index(lang: str) -> tuple[list[dict], list[dict]]:
     rows = [
         {
             **s,
+            "n_text": _norm_ja(s["label"] + " " + s["default"]),
             "tokens": set(_tokens(s["label"])) | set(_cjk_pairs(s["label"])),
             "d_tokens": set(_tokens(s["default"])) | set(_cjk_pairs(s["default"])),
         }
@@ -205,8 +219,14 @@ def answer(query: str, language: str = "auto") -> dict[str, Any]:
     lang = "ja" if ja and load_manual("ja") else "en"
     sections, rows = _index(lang)
     topic_settings = {t["id"]: t.get("settings", []) for t in manual_topics(lang)}
+    # Japanese has no spaces, so pairs of characters match loosely (ダーク and ショートカット share ー).
+    # A known whole term in the question (ダークモード, 通知) is a much stronger signal: it scores as a
+    # phrase, and when the question has one the loose pairs are left out so they cannot outvote it.
+    phrases = [_norm_ja(k) for k in _JA_TERMS if k in query.lower()] if lang == "ja" else []
     if ja and lang == "en":
         terms = set(_expand_ja(query))
+    elif ja and phrases:
+        terms = set(_tokens(query)) | set(phrases)
     elif ja:
         terms = set(_cjk_pairs(query)) | set(_tokens(query)) | set(_expand_ja(query))
     else:
@@ -222,6 +242,8 @@ def answer(query: str, language: str = "auto") -> dict[str, Any]:
     scored: list[tuple[float, dict]] = []
     for sec in sections:
         score = 0.0
+        for k in phrases:
+            score += (6 if k in sec["n_heading"] else 0) + (4 if k in sec["n_body"] else 0)
         for t in terms:
             if t in sec["h_tokens"]:
                 score += 5
@@ -238,6 +260,7 @@ def answer(query: str, language: str = "auto") -> dict[str, Any]:
     setting_hits: list[tuple[float, dict]] = []
     for row in rows:
         hit = len(terms & row["tokens"]) + 0.5 * len(terms & row["d_tokens"])
+        hit += sum(2 for k in phrases if k in row["n_text"])
         if hit:
             setting_hits.append((hit + (0.25 if row["kind"] == "row" else 0), row))
     setting_hits.sort(key=lambda p: -p[0])
