@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from django.db import transaction
 from django.utils import timezone
 
-from origin.models.common.team_models import TeamMembers
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.services.team_default_chats import join_default_chats
 
 logger = logging.getLogger(__name__)
@@ -198,6 +198,36 @@ def revoke_team_api_keys(team_id, user_id) -> int:
     )
 
 
+class TeamBillingCancelFailed(Exception):
+    """The team closed with its last member, but its Stripe subscription could not be cancelled.
+
+    Raised inside `remove_team_member`'s transaction, so the departure is rolled back: closing the
+    team and leaving it billing is the bug (MIP-2285); the retry is cheap and the person is at the
+    screen. Callers answer 503 and the leave can be repeated."""
+
+
+def _stop_billing_of_closed_team(team_id) -> None:
+    """Cancel, at once, the subscriptions of a team that just closed; drop its plan to free.
+
+    Same helpers and same fail-closed rule as account deletion (MIP-2254). No Stripe call for a
+    team that never paid (no customer id) or when billing is off (a dev stack). Idempotent."""
+    from origin.services import stripe_billing
+
+    team = TeamMaster.objects.filter(team_id=team_id).first()
+    if team is None or not team.stripe_customer_id or not stripe_billing.billing_enabled():
+        return
+    try:
+        count = stripe_billing.cancel_subscriptions_now(team.stripe_customer_id)
+    except stripe_billing.BillingError as exc:
+        logger.warning(
+            "team %s closed but its subscription was not cancelled", team_id, exc_info=True
+        )
+        raise TeamBillingCancelFailed from exc
+    if count:
+        logger.warning("cancelled %d subscription(s) of closed team %s", count, team_id)
+    stripe_billing.end_team_plan_after_cancel(team)
+
+
 def remove_team_member(team_id, attendee_id) -> int:
     """Soft-delete a membership row and strip the access it underwrote.
 
@@ -243,7 +273,8 @@ def remove_team_member(team_id, attendee_id) -> int:
         # The last live member going closes the team; its data is purged by the cron (MIP-1958).
         from origin.services.team_purge import close_team_if_empty
 
-        close_team_if_empty(team_id)
+        if close_team_if_empty(team_id):
+            _stop_billing_of_closed_team(team_id)
         return withdrawn
 
 
