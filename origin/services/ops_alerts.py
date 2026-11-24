@@ -236,6 +236,7 @@ _SECURITY_SUMMARIES = {
     "alert.forbidden_burst": "Burst of refused requests",
     "alert.signin_spray": "Password spray: failed sign-ins across many accounts",
     "alert.ops_command_unlisted": "Operator ran a command outside the allowlist",
+    "alert.read_volume": "Unusual read volume",
 }
 
 

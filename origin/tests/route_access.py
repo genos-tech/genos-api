@@ -199,6 +199,9 @@ REGISTRY = {
     "origin.views.common.api_key_views.ApiKeyDetailView": self_only(
         "ApiKey filtered on user=request.user"
     ),
+    "origin.views.common.api_key_views.ApiKeyResumeView": self_only(
+        "ApiKey filtered on user=request.user (MIP-2259)"
+    ),
     "origin.views.common.api_key_views.ApiKeyListCreateView": checked("is_team_member"),
     "origin.views.common.api_key_views.TeamApiKeyDetailView": checked("_managed_team"),
     "origin.views.common.api_key_views.TeamApiKeyListView": checked("_managed_team"),
@@ -220,6 +223,9 @@ REGISTRY = {
         "_managed_team"
     ),
     "origin.views.common.mcp_connection_views.TeamMcpConnectionListView": checked("_managed_team"),
+    "origin.views.common.mcp_connection_views.McpConnectionResumeView": self_only(
+        "the caller's own connected app: looked up by id AND user=request.user (MIP-2259)"
+    ),
     "origin.views.common.mcp_connection_views.McpConnectionDetailView": self_only(
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"

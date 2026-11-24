@@ -49,6 +49,9 @@ class McpConnection(models.Model):
     team_ids = models.JSONField(default=list)
     last_used_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
+    # Paused by the detector (MIP-2259), not ended: reversible by the member.
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspended_reason = models.CharField(max_length=32, blank=True, default="")
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -67,6 +70,10 @@ class McpConnection(models.Model):
     @property
     def is_active(self) -> bool:
         return self.revoked_at is None
+
+    @property
+    def is_suspended(self) -> bool:
+        return self.suspended_at is not None
 
     def revoke(self) -> None:
         """End the connection. Every token it issued stops working on its next use."""
