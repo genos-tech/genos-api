@@ -246,6 +246,16 @@ class StoreAndWarnTests(HtmlBase):
         self.assertNotIn("suggestions", made)
         self.assertIn("nothing to fix", made["next_step"])
 
+    def test_a_diagram_with_no_text_description_is_saved_with_a_fixable_warning(self):
+        # MIP-2344: never a refusal; the fix says to describe the structure in words.
+        svg = "<svg viewBox='0 0 9 9'>"
+        bare = GOOD.replace("</body>", svg + "<text>box</text></svg></body>")
+        made = self.save(bare)
+        self.assertEqual([w["code"] for w in made["warnings"]], ["diagram_no_description"])
+        self.assertIn("Postgres", made["suggestions"][0])
+        described = bare.replace(svg, svg + "<title>a to b</title>")
+        self.assertEqual(self.save(described, note_id=made["note_id"])["warnings"], [])
+
     def test_a_missing_summary_is_a_warning_not_an_error(self):
         made = self.ok(SAVE, html=GOOD, note_type="personal", title="t")
         self.assertEqual([w["code"] for w in made["warnings"]], ["no_summary"])
@@ -650,11 +660,13 @@ class FlagOffTests(HtmlBase):
 
 
 class SurfaceTests(HtmlBase):
-    def test_the_tool_is_in_the_notes_endpoint_and_the_full_one_but_not_core(self):
+    def test_the_tool_is_in_the_notes_endpoint_the_full_one_and_core(self):
         self.assertIn(SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface="notes")})
         self.assertIn(SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface=None)})
-        self.assertNotIn(SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface="core")})
-        self.assertNotIn(SAVE, surfaces.CORE_TOOLS)
+        self.assertIn(
+            SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface="core")}
+        )  # MIP-2343
+        self.assertIn(SAVE, surfaces.CORE_TOOLS)
 
     def test_it_is_on_exactly_one_domain_endpoint_and_that_is_notes(self):
         homes = [d for d, names in surfaces.DOMAIN_TOOLS.items() if SAVE in names]
