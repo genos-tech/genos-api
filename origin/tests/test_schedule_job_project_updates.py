@@ -45,11 +45,15 @@ class TestProjectUpdates(JobBase):
     def test_it_is_in_the_catalog_with_the_project_required(self):
         job = JOBS["project_updates"]
         self.assertTrue(job.title and job.description)
-        self.assertFalse(job.uses_ai)
+        # An opt-in AI summary since MIP-2350: AI only when `ai_sentences` is true.
+        self.assertTrue(job.uses_ai)
+        self.assertFalse(job.ai_applies({"project_id": 1}))
+        self.assertTrue(job.ai_applies({"project_id": 1, "ai_sentences": True}))
         row = [r for r in job_catalog() if r["job"] == "project_updates"][0]
         self.assertEqual(row["params"]["project_id"]["required"], True)
         self.assertNotIn("required", row["params"]["hours"])
-        self.assertEqual((row["uses_ai"], row["effort_cost"]), (False, None))
+        self.assertIs(row["uses_ai"], True)
+        self.assertEqual(set(row["effort_cost"]["levels"]), {"low", "medium", "high"})
 
     def test_parameters_are_checked_when_the_schedule_is_saved(self):
         def save(**params):

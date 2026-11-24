@@ -110,6 +110,23 @@ def entitlement_milli(plan: str) -> int | None:
     return policy.entitlements_milli.get("free", 0)
 
 
+#: The plan label a demo visitor's grant row carries (MIP-2341). Not a plan: a demo visitor gets
+#: `DEMO_AI_CREDITS` whatever the team plan, which is Pro for every demo team.
+DEMO_PLAN = "demo"
+
+
+def entitlement_for(user_id: str, plan: str) -> int | None:
+    """`entitlement_milli(plan)`, except that a demo visitor gets the small fixed demo budget.
+
+    A demo visitor is a brand-new user in a brand-new Pro team on every sign-in, so the plan's
+    allowance would be a fresh $7 per visit (MIP-2341). Everything else is unchanged."""
+    from origin.services.demo_ai_limits import DEMO_AI_CREDITS, is_demo_user  # noqa: PLC0415
+
+    if is_demo_user(user_id):
+        return DEMO_AI_CREDITS * 1000
+    return entitlement_milli(plan)
+
+
 def ensure_monthly_grant(user_id: str, plan: str, *, period: str | None = None) -> None:
     """Materialize the month's grant for (user, plan), exactly once.
 
@@ -131,9 +148,13 @@ def ensure_monthly_grant(user_id: str, plan: str, *, period: str | None = None) 
         from origin.search_engine.models import AiCreditEntry  # noqa: PLC0415
 
         policy = _policy()
-        target = entitlement_milli(plan)
+        from origin.services.demo_ai_limits import is_demo_user  # noqa: PLC0415
+
+        target = entitlement_for(user_id, plan)
         if policy is None or target is None:
             return  # unlimited (enterprise) — no entitlement accounting
+        if is_demo_user(user_id):
+            plan = DEMO_PLAN  # the grant row says it is the demo budget, not Pro's
 
         rows = AiCreditEntry.objects.filter(
             user_id=str(user_id),
@@ -232,7 +253,7 @@ def balance_breakdown(user_id: str, plan: str, *, period: str | None = None) -> 
         return None
     period = period or period_for()
     try:
-        if entitlement_milli(plan) is None:
+        if entitlement_for(user_id, plan) is None:
             return None
         cache_key = f"{_BALANCE_CACHE_PREFIX}{user_id}:{period}"
         cached = cache.get(cache_key)

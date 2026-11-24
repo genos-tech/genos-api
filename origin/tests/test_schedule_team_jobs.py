@@ -64,7 +64,9 @@ class TestCatalog(TeamJobsBase):
     def test_both_jobs_are_in_the_catalog_as_data_only_shareable_jobs(self):
         for key in ("team_activity", "chat_catch_up"):
             job = JOBS[key]
-            self.assertFalse(job.uses_ai)
+            # team_activity has an opt-in AI summary (MIP-2350); the catch-up never does (D5: it
+            # promises never to show what was said).
+            self.assertEqual(job.uses_ai, key == "team_activity")
             self.assertTrue(job.shareable)
             self.assertTrue(job.title and job.description)
             self.assertIn("hours", job.params_schema["properties"])

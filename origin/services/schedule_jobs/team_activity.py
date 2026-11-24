@@ -32,7 +32,17 @@ from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q
 from origin.services import schedule_audience
 from origin.services.schedule_jobs import AUDIENCE_KEY, Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, counted, item, more, span
+from origin.services.schedule_jobs.report_kit import (
+    AI_SUMMARY_PARAM,
+    SUMMARY_EFFORT_DEFAULT,
+    Links,
+    add_narrative,
+    ai_sentences_on,
+    counted,
+    item,
+    more,
+    span,
+)
 
 DEFAULT_HOURS = 168
 MAX_LIST = 8
@@ -69,7 +79,7 @@ def _shared_projects(ctx: ToolContext, audience: set[str]) -> list[ProjectMaster
     )
 
 
-def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     hours = int(params.get("hours", DEFAULT_HOURS))
     audience = _audience(ctx, params)
     on_team = schedule_audience.team_member_ids(ctx.team_id)
@@ -200,6 +210,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     }
 
 
+def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+    """The report, with a written summary on top when the member turned the AI part on."""
+    return add_narrative(ctx, params, _report(ctx, params), effort_default=SUMMARY_EFFORT_DEFAULT)
+
+
 register_job(
     Job(
         key="team_activity",
@@ -211,6 +226,15 @@ register_job(
         ),
         run=run,
         share_team=True,
-        params_schema={"properties": {"hours": {"type": "integer", "minimum": 1, "maximum": 720}}},
+        params_schema={
+            "properties": {
+                "hours": {"type": "integer", "minimum": 1, "maximum": 720},
+                "ai_sentences": AI_SUMMARY_PARAM,
+            }
+        },
+        uses_ai=True,
+        ai_when=ai_sentences_on,
+        effort_default=SUMMARY_EFFORT_DEFAULT,
+        cost_basis="narrative",
     )
 )
