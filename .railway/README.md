@@ -51,5 +51,14 @@ effect.
 
 Add a `service(...)` block and put it in the `project(...)` list, `plan`, review,
 `apply`. Do **not** add a `railway-<name>.toml`: a new service cannot use one.
-`retention-purge` (MIP-812) is the next one; its values are in
-`railway-retention-purge.toml`.
+`retention-purge`, `housekeeping-prune`, `tombstone-prune` and `member-memory-sweep`
+(MIP-2251) were added this way. `retention-purge` keeps every period "forever" until
+Ken sets `RETENTION_AGENT_RUNS_DAYS` (180), `RETENTION_EMAIL_NOTIFICATION_EVENTS_DAYS` (90)
+and `RETENTION_SECURITY_EVENTS_HIGH_VOLUME_DAYS` (90) on the service. Run each command
+without `--apply` first and post the counts.
+
+**Not a cron: commands that delete uploaded files** (`purge_deleted_tasks`,
+`purge_orphaned_task_files`, `purge_detached_note_attachments`). The media volume is
+mounted on `backend-django` only; a cron container has an empty media root, so it
+would delete the rows and leave the files behind. Run them by `railway ssh --service
+backend-django` until uploads move to object storage.
