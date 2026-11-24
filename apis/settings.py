@@ -133,6 +133,8 @@ MIDDLEWARE = [
     # (MIP-725). Inside CurrentUserMiddleware so the alert row it writes
     # still sees the request.
     "origin.services.security_events.ForbiddenBurstMiddleware",
+    # Counts what a key or connected app reads per minute (MIP-2259).
+    "origin.services.credential_guard.ReadVolumeMiddleware",
 ]
 
 # CORS policy.
@@ -265,7 +267,20 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
+    # Known-breach check (MIP-2238). A no-op unless PASSWORD_BREACH_CHECK is on; fails open.
+    {
+        "NAME": "origin.services.password_policy.PwnedPasswordValidator",
+    },
 ]
+
+# Ask Have I Been Pwned (k-anonymity: 5 hex characters of a SHA-1 leave the server) whether a
+# new password is in a known breach, at signup and reset. OFF until Ken turns it on.
+PASSWORD_BREACH_CHECK = os.environ.get("PASSWORD_BREACH_CHECK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 # Internationalization
@@ -331,6 +346,17 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": _LOG_LEVEL},
 }
+
+# Second, best-effort copy of the redacted logs in an external archive
+# (Better Stack; MIP-2261). Off until BETTERSTACK_SOURCE_TOKEN and
+# BETTERSTACK_INGEST_URL are both set. See apis/log_shipping.py.
+from apis.log_shipping import is_enabled as _log_shipping_enabled  # noqa: E402
+
+if _log_shipping_enabled():
+    LOGGING["handlers"]["betterstack"] = {"()": "apis.log_shipping.BetterStackHandler"}
+    for _logger_config in LOGGING["loggers"].values():
+        _logger_config["handlers"] = [*_logger_config["handlers"], "betterstack"]
+    LOGGING["root"]["handlers"] = [*LOGGING["root"]["handlers"], "betterstack"]
 
 # Cache backend — Redis when available; falls back transparently to
 # "no cache" on Redis outages thanks to IGNORE_EXCEPTIONS. Keep timeouts
@@ -513,17 +539,12 @@ REQUEST_PERF_LOG = os.environ.get("REQUEST_PERF_LOG", "").strip().lower() not in
 REQUEST_PERF_CPU_STAT_PATH = os.environ.get("REQUEST_PERF_CPU_STAT_PATH", "/sys/fs/cgroup/cpu.stat")
 
 SIMPLE_JWT = {
-    # NOT shortened, deliberately. A shorter access token would be the
-    # normal hardening move, but the frontend has no proactive refresh:
-    # `AuthContext` only refreshes when `accessToken` is null, and
-    # nothing nulls it on expiry (no `exp` watcher, and the axios
-    # interceptor deliberately skips 401 because it assumes AuthContext
-    # owns that path). So an expired access token silently breaks the
-    # session until the user reloads the page. At 24h almost everyone
-    # reloads first; at 30 minutes it would happen to everyone, twice an
-    # hour. Shortening this is blocked on adding proactive refresh
-    # frontend-side — see operations/AUTH_SECURITY_PLAN.md §3.1.
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=24),
+    # 30 minutes (MIP-2242), env-tunable with ACCESS_TOKEN_LIFETIME_MINUTES. The browser renews it
+    # ahead of expiry from the refresh cookie (AuthContext), so a person stays signed in for the
+    # refresh token's 7 days; a stolen access token now dies within the half hour.
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=int(os.environ.get("ACCESS_TOKEN_LIFETIME_MINUTES", "30"))
+    ),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
@@ -551,6 +572,27 @@ SIMPLE_JWT = {
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
+
+
+# Asymmetric session tokens (MIP-2243, rollout in operations/AUTH_SECURITY_PLAN.md
+# §3.3). Everything here is inert at its default: the api signs HS256 with
+# JWT_SECRET_KEY and accepts HS256, exactly as before. See origin/services/jwt_backend.py.
+#   JWT_SIGNING_ALGORITHM  HS256 (default) | RS256 (the switch that changes what is minted)
+#   JWT_PRIVATE_KEY        PEM, api only; needed for RS256
+#   JWT_PUBLIC_KEY         PEM; derived from the private key when absent; lets the api
+#                          ACCEPT RS256 tokens even while it still signs HS256
+#   JWT_ACCEPT_HS256       true (default) | false (the end of the window: HS256 refused)
+#   JWT_KEY_ID             optional `kid` header for later key rotation
+JWT_SIGNING_ALGORITHM = os.environ.get("JWT_SIGNING_ALGORITHM", "HS256").strip().upper() or "HS256"
+JWT_PRIVATE_KEY = os.environ.get("JWT_PRIVATE_KEY", "")
+JWT_PUBLIC_KEY = os.environ.get("JWT_PUBLIC_KEY", "")
+JWT_ACCEPT_HS256 = os.environ.get("JWT_ACCEPT_HS256", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+JWT_KEY_ID = os.environ.get("JWT_KEY_ID", "").strip()
 
 
 def _validate_prod_secrets(
@@ -2683,6 +2725,16 @@ SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
 # and how many distinct addresses failing within an hour count as a password spray.
 SIGNIN_BACKOFF_FAILURES = int(os.environ.get("SIGNIN_BACKOFF_FAILURES", "5"))
 SIGNIN_SPRAY_ACCOUNTS = int(os.environ.get("SIGNIN_SPRAY_ACCOUNTS", "50"))
+# Detection that acts (MIP-2259, origin/services/credential_guard.py). Reads (calls, and response
+# bytes) one API key or connected app makes in a minute past these raise `alert.read_volume`; a
+# person's own total is judged at SECURITY_READ_USER_MULTIPLIER times them. What happens to the
+# credential is `CREDENTIAL_AUTOSUSPEND_MODE`: `off` (default, only the alert), `shadow` (the alert
+# says it would have paused it) or `enforce` (a read-volume breach or a refused-request burst pauses
+# the key or app until its owner re-enables it).
+SECURITY_READ_CALLS_PER_MINUTE = int(os.environ.get("SECURITY_READ_CALLS_PER_MINUTE", "300"))
+SECURITY_READ_CHARS_PER_MINUTE = int(os.environ.get("SECURITY_READ_CHARS_PER_MINUTE", "3000000"))
+SECURITY_READ_USER_MULTIPLIER = int(os.environ.get("SECURITY_READ_USER_MULTIPLIER", "2"))
+CREDENTIAL_AUTOSUSPEND_MODE = os.environ.get("CREDENTIAL_AUTOSUSPEND_MODE", "off").strip().lower()
 
 # --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
 # Who `ops_alert_tick` mails, through the same Resend transport as every

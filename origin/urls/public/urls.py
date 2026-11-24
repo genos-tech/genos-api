@@ -26,6 +26,7 @@ from origin.views.public.mcp import surfaces
 from origin.views.public.mcp.views import McpView
 from origin.views.public.openai_challenge import openai_apps_challenge_view
 from origin.views.public.openapi import OpenApiSchemaView
+from origin.views.public.secret_scanning_views import SecretScanningView
 from origin.views.public.v1_views import (
     MeView,
     ProjectListView,
@@ -64,6 +65,12 @@ urlpatterns = [
         )
         for segment, surface in surfaces.SURFACE_SEGMENTS.items()
     ],
+    # MIP-2271: GitHub secret scanning posts leaked-key matches here (signature is the credential).
+    path(
+        "api/public/v1/secret-scanning/",
+        SecretScanningView.as_view(),
+        name="public_v1_secret_scanning",
+    ),
     # MIP-1108: ChatGPT's plugin portal checks the host serves its token here (404 unless
     # `OPENAI_APPS_CHALLENGE` is set). At the origin's `.well-known`, so not under /api.
     path(

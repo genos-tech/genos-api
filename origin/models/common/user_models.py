@@ -133,7 +133,6 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     # is honoured at read time by the delivery gates.
     custom_status_expiry = models.DateTimeField(null=True, blank=True)
     role = models.CharField(max_length=50, blank=True, null=True)
-    base_country = crypto.EncryptedCharField(max_length=50, blank=True, null=True)
     # IANA timezone name ("Asia/Tokyo"), captured from the browser.
     #
     # NULL means UNKNOWN, and that is deliberately not the same as "chose

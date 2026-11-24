@@ -39,6 +39,10 @@ CASES = {
         {"inviter_name": NASTY, "team_name": NASTY, "invite_url": LINK, "expiry_days": 7},
         [NASTY, LINK],
     ),
+    "signup_existing_account": (
+        {"user_name": NASTY, "signin_url": LINK},
+        [NASTY, LINK],
+    ),
     "password_reset": (
         {"user_name": NASTY, "reset_url": LINK, "expiry_minutes": 30},
         [NASTY, LINK],

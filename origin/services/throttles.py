@@ -178,10 +178,15 @@ class RecordedThrottleMixin:
         try:
             allowed = super().allow_request(request, view)
         except CACHE_ERRORS as exc:
-            return _cache_down(self, request, exc)
+            return self.on_cache_down(request, exc)
         if not allowed:
             _record_denial(self.scope, request, _who(self, request))
         return allowed
+
+    def on_cache_down(self, request, exc) -> bool:
+        """The answer when the counter store is unreachable: `fail_closed` refuses, else allows.
+        A subclass may count somewhere else instead (the public API counts in this process)."""
+        return _cache_down(self, request, exc)
 
     def wait(self):
         # Nothing was read, so there is no history to compute a wait from.

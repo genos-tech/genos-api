@@ -1577,3 +1577,62 @@ def reconcile_from_stripe(user: CustomUser) -> str:
     if _set_personal_tier(user, "free", reason="reconcile"):
         return "tier set to free"
     return f"unchanged: tier stays {user.tier or 'free'}"
+
+
+# --------------------------------------------------------------------------- #
+# Account deletion (MIP-2254)                                                 #
+# --------------------------------------------------------------------------- #
+
+# A subscription in one of these can never charge again. Every other status can (or, for
+# `incomplete`, may once the first payment lands), so deletion cancels it.
+_SUBSCRIPTION_ENDED = frozenset({"canceled", "incomplete_expired"})
+
+
+def cancel_subscriptions_now(customer_id: str) -> int:
+    """Cancel every subscription of one Stripe customer at once; returns how many were cancelled.
+
+    Used when the person who pays is erased: the customer record stays (Ken, 2026-11-02, MIP-874:
+    bookkeeping), but nothing may bill it again. Immediate, with no proration credit and no final
+    invoice: the current period is not refunded here, that follows the terms.
+
+    Idempotent, so a retry after a half-finished deletion is safe: ended subscriptions are skipped,
+    and one that ended between the list and the cancel (`resource_missing`) counts as done.
+    A customer that no longer exists has nothing to cancel. Any other Stripe failure raises
+    `BillingError`, and the caller must NOT go on to erase the account.
+    """
+    stripe = _stripe()
+    cancelled = 0
+    starting_after = None
+    while True:
+        params = {"customer": customer_id, "status": "all", "limit": 100}
+        if starting_after:
+            params["starting_after"] = starting_after
+        try:
+            page = json.loads(str(stripe.Subscription.list(**params))) or {}
+        except Exception as e:  # noqa: BLE001
+            if getattr(e, "code", "") == "resource_missing":
+                return cancelled
+            raise BillingError("Could not list subscriptions.") from e
+        subs = page.get("data") or []
+        for sub in subs:
+            sub_id = (sub or {}).get("id")
+            if not sub_id or (sub.get("status") or "") in _SUBSCRIPTION_ENDED:
+                continue
+            try:
+                stripe.Subscription.cancel(sub_id, invoice_now=False, prorate=False)
+            except Exception as e:  # noqa: BLE001
+                if getattr(e, "code", "") == "resource_missing":
+                    continue
+                raise BillingError("Could not cancel the subscription.") from e
+            cancelled += 1
+        if not page.get("has_more") or not subs:
+            return cancelled
+        starting_after = subs[-1].get("id")
+
+
+def end_team_plan_after_cancel(team: TeamMaster) -> bool:
+    """Drop a closed team to `free` once its subscription is cancelled here.
+
+    The webhook that follows (`customer.subscription.deleted`) ignores a closed team, so without
+    this the plan stays paid and `team_purge` keeps holding the team for billing for ever."""
+    return _set_team_plan(team, "free", reason="account deletion: subscription cancelled")

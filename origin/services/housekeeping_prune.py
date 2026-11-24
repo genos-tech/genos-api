@@ -145,6 +145,13 @@ def ops_alerts(now) -> QuerySet:
     )
 
 
+def erasure_events(now) -> QuerySet:
+    """The ids-only erasure log past backup retention plus a margin (MIP-2249)."""
+    from origin.models.common.erasure_models import RETENTION_DAYS, ErasureEvent  # noqa: PLC0415
+
+    return ErasureEvent.objects.filter(erased_at__lt=now - _days(RETENTION_DAYS))
+
+
 @dataclass(frozen=True)
 class PruneSet:
     name: str
@@ -161,6 +168,7 @@ SETS: tuple[PruneSet, ...] = (
     PruneSet("team_invites", team_invites),
     PruneSet("push_subscriptions", push_subscriptions),
     PruneSet("ops_alerts", ops_alerts),
+    PruneSet("erasure_events", erasure_events),
 )
 BY_NAME = {s.name: s for s in SETS}
 

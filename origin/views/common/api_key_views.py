@@ -34,7 +34,13 @@ from origin.models.common.api_key_models import (
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import credential_alert, mcp_notice, mcp_tier_limits, recent_auth
+from origin.services import (
+    credential_alert,
+    credential_guard,
+    mcp_notice,
+    mcp_tier_limits,
+    recent_auth,
+)
 from origin.services.api_keys import key_label, revoke_api_key
 from origin.services.member_roles import OWNER, can_manage, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
@@ -61,6 +67,9 @@ def _serialize(key: ApiKey) -> dict:
         "lastUsedAt": key.last_used_at,
         "expiresAt": key.expires_at,
         "revokedAt": key.revoked_at,
+        # Paused by the detector (MIP-2259); the owner re-enables it with POST .../resume/.
+        "suspendedAt": key.suspended_at,
+        "suspendedReason": key.suspended_reason,
         "createdAt": key.ts_created_at,
     }
 
@@ -236,6 +245,21 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
 
 def _revoke(request, key: ApiKey, *, by: str) -> None:
     revoke_api_key(key, by=by, request=request)
+
+
+class ApiKeyResumeView(AuthenticatedAPIView):
+    """POST /api/v2/api-keys/<id>/resume/ (MIP-2259): the owner re-enables a key the detector paused.
+    Only the key's own owner, JWT only (a key must not be able to re-enable itself); an unknown,
+    someone else's or revoked key is the same 404."""
+
+    authentication_classes = [JWTAuthentication]
+
+    def post(self, request, key_id):
+        key = ApiKey.objects.filter(id=key_id, user=request.user, revoked_at__isnull=True).first()
+        if key is None:
+            return Response({"error": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
+        credential_guard.resume(key, request=request, actor=request.user)
+        return Response(_serialize(key), status=status.HTTP_200_OK)
 
 
 class ApiKeyDetailView(AuthenticatedAPIView):

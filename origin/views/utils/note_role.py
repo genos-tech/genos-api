@@ -146,7 +146,17 @@ def readable_note_ids(user_id, note_type, note_ids) -> set:
     if not note_ids or user_id is None:
         return set()
 
-    readable = set(
+    readable: set[int] = set()
+    if note_type == NOTE_TYPE_PERSONAL:
+        # A skill body answers to its skill (`skill_note_role`, MIP-2190): resolved apart, and its
+        # rows (a stray Viewer or Editor row, the owner's own) never count as a grant.
+        bodies, skill_pairs = _skill_body_reader_pairs([user_id], note_ids)
+        readable = {note for _, note in skill_pairs}
+        note_ids -= bodies
+        if not note_ids:
+            return readable
+
+    readable |= set(
         NotePermissionMaster.objects.filter(
             user=user_id, note_type=note_type, note_id__in=note_ids
         ).values_list("note_id", flat=True)
@@ -261,6 +271,24 @@ def _explicit_pairs(who, note_type, wanted) -> set[tuple[str, int]]:
     }
 
 
+def _skill_body_reader_pairs(user_ids, note_ids):
+    """`(skill body ids among the notes, who reads them)`: the batch form of `skill_note_role`."""
+    # Local import: the skills service imports this module's constants.
+    from origin.services.skills.service import skill_body_reader_pairs  # noqa: PLC0415
+
+    return skill_body_reader_pairs(user_ids, note_ids)
+
+
+def without_skill_bodies(note_ids) -> set[int]:
+    """`note_ids` minus the notes that are a skill's body, for a caller that lets a personal note's
+    OWNER read it on top of `readable_note_ids`: a skill body's owner reads only while on the
+    skill's team (`skill_note_role`), which `readable_note_ids` answers for them (MIP-2190)."""
+    from origin.services.skills.service import skill_body_ids  # noqa: PLC0415
+
+    ids = {int(n) for n in note_ids}
+    return ids - skill_body_ids(ids)
+
+
 def personal_note_reader_pairs(user_ids, note_ids) -> set[tuple[str, int]]:
     """The `(user id, note id)` pairs, among these users and PERSONAL notes, where the user can
     read the note, in a fixed number of queries however many people and notes (MIP-1599).
@@ -273,7 +301,12 @@ def personal_note_reader_pairs(user_ids, note_ids) -> set[tuple[str, int]]:
     who, wanted = _users_and_notes(user_ids, note_ids)
     if not who or not wanted:
         return set()
-    pairs = _explicit_pairs(who, NOTE_TYPE_PERSONAL, wanted)
+    # A skill body answers to its skill (`skill_note_role`, MIP-2190), not to the rows below.
+    bodies, pairs = _skill_body_reader_pairs(who, wanted)
+    wanted -= bodies
+    if not wanted:
+        return pairs
+    pairs |= _explicit_pairs(who, NOTE_TYPE_PERSONAL, wanted)
     filed: dict[int, int] = {}
     for note, owner, folder in PersonalNoteMaster.objects.filter(note_id__in=wanted).values_list(
         "note_id", "owner_id", "folder_id"

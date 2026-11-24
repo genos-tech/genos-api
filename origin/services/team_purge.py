@@ -39,12 +39,14 @@ from django.db import models, transaction
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
+from origin.models.common.erasure_models import ErasureObjectType
 from origin.models.common.team_models import (
     ExternalGrant,
     TeamConnection,
     TeamMaster,
     TeamMembers,
 )
+from origin.services import erasure_log
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +361,7 @@ def purge_team(team_id) -> PurgeOutcome:
                 collab_push.forget_document(doc)
             change_feed.bump_team(team_id)
 
+        erasure_log.record(ErasureObjectType.TEAM, team_id)  # MIP-2249
         transaction.on_commit(_after_commit, robust=True)
 
     logger.warning(
