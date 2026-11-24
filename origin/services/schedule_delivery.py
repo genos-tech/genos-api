@@ -422,7 +422,88 @@ def check_chat_target(schedule: MemberSchedule) -> Channel:
     )
     if why:
         raise ScheduleRunError(why)
+    if _delivers_note(schedule):
+        note_id = dashboard_note_id(schedule)
+        # Before the first run there is no note yet: deliver_to_chat asks again once it exists.
+        if note_id is not None and note_readers_missing(channel, schedule, note_id):
+            raise ScheduleRunError(NOTE_NOT_SHARED)
     return channel
+
+
+NOTE_NOT_SHARED = (
+    "Not everyone who reads that chat can open the dashboard note. Share the note with them, or "
+    "pick a chat of people who can open it."
+)
+
+
+def _delivers_note(schedule: MemberSchedule) -> bool:
+    job = JOBS.get(schedule.job)
+    return job is not None and job.delivers_note
+
+
+def dashboard_note_id(schedule: MemberSchedule) -> int | None:
+    """The id of the living note a dashboard schedule keeps (`schedule_dashboard_note`), if any."""
+    output = schedule.output if isinstance(schedule.output, dict) else {}
+    note_id = output.get("note_id")
+    return note_id if isinstance(note_id, int) and output.get("target") == "note" else None
+
+
+def note_readers_missing(channel: Channel, schedule: MemberSchedule, note_id: int) -> set[str]:
+    """The people who read `channel` and hold no role on the dashboard note (the owner always
+    does). The notice carries a link, and a link a reader cannot open is a dead end that also
+    tells them a page exists: nothing is posted while this is not empty."""
+    from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
+    from origin.search_engine.agent.acl import may_read_note  # noqa: PLC0415
+    from origin.views.utils.note_role import NOTE_TYPE_PERSONAL  # noqa: PLC0415
+
+    note = PersonalNoteMaster.objects.filter(note_id=note_id, team_id=schedule.team_id).first()
+    if note is None:
+        return {str(schedule.user_id)}
+    return {
+        reader
+        for reader in schedule_audience.readers(channel)
+        if not may_read_note(
+            user_id=reader,
+            note_type_code=NOTE_TYPE_PERSONAL,
+            note_id=note_id,
+            owner_id=note.owner_id,
+        )
+    }
+
+
+def notice_blocks(body: dict[str, Any], note_id: int, *, shared: bool) -> list[dict[str, Any]]:
+    """The dashboard's chat notice (MIP-2355): its title, the one-line summary and a link chip to
+    the note, nothing else. The numbers live on the page, which only people with a role on the
+    note can open; the chat shows no item. The chip is the editor's own `hashNote` mention, which
+    the chat already draws (with the HTML-page chip)."""
+    from origin.services.task_card import CARD_HEADING_PROPS, PARA_PROPS  # noqa: PLC0415
+
+    def text(value: str) -> dict[str, Any]:
+        return {"type": "text", "text": value, "styles": {}}
+
+    chip = {
+        "type": "hashNote",
+        "props": {
+            "noteKind": "shared" if shared else "my",
+            "noteId": str(note_id),
+            "title": body["title"][:120],
+        },
+    }
+    return [
+        {
+            "type": "heading",
+            "props": dict(CARD_HEADING_PROPS),
+            "content": [text(body["title"])],
+            "children": [],
+        },
+        {
+            "type": "paragraph",
+            "props": dict(PARA_PROPS),
+            "content": [text(body["text"])],
+            "children": [],
+        },
+        {"type": "paragraph", "props": dict(PARA_PROPS), "content": [chip], "children": []},
+    ]
 
 
 def _file_cost(
@@ -495,6 +576,11 @@ def deliver_to_chat(
         return None
     # `_ai_part` raises when the job names no request, and nothing is posted.
     ai, skipped = _ai_part(schedule, report)
+    note_id = dashboard_note_id(schedule) if _delivers_note(schedule) else None
+    if note_id is not None and note_readers_missing(channel, schedule, note_id):
+        from origin.services.schedules import ScheduleRunError  # noqa: PLC0415
+
+        raise ScheduleRunError(NOTE_NOT_SHARED)
     delivered = sum(len(section["items"]) for section in body["sections"])
     result: dict[str, Any] = {"title": body["title"], "items": delivered}
     if skipped:
@@ -514,7 +600,11 @@ def deliver_to_chat(
         message = _allocate_seq_and_create_message(
             channel=channel,
             sender=None,
-            body=chat_blocks(body),
+            body=(
+                notice_blocks(body, note_id, shared=len(schedule_audience.readers(channel)) > 1)
+                if note_id is not None
+                else chat_blocks(body)
+            ),
             body_text=body["title"],
             parent_id=None,
             metadata={CHAT_MARKER: marker},
