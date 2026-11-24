@@ -45,6 +45,7 @@ class OpsAlertKind(models.TextChoices):
     CRON_MISSED = "cron_missed", "Cron missed"
     SERVER_ERRORS = "server_errors", "Server errors"
     CERT_EXPIRY = "cert_expiry", "Certificate expiring"
+    OPENSEARCH_CAPACITY = "opensearch_capacity", "OpenSearch capacity"
 
 
 class OpsAlert(models.Model):
