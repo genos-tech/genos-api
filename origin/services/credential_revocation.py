@@ -7,6 +7,9 @@ the helpers each already has (`mcp_connections.revoke_connection`,
 `api_keys.revoke_api_key`), so each ended item writes exactly the security-log row an
 explicit disconnect or revoke writes.
 
+It also closes the member's open real-time sockets (genos-sockets), which no token check
+reaches once they are connected.
+
 Used by the password reset (`PasswordResetConfirmView`); a future "change password while
 signed in" would call it too.
 """
@@ -21,6 +24,7 @@ from origin.models.common.api_key_models import ApiKey
 from origin.models.common.mcp_connection_models import McpConnection
 from origin.services.api_keys import revoke_api_key
 from origin.services.mcp_connections import end_all_tokens, revoke_connection
+from origin.services.realtime_push import push_user_disconnect
 
 
 @dataclass(frozen=True)
@@ -50,4 +54,7 @@ def end_all_credentials(user, *, by: str, request=None) -> EndedCredentials:
         for key in ApiKey.objects.filter(user=user, revoked_at__isnull=True):
             if revoke_api_key(key, by=by, request=request, actor=user):
                 api_keys += 1
+        # A socket checks the token only when it connects: close the member's open ones too
+        # (MIP-2241). Sent after commit and never raises.
+        push_user_disconnect(user.pk)
     return EndedCredentials(connections=connections, api_keys=api_keys)
