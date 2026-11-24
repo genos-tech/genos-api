@@ -694,6 +694,12 @@ class MessagesDeltaView(AuthenticatedAPIView):
         # broadcast payload is sent to the channel room. FE callers of
         # the REST endpoint directly (e.g. tests) get the key too —
         # ignoring it is fine since it's purely additive.
+        # Every row embeds the message just posted. Hand them the one prefetched instance: left to
+        # themselves each row lazy-loads its reactions, mentions and attachments, three queries per
+        # recipient (MIP-2387).
+        for act in activities:
+            if act.message_id == msg.id:
+                act.message = msg
         response_data["_v3_activities"] = ActivitySerializer(activities, many=True).data
         # Mentions of people outside the channel are dropped above and
         # never reach anyone — report them so the sender can offer to
