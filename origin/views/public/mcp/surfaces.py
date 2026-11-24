@@ -50,6 +50,9 @@ CORE_TOOLS: tuple[str, ...] = (
     "create_note",
     "update_note",
     "edit_note_block",
+    # MIP-2343: exists only while `HTML_NOTES` is on (`McpTool.setting`); the plugin and the setup
+    # guide hand out `core`, so an agent can only save an HTML note from here if it is listed.
+    "save_html_note",
     # MIP-2049 (D1 of the skills v2 design): every tool a shipped general skill calls.
     "get_current_user",
     "get_team_members",
@@ -99,7 +102,7 @@ DOMAIN_TOOLS: dict[str, tuple[str, ...]] = {
         "list_note_folders",
         "list_note_access",
         "create_note",
-        # MIP-2214: exists only while `HTML_NOTES` is on (`McpTool.setting`). Not on `core`.
+        # MIP-2214: exists only while `HTML_NOTES` is on (`McpTool.setting`). Also on `core` (MIP-2343).
         "save_html_note",
         "update_note",
         "edit_note_block",
