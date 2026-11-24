@@ -53,6 +53,8 @@ MAX_SUMMARY_CHARS = 1_000
 MAX_TITLE_CHARS = 255
 #: Offending values a warning quotes, so the author can find them.
 MAX_EXAMPLES = 3
+MAX_DESCRIPTION_CHARS = 500  # one aria-label kept as text (MIP-2344)
+MAX_DIAGRAMS = 200  # <svg>/<canvas> tracked for the "no description" warning
 _EXAMPLE_CHARS = 80
 
 NOTE_TYPE_PERSONAL = 1
@@ -129,6 +131,12 @@ _ADVICE: dict[str, tuple[str, str]] = {
         "page no storage, so these throw or lose their data on reload.",
         "Keep state in JavaScript variables; it lasts while the page is open. Embed anything that "
         "must persist.",
+    ),
+    "diagram_no_description": (
+        "An <svg> or <canvas> has no text description. An agent that reads the note gets the "
+        "diagram's labels but not how its parts connect.",
+        "Describe the structure in words: a <title> and <desc> inside the <svg> (or an aria-label, "
+        "or a <figcaption>), e.g. 'frontend -> genos-api -> Postgres'.",
     ),
 }
 
@@ -212,6 +220,13 @@ class _Scanner(HTMLParser):
         self._title_seen = False
         self._skipped_titles = 0
         self._svg_depth = 0
+        # MIP-2344: which diagrams (<svg>, <canvas>) say in words what they show. A frame is a
+        # one-item list [described]; a figure's caption can come after its diagram, so a diagram is
+        # judged at the end (`_note_undescribed`). One bounded list of diagrams, however hostile.
+        self._svg_frames: list[list[bool]] = []
+        self._figure_frames: list[list[bool]] = []
+        self._diagrams: list[tuple[list[bool], list[bool] | None]] = []
+        self._in_svg_title = False
         self._in_script = False
         self._in_style = False
         # code -> [how many times, the first few distinct examples]: bounded however hostile the page
@@ -270,18 +285,26 @@ class _Scanner(HTMLParser):
         a = {k.lower(): (v or "") for k, v in attrs}
         if tag in _BLOCK_TAGS:
             self.text_parts.append("\n")
-        if tag == "svg":
-            self._svg_depth += 1
+        if tag in ("svg", "canvas", "figure"):
+            self._open_described(tag, a.get("aria-label", ""))
+        if tag == "figcaption" and self._figure_frames:
+            self._figure_frames[-1][0] = True
+        if tag == "desc" and self._svg_frames:
+            self._svg_frames[-1][0] = True
         if tag == "body":
             # A <head> that was never closed must not swallow the page's text.
             self._skip_depth = 0
         if tag == "title":
             if not self._svg_depth and not self._title_seen:
-                # The page's own title: the first one outside an SVG (an SVG <title> is a tooltip).
+                # The page's own title: the first one outside an SVG.
                 self._in_title = True
                 self._title_seen = True
+            elif self._svg_depth:
+                # An SVG <title> names the diagram: it is kept as text (MIP-2344).
+                self._in_svg_title = True
+                self.text_parts.append("\n")
             else:
-                self._skipped_titles += 1  # a tooltip, not text a reader sees
+                self._skipped_titles += 1  # a second page <title>, not text a reader sees
         if tag == "script":
             self._in_script = True
             src = a.get("src", "")
@@ -333,8 +356,15 @@ class _Scanner(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "svg" and self._svg_depth:
             self._svg_depth -= 1
+            if self._svg_frames:
+                self._svg_frames.pop()
+        if tag == "figure" and self._figure_frames:
+            self._figure_frames.pop()
         if tag == "title":
-            if self._in_title:
+            if self._in_svg_title:
+                self._in_svg_title = False
+                self.text_parts.append("\n")
+            elif self._in_title:
                 self._in_title = False
             elif self._skipped_titles:
                 self._skipped_titles -= 1
@@ -351,6 +381,14 @@ class _Scanner(HTMLParser):
         if self._in_title:
             self.title_parts.append(data)
             return
+        if self._in_svg_title:
+            if data.strip() and self._svg_frames:
+                self._svg_frames[-1][0] = True
+            if not self._skip_depth and self.text_len < MAX_TEXT_CHARS * 2:
+                # A <title> is raw text to the parser, so one chunk can be the rest of the page.
+                self.text_parts.append(data[:MAX_DESCRIPTION_CHARS])
+                self.text_len += min(len(data), MAX_DESCRIPTION_CHARS)
+            return
         if self._in_script:
             self._scan_script(data)
             return
@@ -363,6 +401,28 @@ class _Scanner(HTMLParser):
         self.text_len += len(data)
 
     # -- helpers ----------------------------------------------------------------------------------
+    def _open_described(self, tag: str, label: str) -> None:
+        """An <svg>, <canvas> or <figure> opens: its aria-label is text, and may be its description."""
+        label = " ".join(label.split())[:MAX_DESCRIPTION_CHARS]
+        frame = [bool(label)]
+        if label and not self._skip_depth and self.text_len < MAX_TEXT_CHARS * 2:
+            self.text_parts.append("\n" + label + "\n")
+            self.text_len += len(label)
+        if tag == "figure":
+            self._figure_frames.append(frame)
+            return
+        if tag == "svg":
+            self._svg_depth += 1
+            self._svg_frames.append(frame)
+        if len(self._diagrams) < MAX_DIAGRAMS:
+            self._diagrams.append((frame, self._figure_frames[-1] if self._figure_frames else None))
+
+    def note_undescribed(self) -> None:
+        """Count the diagrams with no text description (own label/title/desc, or a captioned figure)."""
+        for frame, figure in self._diagrams:
+            if not frame[0] and not (figure and figure[0]):
+                self._hit("diagram_no_description")
+
     @staticmethod
     def _urls_of(value: str, is_srcset: bool) -> list[str]:
         if not is_srcset:
@@ -392,6 +452,7 @@ def scan_html(html: str) -> HtmlScan:
         pass
     text = _clean_text(scanner.text_parts)
     title = " ".join("".join(scanner.title_parts).split())
+    scanner.note_undescribed()
     warnings = scanner.warnings()
     if not re.search(r"<!doctype\s+html", html[:1024], re.IGNORECASE):
         warnings.append(

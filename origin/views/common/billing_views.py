@@ -20,7 +20,7 @@ from rest_framework.views import APIView
 from apis.request_id import error_response
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine import credit_ledger, quota
-from origin.services import first_month_trial, schedules, stripe_billing
+from origin.services import first_month_trial, html_note_limits, schedules, stripe_billing
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
     as_uuid,
@@ -344,6 +344,20 @@ class BillingPlansView(AuthenticatedAPIView):
             schedules_cap = quota.get_tier_schedules_max(tier)
             limits["schedules_max"] = (
                 schedules.MAX_SCHEDULES_PER_MEMBER if schedules_cap is None else schedules_cap
+            )
+            # HTML pages (MIP-2362): read off `html_note_limits.HTML_NOTE_LIMITS`, the one table the
+            # save path enforces, so the comparison can never show a number the server does not apply.
+            # `None` = the plan has no HTML pages (Free); the count, page size (bytes) and saves per
+            # hour are never "unlimited".
+            html_row = html_note_limits.limits_for_tier(tier)
+            limits["html_notes"] = (
+                None
+                if html_row is None
+                else {
+                    "max_notes": html_row.max_notes,
+                    "max_bytes": html_row.max_bytes,
+                    "saves_per_hour": html_row.saves_per_hour,
+                }
             )
             # The plan's monthly AI credits, present ONLY when credits
             # are the limit the server actually enforces. Its presence is
