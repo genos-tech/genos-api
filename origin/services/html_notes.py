@@ -662,6 +662,11 @@ def latest_revision(note_type: int, note_id: int) -> NoteHtmlRevision | None:
     )
 
 
+def revision_of(note_type: int, note_id: int, rev: int) -> NoteHtmlRevision | None:
+    """One named revision (`None` once it was pruned or its note was deleted)."""
+    return NoteHtmlRevision.objects.filter(note_type=note_type, note_id=note_id, rev=rev).first()
+
+
 def body_format_of(note_type: int, note_id: int) -> str:
     """`"html"` or `"blocknote"` for a note, one cheap query (a missing note reads as blocknote)."""
     value = (
