@@ -160,6 +160,9 @@ class Report(TypedDict):
     # report that paid for AI is filed regardless (the cost must be visible). Left out by a job
     # that has no such notion: the report is filed as before.
     quiet: NotRequired[bool]
+    # The data of a dashboard page (`services/dashboard_page.Dashboard`), for a job with
+    # `delivers_note`. Rendered and stored by the delivery step; never put in the Inbox item.
+    dashboard: NotRequired[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -223,6 +226,10 @@ class Job:
     # one message there and its cost line is in the message (`schedule_delivery.cost_line`), which
     # nobody else reads. Never into a chat other people read, whatever the job is about.
     ai_in_private_chat: bool = False
+    # True for a job whose report carries a `dashboard` that the runner saves as ONE living HTML
+    # note, replaced on every run (MIP-2353, `schedule_dashboard_note.deliver_note`). The note is
+    # the one thing a job's run writes to the workspace, and the job never writes it itself.
+    delivers_note: bool = False
 
     @property
     def shareable(self) -> bool:
@@ -269,6 +276,7 @@ def item_count(report: Report) -> int:
 
 # The built-in jobs. Imported last: each registers itself with the registry above.
 from origin.services.schedule_jobs import (  # noqa: E402, F401
+    ai_dashboard,
     chat_catch_up,
     milestone_updates,
     project_updates,

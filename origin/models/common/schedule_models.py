@@ -50,12 +50,17 @@ PAUSE_INACTIVE = "inactive"
 # The member's plan does not include scheduled reports (Free; MIP-1213). Kept, not deleted:
 # resumed by the tick when the plan comes back, and only these (a manual pause stays manual).
 PAUSE_PLAN = "plan"
+# The dashboard note this schedule keeps up to date was deleted or can no longer be opened by its
+# owner (MIP-2353). Paused with this reason rather than failing every run or silently making a
+# second note: the member says what to do (recreate it, or delete the schedule).
+PAUSE_NOTE = "note"
 PAUSE_CHOICES = [
     (PAUSE_MANUAL, "paused by the member"),
     (PAUSE_FAILURES, "paused after repeated failures"),
     (PAUSE_LEFT_TEAM, "the member left the team"),
     (PAUSE_INACTIVE, "the account is inactive"),
     (PAUSE_PLAN, "the plan does not include scheduled reports"),
+    (PAUSE_NOTE, "the dashboard note was deleted or can no longer be opened"),
 ]
 
 AI_EFFORT_CHOICES = [("low", "low"), ("medium", "medium"), ("high", "high")]
@@ -141,6 +146,12 @@ class MemberSchedule(models.Model):
         blank=True,
         related_name="report_schedules",
     )
+
+    # Where a run's PAGE goes, set by the server and never by a member (MIP-2353): `{}` for a job
+    # that only files a report, else `{"target": "note", "note_type": "personal", "note_id": 12,
+    # "run": "<the last run's key>"}` for a dashboard job that keeps ONE living HTML note up to
+    # date. Not in `params`: a member must not be able to point a schedule at someone else's note.
+    output = models.JSONField(default=dict, blank=True)
 
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

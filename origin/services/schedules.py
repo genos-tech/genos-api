@@ -79,6 +79,7 @@ from origin.models.common.schedule_models import (
     PAUSE_INACTIVE,
     PAUSE_LEFT_TEAM,
     PAUSE_MANUAL,
+    PAUSE_NOTE,
     PAUSE_PLAN,
     STATUS_FAILED,
     STATUS_OK,
@@ -786,6 +787,9 @@ def set_enabled(
             sched.next_run_at = _first_run(_recurrence_of(sched), zone, now)
             sched.tz_used = zone.key
             sched.enabled = True
+            if sched.paused_reason == PAUSE_NOTE:
+                # The dashboard note is gone: resuming means "make a new one" (MIP-2353).
+                sched.output = {}
             sched.paused_reason = ""
             sched.consecutive_failures = 0
         else:
@@ -851,8 +855,18 @@ def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[
                 report = job.run(ctx, _run_params(sched, job))
         _check_report(report)
         with transaction.atomic():
+            if job.delivers_note:
+                # A dashboard (MIP-2353): save its ONE living note first, then file the report
+                # with a link to it. Both in one savepoint, so a delivery that fails leaves no
+                # half-made run (the AI spend was recorded by the job's own savepoint above).
+                from origin.services.schedule_dashboard_note import deliver_note  # noqa: PLC0415
+
+                report = deliver_note(sched, report, run_at=run_at)
             schedule_delivery.deliver(sched, report, run_at=run_at)
     except ScheduleRunError as exc:
+        # A run that cannot go on until the member acts (a deleted dashboard note) pauses the
+        # schedule: `_process` reads this after the run.
+        sched._pause_reason = getattr(exc, "reason", "")
         return STATUS_FAILED, exc.public[:MAX_ERROR_CHARS]
     except Exception as exc:  # noqa: BLE001 - one schedule's failure is that schedule's
         return STATUS_FAILED, describe_exception(exc)[:MAX_ERROR_CHARS]
@@ -1130,6 +1144,13 @@ def _process(row: MemberSchedule, now: datetime, summary: RunSummary) -> None:
             summary.paused += 1
             fields.update(enabled=False, paused_reason=PAUSE_FAILURES, next_run_at=None)
             log.warning("schedule_paused schedule=%s reason=%s", sched.pk, PAUSE_FAILURES)
+        if reason := getattr(sched, "_pause_reason", ""):
+            # The reason the run named wins over "repeated failures": the member's next step is
+            # the one it states (MIP-2353).
+            if fields.get("enabled", True):  # not already counted as paused by failures
+                summary.paused += 1
+            fields.update(enabled=False, paused_reason=reason, next_run_at=None)
+            log.warning("schedule_paused schedule=%s reason=%s", sched.pk, reason)
     _finish(sched, now, now, **fields)
 
 
