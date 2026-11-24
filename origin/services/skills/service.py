@@ -49,6 +49,7 @@ Saving (`update`) keeps the edit as the owner's draft for a team skill too (MIP-
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import logging
@@ -69,6 +70,8 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.skills.skill_models import (
+    CONFIRM_HARMFUL,
+    CONFIRM_OUTSIDE,
     EFFORT_CHOICES,
     SOURCE_CHOICES,
     STATUS_ACTIVE,
@@ -85,6 +88,7 @@ from origin.models.skills.skill_models import (
     Skill,
     SkillGrant,
     SkillInstall,
+    SkillRunConfirmation,
     SkillStar,
     SkillVersion,
 )
@@ -169,6 +173,24 @@ class SkillForbidden(SkillError):
 
 class SkillConflict(SkillError):
     status = 409
+
+
+class SkillNeedsConfirmation(SkillError):
+    """The person has not yet read and confirmed this skill (MIP-2192): an outside author's version
+    (once per version) or a copy of a skill an operator took down as harmful. A 409 with the ids the
+    client needs to open the card (`GET /skills/<id>/run-card/`) and confirm it."""
+
+    status = 409
+    code = "skill_needs_confirmation"
+
+    def __init__(self, skill_id: Any, version_no: int, *, outside: bool, harmful: bool) -> None:
+        super().__init__(
+            "Before this skill runs, read it and confirm it in Genos.",
+            skillId=str(skill_id),
+            versionNo=version_no,
+            outside=outside,
+            harmful=harmful,
+        )
 
 
 class SkillNameTaken(SkillError):
@@ -719,6 +741,9 @@ def hold_if_flagged(skill: Skill) -> bool:
     skill.moderated_by = None
     skill.save(update_fields=["status", "moderation_reason", "moderated_at", "moderated_by"])
     logger.warning("skills: %s held for review (%s)", skill.pk, codes)
+    from origin.services.skills import notices  # noqa: PLC0415 - notices imports the models only
+
+    notices.notify_author(skill, notices.HELD)
     return True
 
 
@@ -1300,6 +1325,8 @@ def erase_for_user(user: CustomUser) -> None:
             install_count=F("install_count") - 1
         )
     SkillInstall.objects.filter(user=user).delete()
+    # The account row is soft-deleted, so the CASCADE alone would never remove these.
+    SkillRunConfirmation.objects.filter(user=user).delete()
 
 
 # -- sharing with chosen people (MIP-2212) ------------------------------------------------------------
@@ -1928,6 +1955,10 @@ def copy(user: CustomUser, skill_id: Any, team_id: Any) -> Skill:
     )
     if not is_owner(source, user.pk):  # a fork of one's own skill is not a use by someone else
         Skill.objects.filter(pk=source.pk).update(copy_count=F("copy_count") + 1)
+    if source.source_harmful_at is not None:
+        # A copy of a copy of a skill taken down as harmful carries the same text (MIP-2192).
+        Skill.objects.filter(pk=copy_.pk).update(source_harmful_at=source.source_harmful_at)
+        copy_.source_harmful_at = source.source_harmful_at
     return copy_
 
 
@@ -1959,16 +1990,166 @@ def uninstall(user: CustomUser, skill_id: Any) -> None:
             )
 
 
-def accept_update(user: CustomUser, skill_id: Any) -> SkillInstall:
-    """Move an install to the skill's newest published version (the member saw the diff)."""
+class SkillUpdateMoved(SkillConflict):
+    code = "update_moved"
+
+
+def accept_update(
+    user: CustomUser, skill_id: Any, expected_version_no: int | None = None
+) -> SkillInstall:
+    """Move an install to the skill's newest published version (the member saw the diff).
+    `expected_version_no` is the version the diff shown to the member ended at: when the author has
+    published another one since, the move is refused (`update_moved`) so nobody accepts text they
+    did not read. It never confirms the run card: an outside version asks once, on its first run."""
+    require_enabled()
+    skill = get_readable(user.pk, skill_id)
+    with transaction.atomic():
+        # Locked, so a publish that commits between the check and the save cannot move the install
+        # to a version the member never saw.
+        skill = Skill.objects.select_for_update().get(pk=skill.pk)
+        row = SkillInstall.objects.filter(user=user, skill=skill).first()
+        if row is None:
+            raise SkillNotFound("You have not installed this skill.")
+        if expected_version_no is not None and expected_version_no != skill.published_version_no:
+            raise SkillUpdateMoved("The author published another version while you were reading.")
+        row.version_no = skill.published_version_no
+        row.save(update_fields=["version_no"])
+    return row
+
+
+# What an update diff may carry back: a skill is a short document, so these are generous; a body
+# past either cap is not diffed at all (`difflib` is quadratic in the worst case) and the card says so.
+DIFF_MAX_SOURCE_LINES = 4000
+DIFF_MAX_LINES = 600
+DIFF_MAX_CHARS = 60_000
+# The fields whose change a reader should see next to the text, with the camelCase name the API uses.
+_DIFF_FIELDS = (
+    ("title", "title"),
+    ("description", "description"),
+    ("tags", "tags"),
+    ("argument_hint", "argumentHint"),
+    ("effort", "effort"),
+    ("language", "language"),
+    ("slug", "slug"),
+    ("tool_level", "toolLevel"),
+)
+
+
+def _unified(old: str, new: str) -> tuple[str, bool]:
+    """A unified diff of two texts, bounded; `(diff, truncated)`."""
+    old_lines, new_lines = old.splitlines(), new.splitlines()
+    if len(old_lines) > DIFF_MAX_SOURCE_LINES or len(new_lines) > DIFF_MAX_SOURCE_LINES:
+        return "", True
+    out: list[str] = []
+    size = 0
+    for line in difflib.unified_diff(old_lines, new_lines, "installed", "new", n=3, lineterm=""):
+        size += len(line) + 1
+        if len(out) >= DIFF_MAX_LINES or size > DIFF_MAX_CHARS:
+            return "\n".join(out), True
+        out.append(line)
+    return "\n".join(out), False
+
+
+def update_diff(user: CustomUser, skill_id: Any) -> dict[str, Any]:
+    """What an installed skill's update changes (MIP-2192), for the card shown before a pinned
+    install moves: the unified diff of the text, the changed details, and every changelog in
+    between. A change of the tool level from `read` to `act` is flagged (`toolLevelRaised`): the
+    text may now propose changes. Two versions are read, in one query. Not installed: the same 404."""
     require_enabled()
     skill = get_readable(user.pk, skill_id)
     row = SkillInstall.objects.filter(user=user, skill=skill).first()
     if row is None:
         raise SkillNotFound("You have not installed this skill.")
-    row.version_no = skill.published_version_no
-    row.save(update_fields=["version_no"])
-    return row
+    pinned, newest = row.version_no, skill.published_version_no
+    out: dict[str, Any] = {
+        "fromVersionNo": pinned,
+        "toVersionNo": newest,
+        "upToDate": pinned >= newest,
+        "changes": [],
+        "toolLevelRaised": False,
+        "changelogs": [],
+        "diff": "",
+        "truncated": False,
+        "needsConfirmation": False,
+    }
+    if pinned >= newest:
+        return out
+    readable = _readable_versions(skill, user.pk)
+    versions = {v.version_no: v for v in readable.filter(version_no__in=[pinned, newest])}
+    old, new = versions.get(pinned), versions.get(newest)
+    if new is None:
+        raise SkillNotFound("Version not found.")
+    if old is not None:
+        out["diff"], out["truncated"] = _unified(old.body_markdown, new.body_markdown)
+        out["changes"] = [
+            {"field": camel, "from": getattr(old, name), "to": getattr(new, name)}
+            for name, camel in _DIFF_FIELDS
+            if getattr(old, name) != getattr(new, name)
+        ]
+        out["toolLevelRaised"] = (
+            old.tool_level == TOOL_LEVEL_READ and new.tool_level == TOOL_LEVEL_ACT
+        )
+    else:  # the pinned version is no longer readable: nothing to compare, so show the new text whole
+        out["diff"], out["truncated"] = _unified("", new.body_markdown)
+    out["changelogs"] = [
+        {"versionNo": v.version_no, "changelog": v.changelog}
+        for v in readable.filter(version_no__gt=pinned, version_no__lte=newest)
+        .exclude(changelog="")
+        .order_by("version_no")
+        .only("version_no", "changelog")
+    ]
+    outside = not is_owner(skill, user.pk) and not skill.is_official
+    out["needsConfirmation"] = needed_confirmations(
+        user.pk, skill, outside=outside, version_no=newest
+    )[0]
+    return out
+
+
+# -- confirmation before a run (MIP-2192) --------------------------------------------------------
+
+
+def needed_confirmations(
+    user_id: Any, skill: Skill, *, outside: bool, version_no: int
+) -> tuple[bool, bool]:
+    """`(outside, harmful)`: what the person still has to confirm before this skill runs. ONE query.
+
+    OUTSIDE: an outside author's skill (`outside`: public, not official, not theirs) is confirmed
+    once per version. HARMFUL: a copy whose source an operator took down as harmful
+    (`source_harmful_at`) asks everybody who runs it, until they confirm after that moment."""
+    harmful_at = skill.source_harmful_at
+    asks_outside = outside and version_no > 0
+    if not asks_outside and harmful_at is None:
+        return False, False
+    keys = Q()
+    if asks_outside:
+        keys |= Q(kind=CONFIRM_OUTSIDE, version_no=version_no)
+    if harmful_at is not None:
+        keys |= Q(kind=CONFIRM_HARMFUL, version_no=0, confirmed_at__gte=harmful_at)
+    kinds = set(
+        SkillRunConfirmation.objects.filter(user_id=user_id, skill=skill)
+        .filter(keys)
+        .values_list("kind", flat=True)
+    )
+    return (
+        asks_outside and CONFIRM_OUTSIDE not in kinds,
+        harmful_at is not None and CONFIRM_HARMFUL not in kinds,
+    )
+
+
+def confirm(user_id: Any, skill: Skill, version_no: int, *, outside: bool, harmful: bool) -> None:
+    """Record what `needed_confirmations` asked for. Idempotent."""
+    if outside and version_no > 0:
+        SkillRunConfirmation.objects.get_or_create(
+            user_id=user_id, skill=skill, kind=CONFIRM_OUTSIDE, version_no=version_no
+        )
+    if harmful:
+        SkillRunConfirmation.objects.update_or_create(
+            user_id=user_id,
+            skill=skill,
+            kind=CONFIRM_HARMFUL,
+            version_no=0,
+            defaults={"confirmed_at": timezone.now()},
+        )
 
 
 def installed_version(user_id: Any, skill: Skill) -> int | None:

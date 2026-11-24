@@ -13,11 +13,14 @@
     GET    /api/v2/skills/<id>/versions/<n>/         one version with its text
     POST   /api/v2/skills/<id>/publish/              cut a new version from the draft (the owner)
     POST   /api/v2/skills/<id>/copy/                 copy into the caller's own skills (`team_id`)
-    POST   /api/v2/skills/<id>/install/              pin a public skill (DELETE removes, PATCH accepts the update)
+    POST   /api/v2/skills/<id>/install/              pin a public skill (DELETE removes, PATCH accepts the update; `versionNo` = the version the diff ended at)
+    GET    /api/v2/skills/<id>/update-diff/          what an installed skill's update changes (MIP-2192)
+    GET    /api/v2/skills/<id>/run-card/?teamId=&versionNo=   the card before a first run: full text, what it may propose, author (MIP-2192)
+    POST   /api/v2/skills/<id>/confirm/              the person's yes to that card (`teamId`, `versionNo`)
     POST   /api/v2/skills/<id>/star/                 star it (DELETE removes)
     GET    /api/v2/skills/<id>/export/               the SKILL.md text
     POST   /api/v2/skills/<id>/report/               report a skill the caller can read (`reason`, `note`; MIP-2044)
-    POST   /api/v2/skills/<id>/takedown/             operator (staff) only: stop it for everybody (`reason`)
+    POST   /api/v2/skills/<id>/takedown/             operator (staff) only: stop it for everybody (`reason`; `harmful: true` marks copies, MIP-2192)
     DELETE /api/v2/skills/<id>/takedown/             operator only: put it back (`reason` optional)
     GET    /api/v2/skills/<id>/editors/              who co-edits it (the owner and the co-editors)
     POST   /api/v2/skills/<id>/editors/              invite a teammate (`userId`; the owner)
@@ -183,6 +186,9 @@ def _row(
         "canManage": mine,
         "canHide": hideable,
         "hiddenByTeam": skill.status == "hidden_by_team",
+        # A copy of a skill an operator took down as harmful (MIP-2192): the page and the row show
+        # a warning, and the copy's owner confirms it before it runs.
+        "sourceHarmful": skill.source_harmful_at is not None,
     }
     # Who wrote it: a teammate by name. An outside author of a public skill stays unnamed until
     # the Hub's public handle exists (MIP-2047): the account name is not theirs to publish.
@@ -531,7 +537,11 @@ class SkillInstallView(_Base):
         return Response({"installedVersionNo": row.version_no}, status=status.HTTP_201_CREATED)
 
     def patch(self, request, skill_id):
-        row, problem = self._run(lambda: service.accept_update(request.user, skill_id))
+        # `versionNo`: the version the diff shown to the person ended at (MIP-2192). Another one
+        # published since is a 409 `update_moved`: nobody accepts text they did not read.
+        raw = request.data.get("versionNo") if hasattr(request.data, "get") else None
+        expected = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+        row, problem = self._run(lambda: service.accept_update(request.user, skill_id, expected))
         if problem:
             return problem
         return Response({"installedVersionNo": row.version_no})
@@ -541,6 +551,49 @@ class SkillInstallView(_Base):
         if problem:
             return problem
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SkillUpdateDiffView(_Base):
+    """What the update of an installed skill changes, before the install moves (MIP-2192)."""
+
+    def get(self, request, skill_id):
+        out, problem = self._run(lambda: service.update_diff(request.user, skill_id))
+        if problem:
+            return problem
+        return Response(out)
+
+
+class SkillRunCardView(_Base):
+    """The card shown before the first run of an outside author's version, or of a copy of a skill
+    taken down as harmful: the full text, what it may propose, the author's handle (MIP-2192)."""
+
+    def get(self, request, skill_id):
+        team = self._team(request.query_params.get("teamId"))
+        if team is None:
+            return _error("`teamId` is required.")
+        version = _int(request.query_params.get("versionNo"), 0)
+        card, problem = self._run(lambda: run.run_card(request.user, team, skill_id, version))
+        if problem:
+            return problem
+        return Response({"card": card})
+
+
+class SkillConfirmView(_Base):
+    """The person's yes to that card. Idempotent."""
+
+    def post(self, request, skill_id):
+        team = self._team(request.data.get("teamId"))
+        if team is None:
+            return _error("`teamId` is required.")
+        version = request.data.get("versionNo")
+        if not isinstance(version, int) or isinstance(version, bool) or version < 0:
+            # Required: "whatever the install points at now" could be a version the person never read
+            # (another tab accepted an update between the card and the click).
+            return _error("`versionNo` is required: the version the card showed.")
+        out, problem = self._run(lambda: run.confirm_card(request.user, team, skill_id, version))
+        if problem:
+            return problem
+        return Response(out)
 
 
 class SkillStarView(_Base):
@@ -633,12 +686,17 @@ class SkillTakedownView(_Base):
     other caller gets the same 404 as an unknown skill."""
 
     def post(self, request, skill_id):
+        harmful = request.data.get("harmful") is True
         skill, problem = self._run(
-            lambda: moderation.take_down(request.user, skill_id, request.data.get("reason"))
+            lambda: moderation.take_down(
+                request.user, skill_id, request.data.get("reason"), harmful=harmful
+            )
         )
         if problem:
             return problem
-        return Response({"id": str(skill.id), "status": skill.status})
+        return Response(
+            {"id": str(skill.id), "status": skill.status, "harmful": skill.takedown_harmful}
+        )
 
     def delete(self, request, skill_id):
         reason = request.data.get("reason") if hasattr(request.data, "get") else ""
