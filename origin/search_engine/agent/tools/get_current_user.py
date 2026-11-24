@@ -82,7 +82,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         "username": user.username or "",
         "email": user.email or "",
         **({"team": team} if team else {}),
-        "__summary__": f"Current user: {user.username} <{user.email}>",
+        # Stored on `AgentStep.summary` and sent to the client, so it names no email (MIP-2253).
+        # The result above still carries the email for the model.
+        "__summary__": f"Current user: {user.username}",
     }
 
 
