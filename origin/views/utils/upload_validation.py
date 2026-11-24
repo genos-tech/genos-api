@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.views.utils.image_sanitize import strip_image_metadata
 from origin.views.utils.upload_limits import check_upload_size
 
 # How much of the file the sniffers see. The raster formats only need
@@ -173,6 +174,7 @@ def check_image_upload(user, file) -> tuple[CheckedUpload | None, Response | Non
         return None, Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
     original = display_name(file.name)
     file.name = _generated_name(f".{ext}")
+    strip_image_metadata(file)  # EXIF/XMP/IPTC off; before the size is read (MIP-2234)
     return CheckedUpload(
         file=file, display_name=original, mime=RASTER_MIME[ext], size_bytes=upload_size(file)
     ), None
@@ -193,6 +195,7 @@ def check_attachment_upload(
     ext = _stored_ext(original)
     mime = _attachment_mime(read_head(file), ext)
     file.name = _generated_name(ext)
+    strip_image_metadata(file)  # EXIF/XMP/IPTC off; before the size is read (MIP-2234)
     return CheckedUpload(
         file=file, display_name=original, mime=mime, size_bytes=upload_size(file)
     ), None

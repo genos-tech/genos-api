@@ -3,12 +3,12 @@ import logging
 import secrets
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.hashers import make_password
 from django.core.cache import cache
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
@@ -29,7 +29,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import demo_v2
+from origin.services import demo_v2, signin_backoff
 from origin.services.credential_revocation import end_all_credentials
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
@@ -108,8 +108,8 @@ from origin.serializers.common.user_serializers import (
     UserCreateSerializer,
     UserSerializer,
 )
-from origin.services import first_month_trial, signup_consent, start_here_note
-from origin.services.email import send_templated_email
+from origin.services import first_month_trial, password_policy, signup_consent, start_here_note
+from origin.services.email import run_after_response, send_templated_email
 
 User = get_user_model()
 
@@ -172,6 +172,32 @@ class ResendVerificationThrottle(AuthThrottle):
     scope = "resend_verification"
 
 
+class VerifyEmailThrottle(AuthThrottle):
+    """The token is 256-bit random, so guessing is infeasible; this keeps volumetric hits (each is
+    a DB lookup) off the database. A real person opens the link once or twice (MIP-2232)."""
+
+    rate = "60/hour"
+    scope = "verify_email"
+
+
+class OAuthCallbackThrottle(AuthThrottle):
+    """The provider redirect lands here once per sign-in, and each one exchanges a code with the
+    provider and may create an account. Per address, with room for an office behind one NAT."""
+
+    rate = "120/hour"
+    scope = "oauth_callback"
+
+
+class TokenRefreshThrottle(AuthThrottle):
+    """Every page load or new tab refreshes (the access token lives in memory), so this is a volume
+    cap for a shared office address, not a guessing guard. Generous for a shared address; and it fails OPEN: a cache outage must not sign
+    everyone out the moment their access token expires (the refresh token is the secret here)."""
+
+    rate = "1200/hour"
+    scope = "token_refresh"
+    fail_closed = False
+
+
 class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
     """Signup endpoint. Deliberately create-only: the URLconf maps just
     `{"post": "create"}`, and narrowing from ModelViewSet guarantees a
@@ -208,11 +234,44 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = self.get_serializer(data=request.data)
+        # An address that already has an account gets the same answer as a new one (MIP-2232):
+        # "we sent an email". Every other field is validated first, exactly as for a new address,
+        # so a bad password or invite token answers 400 either way. The owner gets a different
+        # email ("you already have an account", or a fresh verification link if they never
+        # verified), so nobody can ask this open endpoint whether an address is registered.
+        typed_email = body.get("email") if hasattr(body, "get") else None
+        existing = None
+        if isinstance(typed_email, str) and typed_email.strip():
+            existing = User.objects.with_email(typed_email.strip()).first()
+        serializer = UserCreateSerializer(
+            data=request.data,
+            context={**self.get_serializer_context(), "allow_existing_email": existing is not None},
+        )
         if not serializer.is_valid():
+            body_out = {"message": serializer.errors.items()}
+            # A refused password carries a stable code so the client can say why in the
+            # member's language (MIP-2238); other 400s keep their old shape.
+            if "password" in serializer.errors:
+                body_out.update(password_policy.rejection_payload(serializer.errors["password"]))
+            return Response(body_out, status=status.HTTP_400_BAD_REQUEST)
+
+        if existing is not None:
+            # The new path pays for a password hash; so does this one, so the two take alike.
+            make_password(serializer.validated_data["password"])
+            if existing.is_deleted or existing.is_system_user:
+                pass  # no inbox to tell; the answer is still the same
+            elif existing.primary_auth_provider == "email" and not existing.is_email_verified:
+                _send_verification_email_after_response(
+                    existing, _issue_verification_token(existing)
+                )
+            else:
+                _send_existing_account_notice(existing)
             return Response(
-                {"message": serializer.errors.items()},
-                status=status.HTTP_400_BAD_REQUEST,
+                {
+                    "message": "verification_email_sent",
+                    "email": User.objects.normalize_email(typed_email.strip()),
+                },
+                status=status.HTTP_201_CREATED,
             )
 
         user = serializer.save(**signup_consent.acceptance_fields())
@@ -262,14 +321,9 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
 
         if user.primary_auth_provider == "email":
             raw = _issue_verification_token(user)
-            try:
-                _send_verification_email(user, raw)
-            except Exception as exc:
-                # Don't fail the signup; user can request a resend.
-                # The type only: a mail error's text quotes the address (MIP-622).
-                logger.error(
-                    "Verification email send failed user=%s: %s", user.pk, describe_exception(exc)
-                )
+            # After the response, like the existing-account notice above, so the two answers take
+            # the same time. A failure doesn't fail the signup; the user can request a resend.
+            _send_verification_email_after_response(user, raw)
             return Response(
                 {"message": "verification_email_sent", "email": user.email},
                 status=status.HTTP_201_CREATED,
@@ -325,6 +379,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         body = body_object(request)
         email = body.get("email")
         password = body.get("password")
+        # Per-account backoff (MIP-2237), keyed on the typed address, so the answer is the
+        # same for an address with no account.
+        locked = signin_backoff.check(email)
+        if locked is not None:
+            return locked
         # The serializer below reads a number as its text (`5` signs in as "5"), so the
         # gate has to check that text too: `check_password` raises (a 500) for a number,
         # and skipping the gate for one would let it past `email_not_verified`. Anything
@@ -351,9 +410,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         try:
             response = super().post(request, *args, **kwargs)
         except AuthenticationFailed:
+            signin_backoff.note_failure(email, request)
             _record_signin_failed(request, email, reason="bad_credentials")
             raise
         data = response.data
+        signin_backoff.clear(email)
         record_security_event(
             SecurityAction.SIGNIN_SUCCEEDED,
             request=request,
@@ -761,6 +822,7 @@ def _consume_grace(jti: str, user_id) -> bool:
 class CookieTokenRefreshView(TokenRefreshView):
     # The inherited `post` uses this too, so both ways in scrub the claim.
     serializer_class = _ScrubbingTokenRefreshSerializer
+    throttle_classes = [TokenRefreshThrottle]
 
     # Refresh reads the httpOnly cookie, never the body (MIP-1882). POST is the way in; GET stays
     # for one release so a cached frontend keeps working while it rolls over, then it goes.
@@ -1036,24 +1098,27 @@ class PasswordResetRequestView(APIView):
                 ]
             )
             reset_url = f"{settings.FRONTEND_BASE_URL}/reset-password?token={token}"
-            try:
-                send_templated_email(
-                    to=user.email,
+            # After the response (MIP-2232): sent inside the request, a slow answer meant the
+            # account exists. A failure is logged for ops and never reaches the client (it would
+            # also leak that the email exists). Everything the thread needs is read here.
+            pk, to, name = user.pk, user.email, user.username
+            expiry = settings.PASSWORD_RESET_TOKEN_EXPIRY_MINUTES
+            run_after_response(
+                lambda: send_templated_email(
+                    to=to,
                     subject="Reset your Genos password",
                     template_base="password_reset",
                     context={
                         "reset_url": reset_url,
-                        "expiry_minutes": settings.PASSWORD_RESET_TOKEN_EXPIRY_MINUTES,
-                        "user_name": user.username,
+                        "expiry_minutes": expiry,
+                        "user_name": name,
                     },
-                )
-            except Exception as exc:
-                # Don't leak SMTP failures to the client (would also
-                # leak that the email exists). Log for ops to chase.
+                ),
                 # The type only: a mail error's text quotes the address (MIP-622).
-                logger.error(
-                    "Password reset email send failed user=%s: %s", user.pk, describe_exception(exc)
-                )
+                on_error=lambda exc: logger.error(
+                    "Password reset email send failed user=%s: %s", pk, describe_exception(exc)
+                ),
+            )
 
         return Response(status=status.HTTP_200_OK)
 
@@ -1102,11 +1167,15 @@ class PasswordResetConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            validate_password(new_password, user=user)
-        except DjangoValidationError as exc:
+        refusals = password_policy.check_password_policy(new_password, user=user)
+        if refusals:
             return Response(
-                {"detail": " ".join(exc.messages)},
+                {
+                    "detail": " ".join(text for _, text in refusals),
+                    **password_policy.rejection_payload(
+                        [SimpleNamespace(code=code) for code, _ in refusals]
+                    ),
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1129,6 +1198,7 @@ class PasswordResetConfirmView(APIView):
             # (owner decision 2026-11-14), each leaving the row an explicit disconnect or
             # revoke leaves.
             ended = end_all_credentials(user, by="password_reset", request=request)
+            signin_backoff.clear(user.email)
             record_security_event(
                 SecurityAction.PASSWORD_RESET,
                 request=request,
@@ -1182,6 +1252,39 @@ def _send_verification_email(user, raw_token: str) -> None:
     )
 
 
+def _send_verification_email_after_response(user, raw_token: str) -> None:
+    pk = user.pk
+    run_after_response(
+        lambda: _send_verification_email(user, raw_token),
+        # The type only: a mail error's text quotes the address (MIP-622).
+        on_error=lambda exc: logger.error(
+            "Verification email send failed user=%s: %s", pk, describe_exception(exc)
+        ),
+    )
+
+
+def _send_existing_account_notice(user) -> None:
+    """Tell the owner that someone tried to sign up with their address (MIP-2232). After the
+    response; the body names no one but the owner's own username."""
+    pk = user.pk
+    context = {
+        "user_name": user.username,
+        "signin_url": f"{settings.FRONTEND_BASE_URL}/signin",
+    }
+    to = user.email
+    run_after_response(
+        lambda: send_templated_email(
+            to=to,
+            subject="You already have a Genos account",
+            template_base="signup_existing_account",
+            context=context,
+        ),
+        on_error=lambda exc: logger.error(
+            "Existing-account notice failed user=%s: %s", pk, describe_exception(exc)
+        ),
+    )
+
+
 class VerifyEmailView(APIView):
     """Consume a one-time verification token from the email link.
 
@@ -1195,6 +1298,7 @@ class VerifyEmailView(APIView):
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [VerifyEmailThrottle]
 
     def get(self, request: Request):
         token = request.query_params.get("token", "")
@@ -1257,11 +1361,5 @@ class ResendVerificationView(APIView):
             and not user.is_email_verified
         ):
             raw = _issue_verification_token(user)
-            try:
-                _send_verification_email(user, raw)
-            except Exception as exc:
-                # The type only: a mail error's text quotes the address (MIP-622).
-                logger.error(
-                    "Resend verification email failed user=%s: %s", user.pk, describe_exception(exc)
-                )
+            _send_verification_email_after_response(user, raw)
         return Response(status=status.HTTP_200_OK)

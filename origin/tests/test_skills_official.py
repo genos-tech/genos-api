@@ -76,6 +76,29 @@ class CatalogTests(SkillBase):
                 if name in connector_names:
                     self.assertIn(name, in_app, f"{spec.slug} calls `{name}`, which is not in-app")
 
+    def test_the_briefing_runbooks_run_in_app_from_the_in_app_reads(self):
+        """MIP-2203: wrap-up, weekly review, weekly priorities and study week were built on the
+        connector-only briefing; each now has a hand-written in-app text. Every tool and parameter it
+        names exists in the in-app agent, and the one left out says why."""
+        converted = {"wrapup", "weekly-review", "weekly-priorities", "study-week"}
+        slugs = {s.slug: s for s in official.load_catalog()}
+        self.assertTrue(converted <= set(slugs))
+        in_app = set(tool_base.REGISTRY)
+        params = {
+            p
+            for t in tool_base.REGISTRY.values()
+            for p in (t.parameters_schema or {}).get("properties", {})
+        }
+        fields = {"effective_status", "last_progress_at"}
+        for slug in converted:
+            body = slugs[slug].body_markdown
+            for name in set(re.findall(r"`([a-z]+(?:_[a-z0-9]+)+)`", body)):
+                self.assertTrue(name in in_app or name in params or name in fields, (slug, name))
+            self.assertNotIn("get_my_briefing", body, slug)
+        manifest = json.loads((official.CATALOG_DIR / "manifest.json").read_text())
+        self.assertFalse(converted & set(manifest["excluded"]))
+        self.assertIn("catch-me-up", manifest["excluded"]["catchup"])
+
     def test_a_text_does_not_talk_to_claude_code_or_the_connector(self):
         banned = re.compile(
             r"/genos|MCP|connector|briefing|CLAUDE\.md|\bgh [a-z]|\bgit [a-z]", re.I

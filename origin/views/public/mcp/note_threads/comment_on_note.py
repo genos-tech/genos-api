@@ -25,6 +25,7 @@ from origin.views.public.mcp.note_threads._common import (
     actor_id,
     create_refusal,
     reduced_via,
+    refuse_html_comment,
     refuse_if_archived,
 )
 from origin.views.public.mcp.resolve import BLOCK_ID
@@ -101,6 +102,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     occurrence = _occurrence(args.get("occurrence"))
     ref = load_readable_note(args, ctx)
     refuse_if_archived(ref)
+    refuse_html_comment(ref)
 
     def ask(seed_blocks=None):
         return collab_push.create_note_thread(

@@ -186,6 +186,7 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
                     parentNoteId=F("parent_note_id"),
                     tsCreated=F("ts_created_at"),
                     tsUpdated=F("ts_updated_at"),
+                    bodyFormat=F("body_format"),
                 )
                 .values(
                     "noteType",
@@ -194,6 +195,7 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
                     "title",
                     "tsCreated",
                     "tsUpdated",
+                    "bodyFormat",
                 )
             )
             result["personalNotes"] = [
@@ -213,6 +215,7 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
                     projectName=F("project__project_name"),
                     taskTitle=F("task__title"),
                     tsUpdated=F("ts_updated_at"),
+                    bodyFormat=F("body_format"),
                 )
                 .values(
                     "noteType",
@@ -224,6 +227,7 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
                     "taskTitle",
                     "title",
                     "tsUpdated",
+                    "bodyFormat",
                 )
             )
             result["taskNotes"] = [
@@ -242,6 +246,7 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
                     isThread=F("is_thread"),
                     threadId=F("thread_root_id"),
                     tsUpdated=F("ts_updated_at"),
+                    bodyFormat=F("body_format"),
                 )
                 .values(
                     "noteType",
@@ -253,6 +258,7 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
                     "threadId",
                     "title",
                     "tsUpdated",
+                    "bodyFormat",
                 )
             )
             result["chatNotes"] = [

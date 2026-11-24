@@ -44,6 +44,7 @@ MESSAGE_PATH = "/internal/broadcast/message"
 MESSAGES_DELETED_PATH = "/internal/broadcast/messages-deleted"
 INBOX_PATH = "/internal/broadcast/inbox"
 MEMBERSHIP_PATH = "/internal/membership/removed"
+USER_DISCONNECT_PATH = "/internal/user/disconnect"
 # Must match genos-sockets `utils/internal_auth`.
 TIMESTAMP_HEADER = "X-Genos-Timestamp"
 SIGNATURE_HEADER = "X-Genos-Signature"
@@ -404,6 +405,32 @@ def push_membership_removed(
         transaction.on_commit(lambda: _post(payload, MEMBERSHIP_PATH, "membership"), robust=True)
     except Exception:  # noqa: BLE001 — the removal is done; an observer must not break it
         logger.warning("sockets membership push could not be scheduled", exc_info=True)
+
+
+def push_user_disconnect(user_id) -> None:
+    """Tell genos-sockets to close every open socket of `user_id` (MIP-2241).
+
+    Sockets checks the token only when a client connects, so a session stolen before a password
+    reset, an account deletion or an operator cutoff kept receiving pushes on its open socket.
+    Sends once the current transaction commits (a rolled-back change never disconnects anyone),
+    best-effort: the credentials are already ended whatever sockets says, so a failed call is
+    logged and never breaks the caller. A no-op when `SOCKETS_INTERNAL_URL` is unset. Never raises.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning(
+                "sockets user disconnect skipped user=%s: SOCKETS_INTERNAL_SECRET is unset",
+                user_id,
+            )
+            return
+        payload: dict[str, Any] = {"userId": str(user_id)}
+        transaction.on_commit(
+            lambda: _post(payload, USER_DISCONNECT_PATH, "user-disconnect"), robust=True
+        )
+    except Exception:  # noqa: BLE001 — the credentials are ended; an observer must not break it
+        logger.warning("sockets user disconnect could not be scheduled", exc_info=True)
 
 
 # A chat this big is not told live past this many people; the rest see it gone at their next
