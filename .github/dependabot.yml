@@ -9,8 +9,10 @@
 # ignore that limit; they come from the repo setting "Dependabot security
 # updates", and read the Pipfile.lock this entry points at.
 #
-# No docker entry: security updates don't cover base images, and version
-# updates would propose a new Python major, which is a deliberate change.
+# docker (MIP-2269): the base image in the Dockerfile is pinned by digest
+# (`FROM python:3.11-slim@sha256:...`). Dependabot moves the digest when the
+# tag is rebuilt, so a patched base arrives as a reviewable PR. Python major and
+# minor bumps are ignored: a new Python is a deliberate change.
 
 version: 2
 updates:
@@ -27,3 +29,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

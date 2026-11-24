@@ -23,6 +23,7 @@ from origin.services.note_role_revoke import (
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
+from origin.views.utils.html_note_refusal import html_note_put_refusal
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
@@ -224,6 +225,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
                 taskId=F("task"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("-tsUpdated")
             .values(
@@ -238,6 +240,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -306,6 +309,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 milestoneId=F("task__milestone_id"),
                 milestoneTitle=F("task__milestone__title"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("-tsUpdated")
             .values(
@@ -323,6 +327,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 "milestoneTitle",
                 "title",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -382,6 +387,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsCreated")  # ASC by created at
             .values(
@@ -396,6 +402,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -520,6 +527,10 @@ class TaskNoteMasterView(AuthenticatedAPIView):
             note = TaskNoteMaster.objects.get(note_id=data["note_id"])
         except TaskNoteMaster.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # An HTML note's text is made from its page (MIP-2218): guide, write nothing.
+        if res := html_note_put_refusal(note):
+            return res
 
         # An autosave changes the title and the body, and the app sends nothing
         # else (moves have their own endpoints). The whole request used to reach
@@ -648,6 +659,7 @@ class SingleTaskNoteView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -662,6 +674,7 @@ class SingleTaskNoteView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 

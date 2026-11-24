@@ -136,7 +136,12 @@ class LoginStateBindingTests(TestCase):
                 self.assertTrue(location.startswith("https://app.example.test/oauth/success#"))
                 fragment = parse_qs(urlparse(location).fragment)
                 self.assertEqual(fragment["next"], ["/workspace/home?x=1"])
-                self.assertTrue(fragment["access"][0])
+                # No credential in a URL anyone could forge (MIP-2219): the session is the
+                # refresh cookie, which the bounce page exchanges for an access token.
+                self.assertEqual(set(fragment), {"next"})
+                self.assertNotIn("access", location)
+                self.assertTrue(resp.cookies["refresh"].value)
+                self.assertTrue(resp.cookies["refresh"]["httponly"])
                 self.assertEqual(self._users(), 1)
                 # One use: the callback expires the cookie.
                 self.assertEqual(resp.cookies[f"{provider}_bind"]["max-age"], 0)
@@ -182,7 +187,7 @@ class LoginStateBindingTests(TestCase):
     def test_the_success_url_never_carries_a_protocol_relative_next(self):
         for hostile in ("//evil.example", "/\\evil.example", "https://evil.example", ""):
             with self.subTest(next=hostile):
-                url = oauth_views._frontend_success_url(access_token="t", next_path=hostile)
+                url = oauth_views._frontend_success_url(next_path=hostile)
                 self.assertIn(f"next={quote('/jointeam', safe='')}", url)
-        url = oauth_views._frontend_success_url(access_token="t", next_path="/workspace/x")
+        url = oauth_views._frontend_success_url(next_path="/workspace/x")
         self.assertIn("next=%2Fworkspace%2Fx", url)

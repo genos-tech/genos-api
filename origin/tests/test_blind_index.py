@@ -290,7 +290,8 @@ class TestUniqueness(_Keys, BaseAPITestCase):
         self.assertFalse(serializer.is_valid())
         self.assertEqual(serializer.errors["email"][0].code, "unique")
 
-    def test_the_signup_endpoint_refuses_it_with_a_400(self):
+    def test_the_signup_endpoint_answers_neutrally_without_a_second_account(self):
+        # MIP-2232: the endpoint no longer says the address is taken; the serializer still refuses it.
         res = self.client.post(
             "/api/v2/user/signup/",
             {
@@ -301,8 +302,9 @@ class TestUniqueness(_Keys, BaseAPITestCase):
             },
             format="json",
         )
-        self.assertEqual(res.status_code, 400)
-        self.assertIn("custom user with this email already exists.", str(res.json()))
+        self.assertEqual(res.status_code, 201)
+        self.assertNotIn("already exists", str(res.json()))
+        self.assertEqual(User.objects.with_email("test@example.com").count(), 1)
 
     def test_signup_still_refuses_a_ciphertext_lookalike(self):
         # Emptying DRF's validators to drop its unique check would drop

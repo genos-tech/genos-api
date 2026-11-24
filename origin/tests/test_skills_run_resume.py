@@ -20,6 +20,7 @@ from origin.search_engine.agent.tool_tiers import SINGLE_WRITE_TOOLS, disabled_t
 from origin.search_engine.llm.choice import get_llm_choice
 from origin.services.skills import service
 from origin.tests import test_agent_resume_system_extra as base
+from origin.tests.skill_fence_helpers import strip_tag
 
 SECRET = "STEP: SECRET-SKILL-WORDS"
 
@@ -55,7 +56,8 @@ class SkillResumeKeepsCeilingTests(SkillResumeBase):
         first, resumed = self.legs
         self.assertIn("SKILL RUN", first)
         self.assertIn(SECRET, first)
-        self.assertEqual(resumed, first)
+        # Same text; each leg builds its own block, so its fence tag has its own random suffix.
+        self.assertEqual(strip_tag(resumed), strip_tag(first))
         hidden = self.resumed_kwargs()["disabled_tools"]
         self.assertTrue(disabled_tools_for_level("act") <= hidden)
         self.assertIn("create_task_plan", hidden)
