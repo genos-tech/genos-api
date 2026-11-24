@@ -133,6 +133,8 @@ MIDDLEWARE = [
     # (MIP-725). Inside CurrentUserMiddleware so the alert row it writes
     # still sees the request.
     "origin.services.security_events.ForbiddenBurstMiddleware",
+    # Counts what a key or connected app reads per minute (MIP-2259).
+    "origin.services.credential_guard.ReadVolumeMiddleware",
 ]
 
 # CORS policy.
@@ -2712,6 +2714,16 @@ SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
 # and how many distinct addresses failing within an hour count as a password spray.
 SIGNIN_BACKOFF_FAILURES = int(os.environ.get("SIGNIN_BACKOFF_FAILURES", "5"))
 SIGNIN_SPRAY_ACCOUNTS = int(os.environ.get("SIGNIN_SPRAY_ACCOUNTS", "50"))
+# Detection that acts (MIP-2259, origin/services/credential_guard.py). Reads (calls, and response
+# bytes) one API key or connected app makes in a minute past these raise `alert.read_volume`; a
+# person's own total is judged at SECURITY_READ_USER_MULTIPLIER times them. What happens to the
+# credential is `CREDENTIAL_AUTOSUSPEND_MODE`: `off` (default, only the alert), `shadow` (the alert
+# says it would have paused it) or `enforce` (a read-volume breach or a refused-request burst pauses
+# the key or app until its owner re-enables it).
+SECURITY_READ_CALLS_PER_MINUTE = int(os.environ.get("SECURITY_READ_CALLS_PER_MINUTE", "300"))
+SECURITY_READ_CHARS_PER_MINUTE = int(os.environ.get("SECURITY_READ_CHARS_PER_MINUTE", "3000000"))
+SECURITY_READ_USER_MULTIPLIER = int(os.environ.get("SECURITY_READ_USER_MULTIPLIER", "2"))
+CREDENTIAL_AUTOSUSPEND_MODE = os.environ.get("CREDENTIAL_AUTOSUSPEND_MODE", "off").strip().lower()
 
 # --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
 # Who `ops_alert_tick` mails, through the same Resend transport as every
