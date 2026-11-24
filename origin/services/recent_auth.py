@@ -19,11 +19,19 @@ factor for those accounts is MIP-2239.
 
 from __future__ import annotations
 
+import logging
+
 from django.core import signing
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.response import Response
 
+logger = logging.getLogger(__name__)
+
 WINDOW_SECONDS = 600
+# The Nth wrong password in an hour raises one alert event and emails the owner (MIP-2290).
+ALERT_AFTER_FAILURES = 5
+_FAILURE_WINDOW = 3600
 _SALT = "genos.recent-auth.v1"
 CODE = "recent_auth_required"
 
@@ -76,3 +84,36 @@ def refusal(request) -> Response | None:
         },
         status=status.HTTP_403_FORBIDDEN,
     )
+
+
+def note_failure(user, request) -> None:
+    """A wrong password was typed into the confirm step: leave a security event, and on the
+    `ALERT_AFTER_FAILURES`th failure within an hour raise one alert and email the owner. Never
+    raises (the cache is best-effort; the 403 must still go out)."""
+    from origin.models.common.security_event_models import SecurityAction  # noqa: PLC0415
+    from origin.services import credential_alert  # noqa: PLC0415
+    from origin.services.security_events import record_security_event  # noqa: PLC0415
+
+    try:
+        record_security_event(
+            SecurityAction.RECENT_AUTH_FAILED,
+            request=request,
+            actor=user,
+            target_type="user",
+            target_id=user.pk,
+        )
+        key = f"recent_auth_fail:{user.pk}"
+        count = 1 if cache.add(key, 1, _FAILURE_WINDOW) else cache.incr(key)
+        if count != ALERT_AFTER_FAILURES:
+            return
+        record_security_event(
+            SecurityAction.ALERT_RECENT_AUTH_GUESSING,
+            request=request,
+            actor=user,
+            target_type="user",
+            target_id=user.pk,
+            metadata={"failures": count, "window_seconds": _FAILURE_WINDOW},
+        )
+        credential_alert.notify_guessing(user)
+    except Exception:  # noqa: BLE001
+        logger.error("recent-auth failure note failed", exc_info=True)

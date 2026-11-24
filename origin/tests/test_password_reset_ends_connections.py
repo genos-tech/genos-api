@@ -234,7 +234,9 @@ class TestResetEndsTheMembersConnections(ResetBase):
         self.issue_token(self.user)
         response = self.confirm()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"connections_ended": 0, "api_keys_revoked": 0})
+        self.assertEqual(
+            response.json(), {"connections_ended": 0, "api_keys_revoked": 0, "recent_webhooks": []}
+        )
         self.assertEqual(self.events(SecurityAction.MCP_DISCONNECTED).count(), 0)
         self.assertEqual(self.events(SecurityAction.API_KEY_REVOKED).count(), 0)
         self.assertEqual(self.events(SecurityAction.PASSWORD_RESET).count(), 1)
@@ -302,7 +304,27 @@ class TestTheResponse(ResetBase):
         self.issue_token(self.user)
         response = self.confirm()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"connections_ended": 2, "api_keys_revoked": 2})
+        self.assertEqual(
+            response.json(), {"connections_ended": 2, "api_keys_revoked": 2, "recent_webhooks": []}
+        )
+
+    def test_the_response_lists_webhooks_made_in_the_last_seven_days_by_host(self):
+        from origin.models.common.webhook_models import WebhookEndpoint
+
+        hook = WebhookEndpoint.objects.create(
+            team=self.team,
+            url="https://evil.example.com/in/secret-path",
+            events=["task.created"],
+            created_by=self.user,
+            secret_encrypted="x",
+        )
+        self.issue_token(self.user)
+        body = self.confirm().json()
+        self.assertEqual(
+            body["recent_webhooks"], [{"id": str(hook.id), "host": "evil.example.com"}]
+        )
+        self.assertTrue(WebhookEndpoint.objects.filter(pk=hook.pk).exists())  # not ended
+        self.assertNotIn("secret-path", str(body))
 
     def test_a_refused_reset_returns_the_same_400_as_before_with_no_counts(self):
         response = self.confirm(token="nope")
@@ -381,7 +403,9 @@ class TestIdempotent(ResetBase):
         self.issue_token(self.user, raw="second-token")
         response = self.confirm(token="second-token", password="another-new-password-43")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"connections_ended": 0, "api_keys_revoked": 0})
+        self.assertEqual(
+            response.json(), {"connections_ended": 0, "api_keys_revoked": 0, "recent_webhooks": []}
+        )
         # Two connection rows and two key rows from the first reset; none added.
         self.assertEqual(self.events(SecurityAction.MCP_DISCONNECTED).count(), 2)
         self.assertEqual(self.events(SecurityAction.API_KEY_REVOKED).count(), 2)
