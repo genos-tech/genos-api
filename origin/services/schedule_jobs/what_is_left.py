@@ -22,7 +22,18 @@ from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.services import briefing, report_memory
 from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
+from origin.services.schedule_jobs.report_kit import (
+    AI_SUMMARY_PARAM,
+    SUMMARY_EFFORT_DEFAULT,
+    Links,
+    add_narrative,
+    ai_sentences_on,
+    arrange,
+    clip,
+    item,
+    more,
+    plain,
+)
 from origin.services.user_time import zone_for_user_id
 
 DEFAULT_DAYS = 7
@@ -40,7 +51,7 @@ def _latest(events: list[dict[str, Any]]) -> str:
     return str(last.get("summary") or last.get("what") or "")
 
 
-def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     now = timezone.now()
     zone = zone_for_user_id(ctx.user_id)
     days = int(params.get("days", DEFAULT_DAYS))
@@ -147,6 +158,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     }
 
 
+def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+    """The report, with a written summary on top when the member turned the AI part on."""
+    return add_narrative(ctx, params, _report(ctx, params), effort_default=SUMMARY_EFFORT_DEFAULT)
+
+
 register_job(
     Job(
         key="what_is_left",
@@ -157,6 +173,15 @@ register_job(
             "to-dos left unfinished. Good for Monday morning."
         ),
         run=run,
-        params_schema={"properties": {"days": {"type": "integer", "minimum": 1, "maximum": 31}}},
+        params_schema={
+            "properties": {
+                "days": {"type": "integer", "minimum": 1, "maximum": 31},
+                "ai_sentences": AI_SUMMARY_PARAM,
+            }
+        },
+        uses_ai=True,
+        ai_when=ai_sentences_on,
+        effort_default=SUMMARY_EFFORT_DEFAULT,
+        cost_basis="narrative",
     )
 )

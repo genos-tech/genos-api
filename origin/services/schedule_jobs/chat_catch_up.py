@@ -13,6 +13,7 @@ not counted.
 
 from __future__ import annotations
 
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -30,12 +31,29 @@ MAX_LIST = 8
 MIN_BUSY = 3
 
 
-def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
-    hours = int(params.get("hours", DEFAULT_HOURS))
-    audience = {str(ctx.user_id), *(str(i) for i in params.get(AUDIENCE_KEY) or [])}
-    since = timezone.now() - timedelta(hours=hours)
+NOT_PICKABLE = (
+    "That group chat is not available for this report: you and everyone who reads the report "
+    "must be in it."
+)
 
-    # Group chats the owner is in, and that every other reader is in too (one query each).
+
+def chosen_chat(params: dict[str, Any]) -> uuid.UUID | None:
+    """The one group chat the member picked (`channel_id`), or None for "all busy chats". An
+    empty value is None; anything that is not a chat id is refused by the caller."""
+    value = params.get("channel_id")
+    if value in (None, ""):
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _chats(
+    ctx: ToolContext, audience: set[str], only: uuid.UUID | None = None
+) -> dict[Any, Channel]:
+    """Group chats the owner is in, and that every other reader is in too (one query each);
+    `only` narrows it to the chosen chat."""
     everyone = (
         ChannelMember.objects.filter(is_deleted=False, user_id__in=audience)
         .values("channel_id")
@@ -43,18 +61,47 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         .filter(n=len(audience))
         .values("channel_id")
     )
-    chats = {
-        c.id: c
-        for c in Channel.objects.filter(
-            chat_member_q(ctx.user_id),
-            id__in=everyone,
-            team_id=ctx.team_id,
-            kind=ChannelKind.GM,
-            is_deleted=False,
-            archived_at__isnull=True,
-            is_external=False,
-        ).exclude(title="")
-    }
+    rows = Channel.objects.filter(
+        chat_member_q(ctx.user_id),
+        id__in=everyone,
+        team_id=ctx.team_id,
+        kind=ChannelKind.GM,
+        is_deleted=False,
+        archived_at__isnull=True,
+        is_external=False,
+    ).exclude(title="")
+    if only is not None:
+        rows = rows.filter(pk=only)
+    return {c.id: c for c in rows}
+
+
+def check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) -> dict[str, Any]:
+    """At save: a chosen chat must be a group chat the OWNER is in. Nobody is named."""
+    from origin.services.schedules import ScheduleError  # noqa: PLC0415 (import cycle)
+
+    if params.get("channel_id") in (None, ""):
+        params = {k: v for k, v in params.items() if k != "channel_id"}
+        return params
+    only = chosen_chat(params)
+    if only is None or not _chats(ctx, {str(ctx.user_id)}, only):
+        raise ScheduleError(NOT_PICKABLE)
+    return {**params, "channel_id": str(only)}
+
+
+def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+    hours = int(params.get("hours", DEFAULT_HOURS))
+    audience = {str(ctx.user_id), *(str(i) for i in params.get(AUDIENCE_KEY) or [])}
+    since = timezone.now() - timedelta(hours=hours)
+    only = chosen_chat(params)
+    if params.get("channel_id") not in (None, "") and only is None:
+        only = uuid.UUID(int=0)  # a malformed id matches nothing, so the run refuses below
+    chats = _chats(ctx, audience, only)
+    if only is not None and not chats:
+        # The owner or a reader left the chat (or it was archived) since the schedule was saved:
+        # the run fails in words, names nobody, and posts nothing.
+        from origin.services.schedules import ScheduleRunError  # noqa: PLC0415 (import cycle)
+
+        raise ScheduleRunError(NOT_PICKABLE)
     busy = []
     if chats:
         busy = list(
@@ -102,11 +149,18 @@ register_job(
         title="Group chat catch-up",
         description=(
             "Which group chats are busy now: how many messages and how many people in the last "
-            "hours. Only chats you are in; in a chat, only chats everyone there is in. It never "
-            "shows what was said."
+            "hours, for every busy chat or one chat you pick. Only chats you are in; in a chat, only "
+            "chats everyone there is in. It never shows what was said."
         ),
         run=run,
         share_chats=True,
-        params_schema={"properties": {"hours": {"type": "integer", "minimum": 1, "maximum": 168}}},
+        check_params=check_params,
+        params_schema={
+            "properties": {
+                "hours": {"type": "integer", "minimum": 1, "maximum": 168},
+                # Optional (MIP-2348): one group chat instead of every busy one.
+                "channel_id": {"type": "string", "maxLength": 36},
+            }
+        },
     )
 )

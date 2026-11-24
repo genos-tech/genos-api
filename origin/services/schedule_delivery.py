@@ -108,6 +108,7 @@ MAX_SECTIONS = 12
 MAX_ITEMS = 30
 MAX_TITLE_CHARS = 200
 MAX_SUMMARY_CHARS = 280
+MAX_NARRATIVE_CHARS = 500  # = report_ai.validate.NARRATIVE_CHARS
 MAX_HEADING_CHARS = 120
 MAX_TEXT_CHARS = 240
 MAX_LINK_CHARS = 500
@@ -291,7 +292,12 @@ def clean_report(report: Report, fallback_title: str) -> dict[str, Any]:
                 section["emoji"] = EMOJI[key]
             sections.append(section)
     title = _text(report.get("title"), MAX_TITLE_CHARS) or _text(fallback_title, MAX_TITLE_CHARS)
-    summary = _text(report.get("summary"), MAX_SUMMARY_CHARS)
+    # A written summary (MIP-2350) comes first in `summary`, so the line has room for it too.
+    narrative = _text(report.get("narrative"), MAX_NARRATIVE_CHARS)
+    summary = _text(
+        report.get("summary"),
+        MAX_SUMMARY_CHARS + MAX_NARRATIVE_CHARS + 1 if narrative else MAX_SUMMARY_CHARS,
+    )
     body: dict[str, Any] = {
         "version": REPORT_VERSION,
         "title": title or "Genos report",

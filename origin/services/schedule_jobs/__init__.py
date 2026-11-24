@@ -142,6 +142,10 @@ class Report(TypedDict):
     # The `request_id` of the metered request that paid for this report: required of a job with
     # `uses_ai`, never stored on the item as given (the delivery reads the cost by it).
     ai_request_id: NotRequired[str]
+    # The written summary of the whole report (MIP-2350), 1 to 4 plain sentences cleaned by
+    # `report_ai.validate.clean_narrative`: a job that offers it puts it first in `summary`, and the
+    # delivery step then allows `summary` the room it needs. Only with `ai_request_id` or from the cache.
+    narrative: NotRequired[str]
     # `{task_id: signature}` for every task row this report listed or held back as unchanged
     # (MIP-1211): the next report's memory, stored on the item's `item_optionals`, never in its
     # body (`services/report_memory.py`).
@@ -194,6 +198,10 @@ class Job:
     # False for a job whose cost the report-sentence estimate (`report_ai.estimate`) does not describe:
     # the catalog then carries no per-level estimate for it.
     cost_estimated: bool = True
+    # What the estimate describes (MIP-2350): "sentences" = one sentence under each of 10 tasks
+    # with comments (`what_to_do_today`); "narrative" = a short paragraph over a report of about
+    # 24 lines (`report_ai.narrative`).
+    cost_basis: str = "sentences"
     # True for a job that runs a long model loop (MIP-2045): the runner does not wrap it in a
     # savepoint (`schedules._execute`), so the spend it records survives a crash. Such a job never
     # writes to the workspace and never raises after its first model call.
