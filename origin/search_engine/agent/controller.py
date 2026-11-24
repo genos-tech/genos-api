@@ -2479,8 +2479,47 @@ def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
     The caller is responsible for prefetching `run.steps` if it wants
     to avoid an extra query.
     """
+    seen_by_id = _sources_from_steps(run.steps.all())
+    # Steps whose output retention blanked (MIP-2288) left their sources on the run: ids only, so a
+    # chip has no title, but it still resolves and the audience can still be audited. A live step
+    # wins on the same entity.
+    kept = getattr(run, "kept_sources", None) or {}
+    for s in kept.get("sources") or []:
+        eid = s.get("entity_id")
+        if eid and eid not in seen_by_id:
+            seen_by_id[eid] = dict(s)
+    return list(seen_by_id.values())
+
+
+# The keys of a source that are ids or flags: what is kept after retention (MIP-2288). Everything
+# else on a source (title, snippet, matched terms, related entity ids, dates) is text or derived
+# from text and goes with the step output.
+_KEPT_SOURCE_KEYS = (
+    "entity_type",
+    "entity_id",
+    "chat_type",
+    "chat_id",
+    "thread_id",
+    "message_id",
+    "task_id",
+    "task_display_id",
+    "note_id",
+    "note_type",
+    "project_id",
+    "team_id",
+    "operated",
+    "deleted",
+)
+
+
+def id_only_source(source: dict[str, Any]) -> dict[str, Any]:
+    """`source` reduced to its ids and flags (no text), the shape kept on `AgentRun.kept_sources`."""
+    return {k: source[k] for k in _KEPT_SOURCE_KEYS if source.get(k) is not None}
+
+
+def _sources_from_steps(steps) -> dict[str, dict[str, Any]]:
     seen_by_id: dict[str, dict[str, Any]] = {}
-    for step in run.steps.all():
+    for step in steps:
         if not step.tool_name or step.result_json is None:
             continue
         result = step.result_json
@@ -2503,7 +2542,7 @@ def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
             if s.get("deleted"):
                 # The same for a delete's mark: an earlier read of the event holds the title and times.
                 seen_by_id[eid]["deleted"] = True
-    return list(seen_by_id.values())
+    return seen_by_id
 
 
 # --------------------------------------------------------------------------- #

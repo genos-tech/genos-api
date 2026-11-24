@@ -1437,6 +1437,7 @@ search_engine.AgentRun:
   locale: none
   resume_context: content
   skill_ref: none
+  kept_sources: none
   withheld_from_team_answers: none
   started_at: none
   finished_at: none

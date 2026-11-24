@@ -31,6 +31,11 @@ class BaseAPITestCase(TestCase):
         refresh.start()
         self.addCleanup(refresh.stop)
         self.client = APIClient()
+        # The owner email for a new key/webhook/app runs on a background thread (MIP-2290); a
+        # thread cannot see a test's uncommitted rows, so tests run it inline.
+        spawn = mock.patch("origin.services.credential_alert._spawn", side_effect=lambda job: job())
+        spawn.start()
+        self.addCleanup(spawn.stop)
         # An API key, a webhook and an AI-app connection ask for the password again (MIP-2240).
         # Tests of other behaviour sign in without that extra step; `test_recent_auth` turns it on
         # (`recent_auth_gate = True`) and is where the gate itself is pinned.
