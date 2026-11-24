@@ -216,18 +216,20 @@ class TestAuthEndpoints(TestCase):
         self.assertFalse(created.is_email_verified)
         self.assertIsNotNone(created.email_verification_token_hash)
 
-    def test_signup_duplicate_email(self):
+    def test_signup_duplicate_email_answers_like_a_new_one(self):
+        # MIP-2232: no 400 that says the address is registered; no second account either.
         response = self.client.post(
             "/api/v2/user/signup/",
             {
                 "username": "another",
                 "email": "test@example.com",
-                "password": "pass123",
+                "password": "pass12345",
                 "accepted_terms": True,
             },
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(User.objects.with_email("test@example.com").count(), 1)
 
     def test_signin_success(self):
         response = self.client.post(

@@ -138,7 +138,10 @@ class RefreshGraceTests(BaseAPITestCase):
         self.user.save(update_fields=["is_active"])
         self.assertIn(self.refresh(self.t0).status_code, (401, 403))
 
-    def test_an_unavailable_cache_fails_closed_and_normal_refresh_still_works(self):
+    # The per-IP throttle (MIP-2232) reads the same cache and has its own outage tests; here it
+    # is out of the way so the test is about the grace window alone.
+    @mock.patch.object(auth_views.TokenRefreshThrottle, "allow_request", return_value=True)
+    def test_an_unavailable_cache_fails_closed_and_normal_refresh_still_works(self, _throttle):
         self.rotate()
         with mock.patch.object(auth_views.cache, "get", return_value=None):
             self.assertEqual(self.refresh(self.t0).status_code, 403)
