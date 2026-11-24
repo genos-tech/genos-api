@@ -23,6 +23,8 @@ from io import StringIO
 from types import SimpleNamespace
 from unittest import mock
 
+from cryptography.fernet import Fernet
+from django.conf import settings
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -776,6 +778,21 @@ class BypassTests(MfaBase):
         _delete_personal_data(self.user)
         self.assertEqual(UserMFA.objects.count(), 0)
         self.assertEqual(MFARecoveryCode.objects.count(), 0)
+
+
+class KeyRotationTests(MfaBase):
+    def test_rotating_the_keyring_keeps_the_secret_readable(self):
+        # Without the column in rotate_field_keys, dropping the old key would lock every person
+        # who turned two-factor on out of signing in.
+        self.turn_on()
+        secret = self.secret()
+        old = settings.FIELD_ENCRYPTION_KEYS[0]
+        new = Fernet.generate_key().decode()
+        with override_settings(FIELD_ENCRYPTION_KEYS=[new, old]):
+            call_command("rotate_field_keys", stdout=StringIO())
+        with override_settings(FIELD_ENCRYPTION_KEYS=[new]):
+            self.assertEqual(self.secret(), secret)
+            self.assertEqual(self.second_step(self.pending(), self.code()).status_code, 200)
 
 
 class OperatorResetTests(MfaBase):
