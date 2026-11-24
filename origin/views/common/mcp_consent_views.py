@@ -34,7 +34,14 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import mcp_connections, mcp_notice, mcp_oauth, mcp_tier_limits
+from origin.services import (
+    credential_alert,
+    mcp_connections,
+    mcp_notice,
+    mcp_oauth,
+    mcp_tier_limits,
+    recent_auth,
+)
 from origin.services.mcp_credential import McpOAuthCredential
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
@@ -150,6 +157,11 @@ class McpConsentDecisionView(_ConsentBase):
         if not allow:
             return self._outcome(library, fake, credentials, [], allow=False)
 
+        # Allowing an app (new, brought back, or consenting again with wider scopes) is a lasting
+        # foothold: a stolen session must not be enough, so the password is asked for again
+        # (MIP-2240). Declining needs nothing. The page reads `recent_auth_required` and prompts.
+        if refused := recent_auth.refusal(request):
+            return refused
         if not get_mcp_enabled(str(request.user.id)):
             return _problem(
                 "plan_required",
@@ -274,5 +286,11 @@ class McpConsentDecisionView(_ConsentBase):
                     credential=credential,
                     notice=mcp_notice.connected_notice(credential, action="oauth"),
                     tool_name="app_connected",
+                )
+                # The same news by email, where a stolen session cannot dismiss it (MIP-2240).
+                credential_alert.notify_created(
+                    fake.user,
+                    kind=credential_alert.KIND_CONNECTION,
+                    label=connection.application.name or connection.application.client_id,
                 )
         return Response({"redirect_to": uri}, status=status.HTTP_200_OK)
