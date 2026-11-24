@@ -260,13 +260,13 @@ class SavingTests(Base):
         schedules.update(self.ctx, sched.id, time_of_day="09:15")
 
     def test_the_job_may_go_to_a_chat_only_when_it_says_so(self):
-        """Only a job that says `ai_in_private_chat` (this one) may post an AI report in a chat; every
-        other AI job keeps going to the Inbox only (`schedule_audience.HAS_AI`)."""
+        """Only a job that says `ai_in_private_chat` (this one) is held to a chat the owner is alone
+        in; every other AI job follows the audience rule of its own kind (MIP-2351)."""
         from origin.services import schedule_audience  # noqa: PLC0415
 
         self.assertTrue(JOBS["run_skill"].ai_applies({"skill_id": "x"}))
         self.assertTrue(JOBS["run_skill"].ai_in_private_chat)
-        self.assertTrue(schedule_audience.HAS_AI)
+        self.assertTrue(schedule_audience.AI_NOT_ALONE)
         self.assertEqual([k for k, j in JOBS.items() if j.ai_in_private_chat], ["run_skill"])
 
 
@@ -338,27 +338,29 @@ class ChatDeliveryTests(Base):
         with self.assertRaises(schedules.ScheduleError):
             self.to_chat(self.skill(), pm)
 
-    def test_a_run_posts_one_message_with_its_cost_line_and_files_nothing_in_the_inbox(self):
+    def test_a_run_posts_one_message_without_a_cost_and_files_the_cost_in_the_inbox(self):
         alone = self.gm(self.user)
         sched = self.to_chat(self.skill(), alone)
         status, error = self.execute(sched)
         self.assertEqual((status, error), (STATUS_OK, ""))
-        self.assertEqual(self.inbox(), [])
         (message,) = self.posted(alone)
         self.assertIsNone(message.sender_id)
         row = AiRequestCost.objects.get()
         marker = message.metadata["scheduleReport"]
         self.assertEqual(marker["job"], "run_skill")
         self.assertEqual(marker["scheduleId"], str(sched.id))
-        self.assertEqual(marker["ai"]["request_id"], str(row.request_id))
-        self.assertEqual(marker["ai"]["producer"], "schedule")
-        # The cost line is a block of the message itself, not only metadata.
+        self.assertNotIn("ai", marker)
+        # The cost is the owner's, on a cost-only Inbox item, never a line of the message.
+        (item,) = self.inbox()
+        self.assertEqual(item.item_optionals["ai"]["request_id"], str(row.request_id))
+        self.assertEqual(item.item_optionals["ai"]["producer"], "schedule")
+        self.assertEqual(item.item_body["sections"], [])
         texts = [
             b["content"][0]["text"]
             for b in message.body
             if b["content"] and b["content"][0].get("type") == "text"
         ]
-        self.assertTrue(any(t.startswith("AI usage:") for t in texts), texts)
+        self.assertFalse(any("AI usage" in t for t in texts), texts)
         self.assertIn("Three things need you this week.", texts)
         sched.refresh_from_db()
         self.assertEqual(sched.last_result["title"], "Weekly review")

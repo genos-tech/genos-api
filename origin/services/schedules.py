@@ -902,7 +902,6 @@ AI_RUN_NOW_PER_DAY = 3
 
 def _ai_run_now_count(sched: MemberSchedule, now: datetime) -> int:
     """How many hand-made reports of this schedule spent AI usage since the member's midnight."""
-    from origin.models.chat.unified_models import Message  # noqa: PLC0415
     from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems  # noqa: PLC0415
 
     midnight = now.astimezone(user_zone(sched.user)).replace(
@@ -919,16 +918,7 @@ def _ai_run_now_count(sched: MemberSchedule, now: datetime) -> int:
         .exclude(item_optionals__has_key="run_at")
         .count()
     )
-    # A report posted in a chat counts the same (MIP-2196): else pointing the schedule at a chat
-    # would lift the limit. A scheduled run has an idempotency key; a hand-made one has none.
-    in_chat = Message.objects.filter(
-        sender__isnull=True,  # a report has no author; this keeps the lookup on `msg_sender_ts_idx`
-        metadata__scheduleReport__scheduleId=str(sched.id),
-        metadata__scheduleReport__has_key="ai",
-        correlation_id__isnull=True,
-        ts_sent_at__gte=midnight,
-    ).count()
-    return in_inbox + in_chat
+    return in_inbox
 
 
 def _require_ai_run_now_room(sched: MemberSchedule, now: datetime) -> None:
