@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import socket
 import sys
@@ -123,7 +124,7 @@ class Run:
                 res = self.req(
                     "POST",
                     "/api/v2/user/signin/",
-                    json_body={"email": cred["email"], "password": cred["password"]},
+                    json_body={"email": cred["email"], "password": os.environ["RT_PASSWORD"]},
                 )
                 data = res.json() or {}
                 token = data.get("access") or (data.get("data") or {}).get("access")

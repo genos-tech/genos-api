@@ -1,11 +1,13 @@
 """One request as one red-team identity, for reproducing a finding by hand (MIP-2267).
 
 python poke.py --manifest manifest.json --who B_owner GET /api/v2/x/ [--query '{"a":1}'] [--json '{}']
---who: A_owner, A_viewer, B_owner, B_viewer, C_owner, anon, or apikey:<raw key file key>
+--who: A_owner, A_viewer, B_owner, B_viewer, C_owner or anon; --auth sends a raw header instead.
+RT_PASSWORD: the run secret seed.py gave every account.
 """
 
 import argparse
 import json
+import os
 import sys
 
 from guard import LocalClient
@@ -30,7 +32,7 @@ if a.who != "anon" and not a.auth:
     r = c.request(
         "POST",
         "/api/v2/user/signin/",
-        json_body={"email": cred["email"], "password": cred["password"]},
+        json_body={"email": cred["email"], "password": os.environ["RT_PASSWORD"]},
     )
     token = (r.json() or {}).get("access")
 res = c.request(

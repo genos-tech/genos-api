@@ -10,7 +10,7 @@ credentials in the URL and never follows a redirect (`test_guard.py` pins it).
 
 | File | Runs where | What |
 | --- | --- | --- |
-| `seed.py` | inside the target (`manage.py shell`) | Three tenants: A (victim, English sample workspace), B (attacker, Japanese sample workspace, so any English sample text in a B response is A's), C (control). Refuses unless the database is `origin_rt*` on a local host. Prints a manifest with random passwords (keep it in a 0600 temp file, never in the repo). |
+| `seed.py` | inside the target (`manage.py shell`) | Three tenants: A (victim, English sample workspace), B (attacker, Japanese sample workspace, so any English sample text in a B response is A's), C (control). Refuses unless the database is `origin_rt*` on a local host. Every account gets the run secret from `RT_PASSWORD` (give the harness the same variable); the manifest it prints holds no secret. |
 | `inventory.py` | inside the target | One team's object ids in every table, a digest of its rows, and marker strings of its own text. Run before and after an attack to prove nothing of team A changed. |
 | `dump_routes.py` | inside the target | Every routed view: path kwargs, methods, the `route_access` kind, and the request parameter names its source reads. |
 | `attack.py` | a sibling container | Sign-in, setup (API keys, webhooks, skills), the IDOR walk (reads with a team-A positive control, then writes), and `--phase extra` for `probes.py`. |
@@ -33,10 +33,10 @@ is the VM's loopback, so the harness runs in a second container on the same netw
 2. Start the target: `migrate`, then `gunicorn apis.wsgi:application --bind 127.0.0.1:18267`.
 3. Seed and inventory (pipe scripts over stdin; Docker Desktop's file share can serve a stale copy
    of an edited file):
-   `docker exec -i <target> python manage.py shell < scripts/redteam/seed.py > manifest.json`
+   `docker exec -i -e RT_PASSWORD="$RT_PASSWORD" <target> python manage.py shell < scripts/redteam/seed.py > manifest.json`
    `docker exec -i -e RT_TEAM=<team uuid> <target> python manage.py shell < scripts/redteam/inventory.py > team_A.json`
    `docker exec -i <target> python manage.py shell < scripts/redteam/dump_routes.py > routes.jsonl`
-4. Attack from a sibling container with the scripts and those files copied in (`docker cp`):
+4. Attack from a sibling container (same `RT_PASSWORD` in its environment) with the scripts and those files copied in (`docker cp`):
    `python attack.py --base http://127.0.0.1:18267 --manifest manifest.json --routes routes.jsonl --team-a team_A.json --team-b team_B.json --out results.json --phase setup,idor`
    then `--phase idor-writes --created results.json.created.json`, then `--phase extra`.
    Re-run `inventory.py` for team A and compare the digests.
