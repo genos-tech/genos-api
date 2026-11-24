@@ -10,6 +10,7 @@ from typing import Any
 
 from origin.search_engine.agent.tools import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.base import wrap_workspace_content
+from origin.services.skills import guard
 from origin.services.skills import mcp as skills_mcp
 
 
@@ -23,9 +24,9 @@ def _get(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "id": str(skill.id),
         "slug": meta.slug or skill.slug,
         "author": found["author"],
-        "title": wrap_workspace_content(meta.title or ""),
-        "description": wrap_workspace_content(meta.description or ""),
-        "argument_hint": wrap_workspace_content(meta.argument_hint or "") or None,
+        "title": wrap_workspace_content(guard.normalise(meta.title or "")),
+        "description": wrap_workspace_content(guard.normalise(meta.description or "")),
+        "argument_hint": wrap_workspace_content(guard.normalise(meta.argument_hint or "")) or None,
         "tags": list(meta.tags or []),
         "tool_level": found["tool_level"],
         "visibility": skill.visibility,

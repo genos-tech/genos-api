@@ -10,8 +10,8 @@ from typing import Any
 
 from origin.search_engine.agent.tools import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.base import wrap_workspace_content
+from origin.services.skills import guard, run
 from origin.services.skills import mcp as skills_mcp
-from origin.services.skills import run
 
 
 def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -25,6 +25,9 @@ def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         mine = r["group"] == run.GROUP_MINE
 
         def words(value: str | None) -> str | None:
+            # Normalised for everyone (MIP-2204): invisible characters in the member's own words
+            # reach the model too (a skill imported or synced from elsewhere).
+            value = guard.normalise(value) if value else value
             return value if mine or not value else wrap_workspace_content(value)
 
         rows.append(

@@ -448,6 +448,14 @@ def _cut_off_open_sockets(user_id, left_team_ids) -> None:
         )
 
 
+def _disconnect_open_sockets(user_id) -> None:
+    """Close every open socket of the deleted person (MIP-2241): leaving the rooms is not
+    enough, the socket itself stays connected and in their own user rooms."""
+    from origin.services.realtime_push import push_user_disconnect
+
+    push_user_disconnect(user_id)
+
+
 def delete_account(user) -> dict:
     """Erase the person, keep the workspace consistent.
 
@@ -495,6 +503,7 @@ def delete_account(user) -> dict:
         # joined a room, so the deleted person's tab kept receiving the team's chats and kept
         # broadcasting "online" to its roster until it reconnected (it cannot: the token dies).
         _cut_off_open_sockets(user.pk, left_team_ids)
+        _disconnect_open_sockets(user.pk)
 
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
