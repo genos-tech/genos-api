@@ -6,9 +6,16 @@ class OriginConfig(AppConfig):
     name = "origin"
 
     def ready(self):
+        from django.conf import settings
+
         # Same import-for-side-effect rule as the signals below: the
         # @register() decorators attach the deploy-time config checks.
         from origin import checks  # noqa: F401
+        from origin.services import jwt_backend
+
+        # Dual HS256/RS256 session-token backend (MIP-2243). Inert until a switch is set;
+        # a bad JWT_* combination fails the boot here rather than at the first sign-in.
+        jwt_backend.install(settings)
 
         # Importing the module is enough — the @receiver decorators in
         # task_signals.py / cache_invalidation.py register the handlers as a
