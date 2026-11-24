@@ -2683,6 +2683,11 @@ SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
 # and how many distinct addresses failing within an hour count as a password spray.
 SIGNIN_BACKOFF_FAILURES = int(os.environ.get("SIGNIN_BACKOFF_FAILURES", "5"))
 SIGNIN_SPRAY_ACCOUNTS = int(os.environ.get("SIGNIN_SPRAY_ACCOUNTS", "50"))
+# Rewrite volume over MCP (MIP-2265, origin/services/write_volume.py): one API key or connected app
+# that changes more than this many items in one window raises `alert.write_volume` (email only; nothing
+# is refused). A bulk call counts one per row.
+SECURITY_WRITE_ROWS_PER_WINDOW = int(os.environ.get("SECURITY_WRITE_ROWS_PER_WINDOW", "100"))
+SECURITY_WRITE_WINDOW_SECONDS = int(os.environ.get("SECURITY_WRITE_WINDOW_SECONDS", "600"))
 
 # --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
 # Who `ops_alert_tick` mails, through the same Resend transport as every
