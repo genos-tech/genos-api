@@ -290,7 +290,8 @@ class TestUniqueness(_Keys, BaseAPITestCase):
         self.assertFalse(serializer.is_valid())
         self.assertEqual(serializer.errors["email"][0].code, "unique")
 
-    def test_the_signup_endpoint_refuses_it_with_a_400(self):
+    def test_the_signup_endpoint_answers_neutrally_without_a_second_account(self):
+        # MIP-2232: the endpoint no longer says the address is taken; the serializer still refuses it.
         res = self.client.post(
             "/api/v2/user/signup/",
             {
@@ -301,8 +302,9 @@ class TestUniqueness(_Keys, BaseAPITestCase):
             },
             format="json",
         )
-        self.assertEqual(res.status_code, 400)
-        self.assertIn("custom user with this email already exists.", str(res.json()))
+        self.assertEqual(res.status_code, 201)
+        self.assertNotIn("already exists", str(res.json()))
+        self.assertEqual(User.objects.with_email("test@example.com").count(), 1)
 
     def test_signup_still_refuses_a_ciphertext_lookalike(self):
         # Emptying DRF's validators to drop its unique check would drop
@@ -843,6 +845,12 @@ class TestMigrationEncrypt(BaseAPITestCase):
 
     def setUp(self):
         super().setUp()
+        # 0281 dropped `base_country` after 0203 ran, so the current schema has no such column.
+        self.all_columns = list(_encrypt_migration._COLUMNS)
+        patched = [c for c in self.all_columns if c[2] != "base_country"]
+        patcher = mock.patch.object(_encrypt_migration, "_COLUMNS", patched)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         crypto._get_fernet.cache_clear()
         self.addCleanup(crypto._get_fernet.cache_clear)
         self.account = ConnectedAccount.objects.create(
@@ -851,14 +859,12 @@ class TestMigrationEncrypt(BaseAPITestCase):
         self.invite = _invite_row(self.team, "g@example.com")
         self.suppressed = EmailSuppression.objects.create(address="b@example.com", reason="bounce")
         self.user.phone_number = "+81 90 1234 5678"
-        self.user.base_country = "Japan"
         self.user.current_location = "Asia/Tokyo"
         self.user.about_me = "Runs on coffee."
         self.user.save()
         self.plain = {
             ("origin_customuser", "id", "email", self.user.pk): "test@example.com",
             ("origin_customuser", "id", "phone_number", self.user.pk): "+81 90 1234 5678",
-            ("origin_customuser", "id", "base_country", self.user.pk): "Japan",
             ("origin_customuser", "id", "current_location", self.user.pk): "Asia/Tokyo",
             ("origin_customuser", "id", "about_me", self.user.pk): "Runs on coffee.",
             ("origin_connectedaccount", "id", "provider_email", self.account.pk): "g@x.io",
@@ -883,7 +889,7 @@ class TestMigrationEncrypt(BaseAPITestCase):
             if isinstance(op, migrations.AlterField)
             and isinstance(op.field, crypto.EncryptedPIIField)
         }
-        self.assertEqual(altered, {(t, c) for t, _pk, c in _encrypt_migration._COLUMNS})
+        self.assertEqual(altered, {(t, c) for t, _pk, c in self.all_columns})
         self.assertEqual(len(altered), 9)
 
     def test_it_encrypts_every_row(self):
@@ -980,7 +986,6 @@ class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
             "phone_number": "+81 90 1234 5678",
             "about_me": "Runs on coffee.",
             "current_location": "Asia/Tokyo",
-            "base_country": "Japan",
         }
         for column, value in values.items():
             setattr(self.user, column, value)
@@ -1056,8 +1061,8 @@ class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
         with override_settings(FIELD_ENCRYPTION_KEYS=[Fernet.generate_key().decode()]):
             foreign = crypto.encrypt("lost")
         crypto._get_fernet.cache_clear()
-        _set_raw("origin_customuser", "base_country", "id", self.user.pk, foreign)
-        self.assertEqual(User.objects.get(pk=self.user.pk).base_country, foreign)
+        _set_raw("origin_customuser", "about_me", "id", self.user.pk, foreign)
+        self.assertEqual(User.objects.get(pk=self.user.pk).about_me, foreign)
 
     def test_the_plaintext_limits_still_apply(self):
         # The column is `text`; the field still validates the plaintext.
@@ -1079,7 +1084,7 @@ class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
 
     def test_the_profile_endpoint_refuses_a_lookalike(self):
         self.authenticate()
-        for field in ("about_me", "phone_number", "base_country"):
+        for field in ("about_me", "phone_number"):
             with self.subTest(field=field):
                 res = self.client.put(
                     "/api/v2/user/profile/",

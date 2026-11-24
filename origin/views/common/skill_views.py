@@ -50,7 +50,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.skills.skill_models import Skill, SkillStar, SkillVersion
+from origin.models.skills.skill_models import Skill, SkillInstall, SkillStar, SkillVersion
 from origin.services.skills import effort, hub, moderation, run, service, text
 from origin.services.skills import tags as skill_tags
 from origin.services.throttles import WindowRateThrottle
@@ -328,19 +328,33 @@ class SkillListView(_Base):
                 for t in {s.team_id for s in rows if s.note_id in editing}
             }
         colors = skill_tags.color_map(rows, user.pk, editing) if rows else {}
+        out_rows = [
+            _row(
+                s,
+                user.pk,
+                starred=str(s.id) in starred,
+                editing=s.note_id in editing and member_of.get(str(s.team_id), False),
+                team_owner=str(s.team_id) in owned_teams,
+                tag_colors=colors,
+            )
+            for s in rows
+        ]
+        if tab == "installed" and rows:
+            # The pinned version of each row, in one query: the page marks the rows a newer
+            # published version has left behind (MIP-2226), as the detail page already does.
+            pinned = dict(
+                SkillInstall.objects.filter(user=user, skill__in=rows).values_list(
+                    "skill_id", "version_no"
+                )
+            )
+            for s, out in zip(rows, out_rows, strict=True):
+                installed = pinned.get(s.id)
+                if installed is not None:
+                    out["installedVersionNo"] = installed
+                    out["updateAvailable"] = installed < s.published_version_no
         return Response(
             {
-                "skills": [
-                    _row(
-                        s,
-                        user.pk,
-                        starred=str(s.id) in starred,
-                        editing=s.note_id in editing and member_of.get(str(s.team_id), False),
-                        team_owner=str(s.team_id) in owned_teams,
-                        tag_colors=colors,
-                    )
-                    for s in rows
-                ],
+                "skills": out_rows,
                 "limit": service.skills_limit(user.pk),
                 "used": Skill.objects.filter(owner=user).count(),
                 "publicEnabled": service.public_enabled(),

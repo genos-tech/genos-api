@@ -32,7 +32,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Message, MessageAttachment, MessageMention
-from origin.services import message_via, thread_summary_cleanup
+from origin.models.common.erasure_models import ErasureObjectType
+from origin.services import erasure_log, message_via, thread_summary_cleanup
 
 #: The `metadata` keys a tombstone keeps: ids that link it to its task or comment, and the
 #: connected-app stamp (`message_via`, already reduced to a kind and a family). Nothing in them is
@@ -85,6 +86,10 @@ def tombstone_message(message: Message, *, now: datetime | None = None) -> bool:
     )
     # The cached digest of this message's thread quotes its text (MIP-1802).
     thread_summary_cleanup.forget_message_thread(message)
+    if newly_deleted:
+        erasure_log.record(
+            ErasureObjectType.MESSAGE, message.pk
+        )  # MIP-2249: replayed after a restore
     return newly_deleted
 
 

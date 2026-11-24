@@ -51,6 +51,7 @@ from origin.services import (
     first_month_trial,
     github_app,
     github_app_link,
+    mfa,
     signup_consent,
     start_here_note,
 )
@@ -60,7 +61,7 @@ from origin.services.oauth.registry import get_provider, supported_provider_name
 from origin.services.security_events import record_security_event
 from origin.views.common.object_body import ObjectBodyMixin
 
-from .auth_views import _set_refresh_cookie
+from .auth_views import OAuthCallbackThrottle, _set_refresh_cookie
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -78,16 +79,17 @@ def _redirect_uri(provider_name: str) -> str:
     return f"{settings.BACKEND_BASE_URL}/api/v2/oauth/{provider_name}/callback/"
 
 
-def _frontend_success_url(*, access_token: str, next_path: str) -> str:
-    """Frontend bounce page. Access token in URL fragment (not query)
-    so it never reaches our server logs via the Referer header.
+def _frontend_success_url(*, next_path: str) -> str:
+    """Frontend bounce page. The fragment names only where to go next: no credential
+    travels in a URL anyone could forge (MIP-2219). The bounce page gets its access token by
+    refreshing with the httpOnly refresh cookie the callback sets on this same response.
 
     Default fallback is `/jointeam` — new OAuth users have no team yet
     and any `/workspace/*` destination would immediately fire team-
     scoped requests with an empty `teamId`, blowing up the backend.
     """
     next_safe = _safe_next(next_path, "/jointeam")
-    fragment = urlencode({"access": access_token, "next": next_safe})
+    fragment = urlencode({"next": next_safe})
     return f"{settings.FRONTEND_BASE_URL}/oauth/success#{fragment}"
 
 
@@ -413,6 +415,7 @@ class OAuthCallbackView(APIView):
     """Exchange code, look up or create user/connection, redirect."""
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [OAuthCallbackThrottle]
 
     def get(self, request: Request, provider_name: str):
         if provider_name not in supported_provider_names() or not _flow_open(provider_name):
@@ -566,6 +569,14 @@ class OAuthCallbackView(APIView):
             if not user.is_active:
                 _record_oauth_signin_failed(provider_name, profile, "account_inactive", user)
                 return HttpResponseRedirect(_frontend_failure_url(reason="account_inactive"))
+            # A person who turned on two-factor for their password sign-in must not be
+            # able to walk round it by connecting a provider that carries their own address
+            # (MIP-2239): the provider's check is not the one they chose. Refused at the
+            # door, with the way back in named; an account that only ever signs in with a
+            # provider cannot have two-factor on, so none of those is affected.
+            if mfa.is_enabled(user):
+                _record_oauth_signin_failed(provider_name, profile, "mfa_password_only", user)
+                return HttpResponseRedirect(_frontend_failure_url(reason="mfa_password_only"))
             # Deliberately NOT storing this round trip's token. A login
             # grant carries openid/email/profile and nothing else, and we
             # never read it again — we mint our own JWT. Writing it over
@@ -642,15 +653,13 @@ class OAuthCallbackView(APIView):
             # while the offer is off; never raises, inside its own savepoint.
             first_month_trial.start_for_new_account(user)
 
-        access_jwt, refresh_jwt = self._issue_jwt(user)
+        _access_jwt, refresh_jwt = self._issue_jwt(user)
         record_security_event(
             SecurityAction.SIGNIN_SUCCEEDED,
             actor=user,
             metadata={"method": provider_name},
         )
-        return self._redirect_with_session(
-            access_jwt=access_jwt, refresh_jwt=refresh_jwt, next_path=next_path
-        )
+        return self._redirect_with_session(refresh_jwt=refresh_jwt, next_path=next_path)
 
     @transaction.atomic
     def _handle_connect(
@@ -864,10 +873,8 @@ class OAuthCallbackView(APIView):
         return str(refresh.access_token), str(refresh)
 
     @staticmethod
-    def _redirect_with_session(
-        *, access_jwt: str, refresh_jwt: str, next_path: str
-    ) -> HttpResponseRedirect:
-        url = _frontend_success_url(access_token=access_jwt, next_path=next_path)
+    def _redirect_with_session(*, refresh_jwt: str, next_path: str) -> HttpResponseRedirect:
+        url = _frontend_success_url(next_path=next_path)
         response = HttpResponseRedirect(url)
         _set_refresh_cookie(response, refresh_jwt)
         return response

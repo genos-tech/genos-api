@@ -32,7 +32,6 @@ class UserSerializer(serializers.ModelSerializer):
             "custom_status",
             "custom_status_expiry",
             "role",
-            "base_country",
             "timezone",
             "current_location",
             # Opt-out for showing the two zones above to other people. Writable
@@ -136,6 +135,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         extra_kwargs = {"email": {"validators": [crypto.refuse_ciphertext_lookalike]}}
 
     def validate_email(self, value):
+        # The signup view answers a registered address like a new one (MIP-2232) and says so here.
+        if self.context.get("allow_existing_email"):
+            return value
         if user_models.CustomUser.objects.with_email(value).exists():
             raise serializers.ValidationError(
                 "custom user with this email already exists.", code="unique"

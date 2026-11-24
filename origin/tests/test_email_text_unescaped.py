@@ -39,6 +39,10 @@ CASES = {
         {"inviter_name": NASTY, "team_name": NASTY, "invite_url": LINK, "expiry_days": 7},
         [NASTY, LINK],
     ),
+    "signup_existing_account": (
+        {"user_name": NASTY, "signin_url": LINK},
+        [NASTY, LINK],
+    ),
     "password_reset": (
         {"user_name": NASTY, "reset_url": LINK, "expiry_minutes": 30},
         [NASTY, LINK],
@@ -48,6 +52,19 @@ CASES = {
         [NASTY, LINK],
     ),
     "ai_cost_report": ({"window": NASTY, "body": NASTY}, [NASTY]),
+    "credential_created": (
+        {
+            "lang": "en",
+            "dir": "ltr",
+            "heading": NASTY,
+            "greeting": NASTY,
+            "body": NASTY,
+            "ok": NASTY,
+            "undo": NASTY,
+            "sign": NASTY,
+        },
+        [NASTY],
+    ),
     "notification_batch": (_batch_ctx(), [NASTY, LINK]),
     "ja/notification_batch": (_batch_ctx(), [NASTY, LINK]),
     "ops_alert": (

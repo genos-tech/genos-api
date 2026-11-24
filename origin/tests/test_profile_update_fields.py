@@ -137,7 +137,6 @@ class ProfileUpdateFieldTests(TestCase):
             "custom_status_expiry": "2026-08-11T09:00:00Z",
             "is_offline_forced": True,
             "role": "Engineer",
-            "base_country": "Japan",
             "phone_number": "+81-3-0000-0000",
             "current_location": "Asia/Tokyo",
             "location_shared": False,
@@ -154,7 +153,6 @@ class ProfileUpdateFieldTests(TestCase):
         self.assertIsNotNone(self.user.custom_status_expiry)
         self.assertTrue(self.user.is_offline_forced)
         self.assertEqual(self.user.role, "Engineer")
-        self.assertEqual(self.user.base_country, "Japan")
         self.assertEqual(self.user.phone_number, "+81-3-0000-0000")
         self.assertEqual(self.user.current_location, "Asia/Tokyo")
         self.assertFalse(self.user.location_shared)

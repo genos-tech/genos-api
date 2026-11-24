@@ -31,6 +31,13 @@ class BaseAPITestCase(TestCase):
         refresh.start()
         self.addCleanup(refresh.stop)
         self.client = APIClient()
+        # An API key, a webhook and an AI-app connection ask for the password again (MIP-2240).
+        # Tests of other behaviour sign in without that extra step; `test_recent_auth` turns it on
+        # (`recent_auth_gate = True`) and is where the gate itself is pinned.
+        if not getattr(self, "recent_auth_gate", False):
+            gate = mock.patch("origin.services.recent_auth.required_for", return_value=False)
+            gate.start()
+            self.addCleanup(gate.stop)
 
         self.user = User.objects.create_user(
             username="testuser",

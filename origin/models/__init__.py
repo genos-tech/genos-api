@@ -5,6 +5,7 @@ from .chat.unified_models import *
 from .common.agent_call_models import *
 from .common.briefing_models import *
 from .common.change_models import *
+from .common.erasure_models import *
 from .common.feature_models import *
 from .common.github_app_models import *
 from .common.inbox_models import *
@@ -13,6 +14,7 @@ from .common.item_activity_models import *
 from .common.mcp_connection_models import *
 from .common.member_event_models import *
 from .common.member_importance_models import *
+from .common.mfa_models import *
 from .common.notification_models import *
 from .common.ops_models import *
 from .common.sample_data_models import *

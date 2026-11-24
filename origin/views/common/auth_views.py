@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from django.core.cache import cache
 from django.db import transaction
 from django.http import JsonResponse
@@ -28,7 +29,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import demo_v2, signin_backoff
+from origin.services import demo_v2, mfa, signin_backoff
 from origin.services.credential_revocation import end_all_credentials
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
@@ -108,7 +109,7 @@ from origin.serializers.common.user_serializers import (
     UserSerializer,
 )
 from origin.services import first_month_trial, password_policy, signup_consent, start_here_note
-from origin.services.email import send_templated_email
+from origin.services.email import run_after_response, send_templated_email
 
 User = get_user_model()
 
@@ -171,6 +172,32 @@ class ResendVerificationThrottle(AuthThrottle):
     scope = "resend_verification"
 
 
+class VerifyEmailThrottle(AuthThrottle):
+    """The token is 256-bit random, so guessing is infeasible; this keeps volumetric hits (each is
+    a DB lookup) off the database. A real person opens the link once or twice (MIP-2232)."""
+
+    rate = "60/hour"
+    scope = "verify_email"
+
+
+class OAuthCallbackThrottle(AuthThrottle):
+    """The provider redirect lands here once per sign-in, and each one exchanges a code with the
+    provider and may create an account. Per address, with room for an office behind one NAT."""
+
+    rate = "120/hour"
+    scope = "oauth_callback"
+
+
+class TokenRefreshThrottle(AuthThrottle):
+    """Every page load or new tab refreshes (the access token lives in memory), so this is a volume
+    cap for a shared office address, not a guessing guard. Generous for a shared address; and it fails OPEN: a cache outage must not sign
+    everyone out the moment their access token expires (the refresh token is the secret here)."""
+
+    rate = "1200/hour"
+    scope = "token_refresh"
+    fail_closed = False
+
+
 class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
     """Signup endpoint. Deliberately create-only: the URLconf maps just
     `{"post": "create"}`, and narrowing from ModelViewSet guarantees a
@@ -207,7 +234,19 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = self.get_serializer(data=request.data)
+        # An address that already has an account gets the same answer as a new one (MIP-2232):
+        # "we sent an email". Every other field is validated first, exactly as for a new address,
+        # so a bad password or invite token answers 400 either way. The owner gets a different
+        # email ("you already have an account", or a fresh verification link if they never
+        # verified), so nobody can ask this open endpoint whether an address is registered.
+        typed_email = body.get("email") if hasattr(body, "get") else None
+        existing = None
+        if isinstance(typed_email, str) and typed_email.strip():
+            existing = User.objects.with_email(typed_email.strip()).first()
+        serializer = UserCreateSerializer(
+            data=request.data,
+            context={**self.get_serializer_context(), "allow_existing_email": existing is not None},
+        )
         if not serializer.is_valid():
             body_out = {"message": serializer.errors.items()}
             # A refused password carries a stable code so the client can say why in the
@@ -215,6 +254,25 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             if "password" in serializer.errors:
                 body_out.update(password_policy.rejection_payload(serializer.errors["password"]))
             return Response(body_out, status=status.HTTP_400_BAD_REQUEST)
+
+        if existing is not None:
+            # The new path pays for a password hash; so does this one, so the two take alike.
+            make_password(serializer.validated_data["password"])
+            if existing.is_deleted or existing.is_system_user:
+                pass  # no inbox to tell; the answer is still the same
+            elif existing.primary_auth_provider == "email" and not existing.is_email_verified:
+                _send_verification_email_after_response(
+                    existing, _issue_verification_token(existing)
+                )
+            else:
+                _send_existing_account_notice(existing)
+            return Response(
+                {
+                    "message": "verification_email_sent",
+                    "email": User.objects.normalize_email(typed_email.strip()),
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
         user = serializer.save(**signup_consent.acceptance_fields())
 
@@ -263,14 +321,9 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
 
         if user.primary_auth_provider == "email":
             raw = _issue_verification_token(user)
-            try:
-                _send_verification_email(user, raw)
-            except Exception as exc:
-                # Don't fail the signup; user can request a resend.
-                # The type only: a mail error's text quotes the address (MIP-622).
-                logger.error(
-                    "Verification email send failed user=%s: %s", user.pk, describe_exception(exc)
-                )
+            # After the response, like the existing-account notice above, so the two answers take
+            # the same time. A failure doesn't fail the signup; the user can request a resend.
+            _send_verification_email_after_response(user, raw)
             return Response(
                 {"message": "verification_email_sent", "email": user.email},
                 status=status.HTTP_201_CREATED,
@@ -306,6 +359,28 @@ def _record_signin_failed(request, email, *, reason: str) -> None:
         target_id=target.pk if target else "",
         metadata={"method": "password", "reason": reason},
     )
+
+
+def _signed_in_response(user_data: dict, access: str, refresh: str) -> dict:
+    """The body of a finished sign-in, shared by the password step and the two-factor step."""
+    return {
+        "access": access,
+        "refresh": refresh,
+        "username": user_data["username"],
+        "user_id": user_data["id"],
+        "email": user_data["email"],
+        "profile_image_file_name": user_data["profile_image_file_name"],
+        "ts_joined_at": user_data["ts_created_at"],
+        "is_offline_forced": user_data["is_offline_forced"],
+        "role": user_data["role"],
+        # The client mirrors these into localStorage and builds
+        # `myself` from it, so without them your own profile card
+        # comes back blank after every sign-out.
+        "phone_number": user_data["phone_number"],
+        "current_location": user_data["current_location"],
+        "about_me": user_data["about_me"],
+        "custom_status": user_data["custom_status"],
+    }
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -354,6 +429,30 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                     status=403,
                 )
 
+        # Two-factor (MIP-2239). A person who turned it on gets NO token here, only a pending
+        # one that authenticates nothing; `POST /signin/mfa/` mints the session after the
+        # code. The password is checked once, here, so a wrong one costs the same as for
+        # an account without two-factor, and is answered exactly as simplejwt answers it.
+        if isinstance(email, str) and isinstance(password, str) and email and password.strip():
+            candidate = User.objects.with_email(email).first()
+            if candidate is not None and candidate.is_active and mfa.is_enabled(candidate):
+                # The serializer below strips the password (a DRF CharField does), and signup
+                # and reset store it stripped, so this check has to read it the same way.
+                if not candidate.check_password(password.strip()):
+                    signin_backoff.note_failure(email, request)
+                    _record_signin_failed(request, email, reason="bad_credentials")
+                    raise AuthenticationFailed(
+                        CustomTokenObtainPairSerializer.default_error_messages["no_active_account"],
+                        "no_active_account",
+                    )
+                return JsonResponse(
+                    {
+                        "mfa_required": True,
+                        "mfa_token": mfa.issue_pending_token(candidate),
+                        "expires_in": mfa.PENDING_MAX_AGE_SECONDS,
+                    }
+                )
+
         try:
             response = super().post(request, *args, **kwargs)
         except AuthenticationFailed:
@@ -370,27 +469,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         )
 
         # Create JSON response (access token sent in response, refresh token in cookie)
-        response = JsonResponse(
-            {
-                "access": data["access"],
-                "refresh": data["refresh"],
-                "username": data["user"]["username"],
-                "user_id": data["user"]["id"],
-                "email": data["user"]["email"],
-                "profile_image_file_name": data["user"]["profile_image_file_name"],
-                "ts_joined_at": data["user"]["ts_created_at"],
-                "is_offline_forced": data["user"]["is_offline_forced"],
-                "role": data["user"]["role"],
-                "base_country": data["user"]["base_country"],
-                # The client mirrors these into localStorage and builds
-                # `myself` from it, so without them your own profile card
-                # comes back blank after every sign-out.
-                "phone_number": data["user"]["phone_number"],
-                "current_location": data["user"]["current_location"],
-                "about_me": data["user"]["about_me"],
-                "custom_status": data["user"]["custom_status"],
-            }
-        )
+        response = JsonResponse(_signed_in_response(data["user"], data["access"], data["refresh"]))
 
         # Set the refresh token in a httpOnly cookie. SameSite/Secure
         # come from settings so the cookie is `SameSite=None; Secure`
@@ -530,7 +609,6 @@ class DemoSignInView(APIView):
             "ts_joined_at": user.ts_created_at.isoformat() if user.ts_created_at else "",
             "is_offline_forced": user.is_offline_forced,
             "role": user.role or "",
-            "base_country": user.base_country or "",
             "phone_number": user.phone_number or "",
             "current_location": user.current_location or "",
             "about_me": user.about_me or "",
@@ -755,6 +833,58 @@ def _family_revoked(fam) -> bool:
         return False
 
 
+def _grace_window_gone(jti: str) -> bool:
+    """True only when the cache answered and holds no window for this jti. A cache that is down
+    says nothing, so it is NOT treated as an expired window (a revocation must never be a guess)."""
+    try:
+        return cache.get(_grace_key(jti)) is None
+    except Exception:
+        return False
+
+
+def _revoke_family_tokens(user_id, fam) -> int:
+    """Blacklist every still-valid refresh token of one login family in the database (MIP-2242).
+
+    `_revoke_family` is cache-only; this one survives a cache flush. A family is the `fam` claim,
+    so the user's outstanding tokens are decoded (unverified: they were issued by us) and matched.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+    count = 0
+    try:
+        outstanding = OutstandingToken.objects.filter(
+            user_id=user_id, expires_at__gt=timezone.now()
+        ).exclude(blacklistedtoken__isnull=False)
+        for row in outstanding.iterator():
+            try:
+                payload = RefreshToken(row.token, verify=False).payload
+            except Exception:
+                continue
+            token_fam = payload.get(_FAMILY_CLAIM) or payload.get(jwt_api_settings.JTI_CLAIM)
+            if token_fam == fam:
+                BlacklistedToken.objects.get_or_create(token=row)
+                count += 1
+    except Exception:
+        logger.exception("refresh family tokens not blacklisted")
+    return count
+
+
+def _handle_refresh_reuse(request, old, jti, user_id) -> None:
+    """A blacklisted refresh token came back outside the grace window: someone holds a copy.
+    Whoever refreshed first keeps a chain, so the whole family goes, thief and owner both; the
+    owner signs in again. Writes a security event (ids and counts only)."""
+    fam = old.get(_FAMILY_CLAIM) or jti
+    _revoke_family(fam)
+    revoked = _revoke_family_tokens(user_id, fam)
+    user = User.objects.filter(id=user_id).first() if user_id else None
+    record_security_event(
+        SecurityAction.REFRESH_REUSED,
+        request=request,
+        actor=user,
+        metadata={"tokens_revoked": revoked},
+    )
+
+
 def _consume_grace(jti: str, user_id) -> bool:
     """One use of the window. Fails closed on anything unexpected, including a cache that is down."""
     try:
@@ -769,6 +899,7 @@ def _consume_grace(jti: str, user_id) -> bool:
 class CookieTokenRefreshView(TokenRefreshView):
     # The inherited `post` uses this too, so both ways in scrub the claim.
     serializer_class = _ScrubbingTokenRefreshSerializer
+    throttle_classes = [TokenRefreshThrottle]
 
     # Refresh reads the httpOnly cookie, never the body (MIP-1882). POST is the way in; GET stays
     # for one release so a cached frontend keeps working while it rolls over, then it goes.
@@ -805,6 +936,8 @@ class CookieTokenRefreshView(TokenRefreshView):
         if graced:
             # Rotated before: only the grace window lets it through.
             if not _consume_grace(jti, user_id):
+                if _grace_window_gone(jti):
+                    _handle_refresh_reuse(request, old, jti, user_id)
                 return Response({"error": "Invalid or expired refresh token"}, status=403)
         else:
             # Opened BEFORE the rotation commits, so another tab that arrives between the
@@ -1044,24 +1177,27 @@ class PasswordResetRequestView(APIView):
                 ]
             )
             reset_url = f"{settings.FRONTEND_BASE_URL}/reset-password?token={token}"
-            try:
-                send_templated_email(
-                    to=user.email,
+            # After the response (MIP-2232): sent inside the request, a slow answer meant the
+            # account exists. A failure is logged for ops and never reaches the client (it would
+            # also leak that the email exists). Everything the thread needs is read here.
+            pk, to, name = user.pk, user.email, user.username
+            expiry = settings.PASSWORD_RESET_TOKEN_EXPIRY_MINUTES
+            run_after_response(
+                lambda: send_templated_email(
+                    to=to,
                     subject="Reset your Genos password",
                     template_base="password_reset",
                     context={
                         "reset_url": reset_url,
-                        "expiry_minutes": settings.PASSWORD_RESET_TOKEN_EXPIRY_MINUTES,
-                        "user_name": user.username,
+                        "expiry_minutes": expiry,
+                        "user_name": name,
                     },
-                )
-            except Exception as exc:
-                # Don't leak SMTP failures to the client (would also
-                # leak that the email exists). Log for ops to chase.
+                ),
                 # The type only: a mail error's text quotes the address (MIP-622).
-                logger.error(
-                    "Password reset email send failed user=%s: %s", user.pk, describe_exception(exc)
-                )
+                on_error=lambda exc: logger.error(
+                    "Password reset email send failed user=%s: %s", pk, describe_exception(exc)
+                ),
+            )
 
         return Response(status=status.HTTP_200_OK)
 
@@ -1195,6 +1331,39 @@ def _send_verification_email(user, raw_token: str) -> None:
     )
 
 
+def _send_verification_email_after_response(user, raw_token: str) -> None:
+    pk = user.pk
+    run_after_response(
+        lambda: _send_verification_email(user, raw_token),
+        # The type only: a mail error's text quotes the address (MIP-622).
+        on_error=lambda exc: logger.error(
+            "Verification email send failed user=%s: %s", pk, describe_exception(exc)
+        ),
+    )
+
+
+def _send_existing_account_notice(user) -> None:
+    """Tell the owner that someone tried to sign up with their address (MIP-2232). After the
+    response; the body names no one but the owner's own username."""
+    pk = user.pk
+    context = {
+        "user_name": user.username,
+        "signin_url": f"{settings.FRONTEND_BASE_URL}/signin",
+    }
+    to = user.email
+    run_after_response(
+        lambda: send_templated_email(
+            to=to,
+            subject="You already have a Genos account",
+            template_base="signup_existing_account",
+            context=context,
+        ),
+        on_error=lambda exc: logger.error(
+            "Existing-account notice failed user=%s: %s", pk, describe_exception(exc)
+        ),
+    )
+
+
 class VerifyEmailView(APIView):
     """Consume a one-time verification token from the email link.
 
@@ -1208,6 +1377,7 @@ class VerifyEmailView(APIView):
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [VerifyEmailThrottle]
 
     def get(self, request: Request):
         token = request.query_params.get("token", "")
@@ -1270,11 +1440,5 @@ class ResendVerificationView(APIView):
             and not user.is_email_verified
         ):
             raw = _issue_verification_token(user)
-            try:
-                _send_verification_email(user, raw)
-            except Exception as exc:
-                # The type only: a mail error's text quotes the address (MIP-622).
-                logger.error(
-                    "Resend verification email failed user=%s: %s", user.pk, describe_exception(exc)
-                )
+            _send_verification_email_after_response(user, raw)
         return Response(status=status.HTTP_200_OK)

@@ -594,6 +594,9 @@ _PUBLIC_DRF = {
     "api/v2/user/signup/",
     "api/v2/user/signin/",
     "api/v2/user/signin/refresh/",
+    # MIP-2239: the second step of two-factor sign-in. A signed five-minute pending token plus a
+    # code; a per-account lock after five wrong codes and a per-IP throttle.
+    "api/v2/user/signin/mfa/",
     "api/v2/user/demo/",
     "api/v2/user/signout/",
     "api/v2/user/password-reset/request/",
@@ -608,6 +611,10 @@ _PUBLIC_DRF = {
     "api/v2/billing/stripe/webhook/",
     "api/v2/team/invite/preview/",
     "api/public/v1/openapi.json",
+    # MIP-2228: an HTML note's page, loaded by a sandboxed frame that has no credentials by design.
+    # Its single-use signed token (minted only after the note's read ACL) is the capability; header
+    # CSP sandbox, `Sec-Fetch-Dest: iframe` only, per-IP throttle; 404 for everything else.
+    "h/<str:token>",
     "api/public/v1/secret-scanning/",
 }
 

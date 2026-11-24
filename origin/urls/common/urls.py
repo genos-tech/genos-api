@@ -4,6 +4,7 @@ from origin.views.common.agent_work_views import AgentWorkView
 from origin.views.common.api_key_views import (
     ApiKeyDetailView,
     ApiKeyListCreateView,
+    ApiKeyResumeView,
     TeamApiKeyDetailView,
     TeamApiKeyListView,
 )
@@ -61,6 +62,7 @@ from origin.views.common.mcp_connection_views import (
     McpConnectionDetailView,
     McpConnectionListView,
     McpConnectionQuietView,
+    McpConnectionResumeView,
     TeamMcpConnectionDetailView,
     TeamMcpConnectionListView,
 )
@@ -76,6 +78,14 @@ from origin.views.common.mention_group_views import (
     MentionGroupMembersView,
     MentionGroupResolveView,
     MentionGroupView,
+)
+from origin.views.common.mfa_views import (
+    MfaDisableView,
+    MfaEnableView,
+    MfaRecoveryCodesView,
+    MfaSetupView,
+    MfaStatusView,
+    SignInMfaView,
 )
 from origin.views.common.notification_views import (
     NotificationPreferenceView,
@@ -96,6 +106,7 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimRespondView,
     TeamOwnershipClaimStatusView,
 )
+from origin.views.common.recent_auth_views import ConfirmPasswordView
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.sample_data_views import SampleDataView
 from origin.views.common.schedule_views import ScheduleDetailView, ScheduleListView, ScheduleRunView
@@ -172,6 +183,14 @@ urlpatterns = [
     # User
     path("api/v2/user/signup/", user_list, name="signup"),
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/v2/user/signin/mfa/", SignInMfaView.as_view(), name="signin_mfa"),
+    path("api/v2/user/mfa/", MfaStatusView.as_view(), name="mfa_status"),
+    path("api/v2/user/mfa/setup/", MfaSetupView.as_view(), name="mfa_setup"),
+    path("api/v2/user/mfa/enable/", MfaEnableView.as_view(), name="mfa_enable"),
+    path("api/v2/user/mfa/disable/", MfaDisableView.as_view(), name="mfa_disable"),
+    path(
+        "api/v2/user/mfa/recovery-codes/", MfaRecoveryCodesView.as_view(), name="mfa_recovery_codes"
+    ),
     path("api/v2/user/signin/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
     path("api/v2/user/demo/", DemoSignInView.as_view(), name="demo_signin"),
     path("api/v2/user/demo/workspace/", DemoWorkspaceView.as_view(), name="demo_workspace"),
@@ -433,6 +452,11 @@ urlpatterns = [
         name="account_export",
     ),
     path(
+        "api/v2/user/confirm-password/",
+        ConfirmPasswordView.as_view(),
+        name="confirm_password",
+    ),
+    path(
         "api/v2/user/account/",
         AccountDeletionView.as_view(),
         name="account_deletion",
@@ -505,6 +529,16 @@ urlpatterns = [
     ),
     path("api/v2/api-keys/", ApiKeyListCreateView.as_view(), name="api_keys"),
     path("api/v2/api-keys/<uuid:key_id>/", ApiKeyDetailView.as_view(), name="api_key_detail"),
+    path(
+        "api/v2/api-keys/<uuid:key_id>/resume/",
+        ApiKeyResumeView.as_view(),
+        name="api_key_resume",
+    ),
+    path(
+        "api/v2/mcp/connections/<uuid:connection_id>/resume/",
+        McpConnectionResumeView.as_view(),
+        name="mcp_connection_resume",
+    ),
     # Connecting an AI app over MCP (MIP-1077): the consent page's two calls.
     path(
         "api/v2/mcp/oauth/consent/context/",

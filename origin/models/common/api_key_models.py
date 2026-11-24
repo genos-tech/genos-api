@@ -100,6 +100,10 @@ class ApiKey(models.Model):
     last_used_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
+    # Paused by the detector (MIP-2259), not ended: reversible by the owner. A suspended key is
+    # refused like a revoked one until `resume()`.
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspended_reason = models.CharField(max_length=32, blank=True, default="")
     created_by = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
@@ -164,6 +168,10 @@ class ApiKey(models.Model):
             "key_name": self.name,
             "key_prefix": self.prefix,
         }
+
+    @property
+    def is_suspended(self) -> bool:
+        return self.suspended_at is not None
 
     def revoke(self) -> None:
         if self.revoked_at is None:

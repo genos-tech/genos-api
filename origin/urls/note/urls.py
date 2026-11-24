@@ -3,7 +3,12 @@ from django.urls import path
 from origin.views.note.chat_note_views import *
 from origin.views.note.collab_access_views import CollabAccessCheckView
 from origin.views.note.favorite_note_views import *
-from origin.views.note.html_note_views import HtmlNoteView
+from origin.views.note.html_note_views import (
+    HtmlNoteFrameView,
+    HtmlNoteImportView,
+    HtmlNotePageView,
+    HtmlNoteView,
+)
 from origin.views.note.note_folder_tag_views import (
     NoteFolderTagLinkView,
     NoteFolderTagView,
@@ -200,9 +205,23 @@ urlpatterns = [
         name="note_version_restore",
     ),
     # HTML notes (MIP-2214): the saved page, under the note's own ACL. 404 while HTML_NOTES is off.
+    # Import a `.html` file as a new HTML note (MIP-2215): the web twin of the MCP `save_html_note`.
+    path(
+        "api/v3/notes/html/import/",
+        HtmlNoteImportView.as_view(),
+        name="note_html_import",
+    ),
     path(
         "api/v3/notes/<str:note_type>/<int:note_id>/html",
         HtmlNoteView.as_view(),
         name="note_html",
     ),
+    # (MIP-2228) the viewer's short-lived frame URL, under the same read ACL ...
+    path(
+        "api/v3/notes/<str:note_type>/<int:note_id>/html/frame",
+        HtmlNoteFrameView.as_view(),
+        name="note_html_frame",
+    ),
+    # ... and the page it points at: public, the signed token is the capability, own header policy.
+    path("h/<str:token>", HtmlNotePageView.as_view(), name="note_html_page"),
 ]

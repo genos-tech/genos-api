@@ -199,6 +199,9 @@ REGISTRY = {
     "origin.views.common.api_key_views.ApiKeyDetailView": self_only(
         "ApiKey filtered on user=request.user"
     ),
+    "origin.views.common.api_key_views.ApiKeyResumeView": self_only(
+        "ApiKey filtered on user=request.user (MIP-2259)"
+    ),
     "origin.views.common.api_key_views.ApiKeyListCreateView": checked("is_team_member"),
     "origin.views.common.api_key_views.TeamApiKeyDetailView": checked("_managed_team"),
     "origin.views.common.api_key_views.TeamApiKeyListView": checked("_managed_team"),
@@ -220,6 +223,9 @@ REGISTRY = {
         "_managed_team"
     ),
     "origin.views.common.mcp_connection_views.TeamMcpConnectionListView": checked("_managed_team"),
+    "origin.views.common.mcp_connection_views.McpConnectionResumeView": self_only(
+        "the caller's own connected app: looked up by id AND user=request.user (MIP-2259)"
+    ),
     "origin.views.common.mcp_connection_views.McpConnectionDetailView": self_only(
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
@@ -337,6 +343,23 @@ REGISTRY = {
     ),
     "origin.views.common.auth_views.CustomTokenObtainPairView": public(
         "sign-in; SignInBurstThrottle + SignInSustainedThrottle per IP"
+    ),
+    "origin.views.common.mfa_views.SignInMfaView": public(
+        "second step of sign-in: a signed five-minute pending token plus a code; per-account lock "
+        "after five wrong codes, MfaSignIn{Burst,Sustained}Throttle per IP"
+    ),
+    "origin.views.common.mfa_views.MfaStatusView": self_only("the caller's own two-factor status"),
+    "origin.views.common.mfa_views.MfaSetupView": self_only(
+        "the caller's own two-factor setup; needs the password"
+    ),
+    "origin.views.common.mfa_views.MfaEnableView": self_only(
+        "confirms the caller's own two-factor setup with a code"
+    ),
+    "origin.views.common.mfa_views.MfaDisableView": self_only(
+        "turns off the caller's own two-factor; needs the password"
+    ),
+    "origin.views.common.mfa_views.MfaRecoveryCodesView": self_only(
+        "replaces the caller's own recovery codes; needs the password"
     ),
     "origin.views.common.auth_views.DemoSignInView": public(
         "creates a throwaway demo tenant; DemoSignInThrottle per IP"
@@ -569,6 +592,9 @@ REGISTRY = {
     "origin.views.common.team_views.TeamMembersView": checked("is_team_member"),
     "origin.views.common.team_views.TeamProfileImageView": checked("can_manage"),
     # views.common.user_views
+    "origin.views.common.recent_auth_views.ConfirmPasswordView": self_only(
+        "checks the caller's own password and answers a short-lived token for them alone"
+    ),
     "origin.views.common.user_views.AccountDeletionView": self_only(
         "deletes the caller's own account"
     ),
@@ -616,6 +642,17 @@ REGISTRY = {
     ),
     # views.note.html_note_views (MIP-2214): the saved page, under the note's own read ACL
     "origin.views.note.html_note_views.HtmlNoteView": checked("require_read_role"),
+    # (MIP-2228) the viewer's frame URL: the note's read ACL, then a signed 10-minute token
+    "origin.views.note.html_note_views.HtmlNoteFrameView": checked("require_read_role"),
+    # (MIP-2228) the page itself, in a sandboxed frame that has no credentials by design
+    "origin.views.note.html_note_views.HtmlNotePageView": public(
+        "bearer of a signed token for one note revision (10 minutes, minted only after the note's "
+        "read ACL); header CSP sandbox, no cookie; HtmlNotePageThrottle per IP"
+    ),
+    # (MIP-2215) the web import of a .html file: team membership, then the MCP save tool's own checks
+    "origin.views.note.html_note_views.HtmlNoteImportView": checked(
+        "require_team_member_or_response"
+    ),
     # views.note.note_folder_tag_views
     "origin.views.note.note_folder_tag_views.NoteFolderTagLinkView": checked("get_folder_role"),
     "origin.views.note.note_folder_tag_views.NoteFolderTagView": checked(

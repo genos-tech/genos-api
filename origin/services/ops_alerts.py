@@ -236,6 +236,8 @@ _SECURITY_SUMMARIES = {
     "alert.forbidden_burst": "Burst of refused requests",
     "alert.signin_spray": "Password spray: failed sign-ins across many accounts",
     "alert.write_volume": "One key or connected app rewrote many items",
+    "alert.ops_command_unlisted": "Operator ran a command outside the allowlist",
+    "alert.read_volume": "Unusual read volume",
 }
 
 
@@ -260,9 +262,15 @@ def raise_security_alert(event) -> None:
         summary = f"{summary}: {meta['accounts']} accounts in {meta.get('window_seconds', '?')} s"
     if "rows" in meta:
         summary = f"{summary}: {meta['rows']} items in {meta.get('window_seconds', '?')} s"
+    if meta.get("command"):
+        summary = f"{summary}: {meta['command']}"
     raise_alert(
         OpsAlertKind.SECURITY,
-        f"security:{event.action}:{who}",
+        (
+            f"security:{event.action}:{who}:{meta['command']}"
+            if meta.get("command")
+            else f"security:{event.action}:{who}"
+        )[:128],
         f"{summary} ({who})",
         {
             "action": event.action,
@@ -270,7 +278,7 @@ def raise_security_alert(event) -> None:
             "caller": who,
             "source": event.source,
             "ip": event.ip or "",
-            **{k: meta[k] for k in ("path", "method") if k in meta},
+            **{k: meta[k] for k in ("path", "method", "command") if k in meta},
         },
     )
 
