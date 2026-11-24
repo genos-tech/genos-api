@@ -12,7 +12,7 @@ from django.db import migrations
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0279_skill_grants"),
+        ("origin", "0286_erasure_event"),
     ]
 
     operations = [
