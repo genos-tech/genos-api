@@ -32,9 +32,11 @@ from django.db import transaction
 
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.models.note.version_note_models import NoteVersionMaster
 from origin.services import guide_notes
 from origin.services.collab_push import push_note_body_now
 from origin.services.demo_seeder import _body
+from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.utils.note_version import keep_current_state, snapshot_note_version
 
 log = logging.getLogger(__name__)
@@ -274,5 +276,123 @@ def refresh_guide_notes(*, apply: bool = False, team_id=None) -> GuideRefreshRep
         report.deleted_left,
         report.changed_underneath,
         report.pushes or "none",
+    )
+    return report
+
+
+@dataclass
+class DedupeReport:
+    """Counts only: no note ids, titles or owners."""
+
+    folders: int = 0
+    removed: int = 0  # unedited old-title copies deleted (or that would be)
+    awaiting_rename: int = (
+        0  # old title, no current-title note beside it: the normal refresh retitles it
+    )
+    edited_left: int = 0  # old title, text is not a shipped text: the member's own
+    history_left: int = (
+        0  # unedited text, but a person saved a version of it, or it is shared or has children
+    )
+    refused: int = 0  # the delete rules refused (e.g. a skill's text)
+    changed_underneath: int = 0  # edited between the scan and the delete: left alone
+
+
+def _only_ours(note_id: int, owner_id) -> bool:
+    """True when nobody but the owner ever touched the note: no person-saved version, no other
+    permission holder, no child note. Anything else is not a pure seeded copy: leave it."""
+    if PersonalNoteMaster.objects.filter(parent_note_id=note_id).exists():
+        return False
+    if (
+        NotePermissionMaster.objects.filter(
+            note_type=guide_notes.NOTE_TYPE_PERSONAL, note_id=note_id
+        )
+        .exclude(user_id=owner_id)
+        .exists()
+    ):
+        return False
+    return not NoteVersionMaster.objects.filter(
+        note_type=guide_notes.NOTE_TYPE_PERSONAL, note_id=note_id, editor__isnull=False
+    ).exists()
+
+
+def _dedupe_one(folder, locale, notes, apply, report) -> None:
+    by_title: dict[str, list] = {}
+    for note_id, title, body in notes:
+        by_title.setdefault(title, []).append((note_id, body))
+    for old, new in RENAMED_TITLES[locale].items():
+        for note_id, body in by_title.get(old, []):
+            if new not in by_title:
+                report.awaiting_rename += 1
+            elif guide_notes.body_fingerprint(body) not in shipped_fingerprints(locale, old):
+                report.edited_left += 1
+            elif not _only_ours(note_id, folder.owner_id):
+                report.history_left += 1
+            elif not apply:
+                report.removed += 1
+            else:
+                # Recheck right before the delete: the member may have typed since the scan.
+                fresh = (
+                    PersonalNoteMaster.objects.filter(note_id=note_id, title=old)
+                    .values_list("body", flat=True)
+                    .first()
+                )
+                if fresh is None or guide_notes.body_fingerprint(fresh) not in shipped_fingerprints(
+                    locale, old
+                ):
+                    report.changed_underneath += 1
+                    continue
+                try:
+                    delete_note(team_id=folder.team_id, family="personal", note_id=note_id)
+                    report.removed += 1
+                except DeleteRefused:
+                    report.refused += 1
+
+
+def dedupe_renamed_guide_notes(*, apply: bool = False, team_id=None) -> DedupeReport:
+    """Remove an unedited old-title copy when its folder already holds the current-title note.
+
+    Cleans up the 2026-11-24 run that added the manual's new-title notes next to the August copies
+    while `RENAMED_TITLES['ja']` was empty. A folder without the new note is left for `refresh_guide_notes`
+    (replace + retitle). The app has no trash: `delete_note` is a hard delete (its versions go too), which
+    loses nothing here because the text is a shipped one, a person never saved a version of it, and
+    the current note sits beside it. Idempotent, folders read in batches, never outside a guide folder."""
+    report = DedupeReport()
+    for locale, (folder_name, _) in guide_notes._EDITIONS.items():
+        renames = RENAMED_TITLES[locale]
+        if not renames:
+            continue
+        titles = set(renames) | set(renames.values())
+        folders = PersonalNoteFolder.objects.filter(
+            name=folder_name, scope=PersonalNoteFolder.SCOPE_PERSONAL, team__isnull=False
+        ).order_by("folder_id")
+        if team_id:
+            folders = folders.filter(team_id=team_id)
+        folder_ids = list(folders.values_list("folder_id", flat=True))
+        for start in range(0, len(folder_ids), BATCH_FOLDERS):
+            batch = list(
+                PersonalNoteFolder.objects.filter(
+                    folder_id__in=folder_ids[start : start + BATCH_FOLDERS]
+                )
+            )
+            by_folder: dict[int, list] = {}
+            for folder_id, note_id, title, body in PersonalNoteMaster.objects.filter(
+                folder_id__in=[f.folder_id for f in batch], title__in=titles
+            ).values_list("folder_id", "note_id", "title", "body"):
+                by_folder.setdefault(folder_id, []).append((note_id, title, body))
+            for folder in batch:
+                report.folders += 1
+                _dedupe_one(folder, locale, by_folder.get(folder.folder_id, []), apply, report)
+    log.info(
+        "[guide-dedupe] %s team=%s folders=%d removed=%d awaiting_rename=%d edited_left=%d "
+        "history_left=%d refused=%d changed_underneath=%d",
+        "APPLY" if apply else "DRY-RUN",
+        team_id or "all",
+        report.folders,
+        report.removed,
+        report.awaiting_rename,
+        report.edited_left,
+        report.history_left,
+        report.refused,
+        report.changed_underneath,
     )
     return report
