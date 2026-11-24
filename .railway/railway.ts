@@ -210,6 +210,7 @@ export default defineRailway(() => {
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     replicas: { "asia-southeast1-eqsg3a": 1 },
     env: {
+      AI_COST_METER: preserve(),
       ALLOWED_HOSTS: preserve(),
       DATABASE_URL: preserve(),
       DJANGO_DEBUG: preserve(),
@@ -232,6 +233,8 @@ export default defineRailway(() => {
       OPENSEARCH_USERNAME: preserve(),
       OPENSEARCH_USE_SSL: preserve(),
       SEARCH_EMBEDDING_BATCH_SIZE: preserve(),
+      VERTEX_EMBEDDING_DIMENSIONS: preserve(),
+      VERTEX_EMBEDDING_MODEL: preserve(),
     },
     deploy: {
       cronSchedule: "*/10 * * * *",
