@@ -64,6 +64,7 @@ warning. The fix is to recreate the index:
 
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from django.core.management.base import CommandError
@@ -72,7 +73,7 @@ from opensearchpy.exceptions import NotFoundError
 from origin.management.cron_command import CronCommand
 from origin.search_engine import acl_dirty, repair
 from origin.search_engine.index_config import INDEX_SCHEMA_VERSION
-from origin.search_engine.ingestion import ingest_all
+from origin.search_engine.ingestion import TEAM_SCOPED_ENTITY_TYPES, ingest_all
 from origin.search_engine.opensearch_client import get_client, get_index_alias
 from origin.search_engine.purge import sweep_orphans
 
@@ -126,6 +127,15 @@ class Command(CronCommand):
                 "the heartbeat's last successful run (minus the same "
                 "overlap) when that is earlier, so a skipped or failed run "
                 "is covered by the next one. Set by railway-reindexer.toml."
+            ),
+        )
+        parser.add_argument(
+            "--team-id",
+            default=None,
+            help=(
+                "Index only this team's entities (a whole-team pass, no window). No orphan "
+                "sweep and no ACL-mark claim, so it never stands in for the cron. Used by the "
+                "sign-up, starter-seed and team-join hook (MIP-2374)."
             ),
         )
         parser.add_argument(
@@ -210,6 +220,10 @@ class Command(CronCommand):
         if not options.get("dry_run") and not get_client().ping():
             raise CommandError("OpenSearch is unreachable (ping failed); aborting reindex.")
 
+        if options.get("team_id"):
+            self._handle_team(options)
+            return
+
         since = None
         if options.get("since"):
             since = datetime.fromisoformat(options["since"])
@@ -278,6 +292,32 @@ class Command(CronCommand):
         if sweep_stats is not None:
             payload["orphan_sweep"] = sweep_stats
         self.stdout.write(json.dumps(payload, indent=2))
+
+    def _handle_team(self, options):
+        """One team's pass: `ingest_all(team_id=...)` and nothing else."""
+        for flag in (
+            "since",
+            "since_minutes",
+            "catch_up",
+            "repair",
+            "purge_orphans_only",
+            "heartbeat",
+        ):
+            if options.get(flag):
+                raise CommandError(f"--team-id cannot be combined with --{flag.replace('_', '-')}.")
+        try:
+            team_id = str(uuid.UUID(options["team_id"]))
+        except ValueError:
+            raise CommandError("--team-id must be a team UUID.") from None
+        entity_types = options.get("entity_types")
+        bad = set(entity_types or ()) - set(TEAM_SCOPED_ENTITY_TYPES)
+        if bad:
+            raise CommandError(f"--team-id covers only {', '.join(TEAM_SCOPED_ENTITY_TYPES)}.")
+        dry_run = options.get("dry_run", False)
+        self.stdout.write(f"Team reindex starting for {team_id}...")
+        stats = ingest_all(team_id=team_id, entity_types=entity_types, dry_run=dry_run)
+        self.stdout.write(self.style.SUCCESS("Team reindex complete."))
+        self.stdout.write(json.dumps({"team_id": team_id, "ingestion": stats.as_dict()}, indent=2))
 
     def _repair(self, options):
         """Report drift; with --apply fix the tracking table. Returns the

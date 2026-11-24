@@ -62,36 +62,46 @@ from origin.search_engine.text_extraction import extract_text
 
 
 def iter_dm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_DM, "dm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_DM, "dm", since, dirty, team_id)
 
 
 def iter_gm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_GM, "gm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_GM, "gm", since, dirty, team_id)
 
 
 def iter_mdm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_MDM, "mdm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_MDM, "mdm", since, dirty, team_id)
 
 
 def iter_pm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_PM, "pm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_PM, "pm", since, dirty, team_id)
 
 
 def iter_all_chat_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from iter_dm_chunks(since, dirty)
-    yield from iter_gm_chunks(since, dirty)
-    yield from iter_mdm_chunks(since, dirty)
-    yield from iter_pm_chunks(since, dirty)
+    yield from iter_dm_chunks(since, dirty, team_id)
+    yield from iter_gm_chunks(since, dirty, team_id)
+    yield from iter_mdm_chunks(since, dirty, team_id)
+    yield from iter_pm_chunks(since, dirty, team_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -100,7 +110,11 @@ def iter_all_chat_chunks(
 
 
 def _iter_kind_chunks(
-    kind_code: int, label: str, since: Optional[datetime], dirty: Optional[DirtyScopes] = None
+    kind_code: int,
+    label: str,
+    since: Optional[datetime],
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     """Yield one EntityChunks per (channel, thread) for a single chat kind.
 
@@ -111,6 +125,9 @@ def _iter_kind_chunks(
     channels = Channel.objects.filter(kind=kind_code, is_deleted=False).select_related(
         "project", "team"
     )
+    if team_id is not None:
+        # One team's pass (MIP-2374): the same chunks a full pass writes for it.
+        channels = channels.filter(team_id=team_id)
 
     if since is not None:
         dirty_channel_ids = set(

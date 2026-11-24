@@ -957,6 +957,14 @@ _OPENSEARCH_INDEX, _OPENSEARCH_ALIAS = resolve_index_names(
 # returns. "0" builds it inside the request again (tests do).
 DEMO_PROVISION_IN_BACKGROUND = os.environ.get("DEMO_PROVISION_IN_BACKGROUND", "1") != "0"
 
+# MIP-2374: how a sign-up / starter seed / team join indexes the new team. "subprocess" runs
+# `opensearch_reindex --team-id` in a child process (at most MAX_PROCS at once, killed after
+# TIMEOUT_S); "thread" is the rollback (the same one-team pass on a thread in the web worker);
+# "off" does nothing. The 10-minute cron indexes the team either way if this run is lost.
+SEARCH_TEAM_REINDEX_MODE = os.environ.get("SEARCH_TEAM_REINDEX_MODE", "subprocess")
+SEARCH_TEAM_REINDEX_MAX_PROCS = int(os.environ.get("SEARCH_TEAM_REINDEX_MAX_PROCS", "2"))
+SEARCH_TEAM_REINDEX_TIMEOUT_S = int(os.environ.get("SEARCH_TEAM_REINDEX_TIMEOUT_S", "600"))
+
 SEARCH_ENGINE = {
     "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
     "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),
