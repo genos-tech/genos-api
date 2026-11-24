@@ -38,7 +38,7 @@ from typing import Any
 
 from django.db.models import Q
 
-from origin.models.chat.unified_models import Channel, ChannelKind
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.acl import active_project_owners
@@ -71,6 +71,10 @@ NO_PROJECT = "This report needs a project or a milestone of this team."
 NOT_TEAM = (
     "Not everyone in that chat is on the team, so not everyone could read a team report. Post it "
     "in a chat of team members only."
+)
+NOT_EVERYONE_IN_CHAT = (
+    "Not everyone who reads that chat is in the group chat you picked, so not everyone could "
+    "read its report. Pick a chat all of them are in, or post it in a chat only you are in."
 )
 NOT_EVERYONE = (
     "Not everyone in that chat is on the project, so not everyone could read its report. Post "
@@ -143,7 +147,9 @@ def problem(
     if reader_ids <= {str(user_id)}:
         return None  # nobody else reads it: it is as private as the Inbox
     if job is not None and job.share_chats:
-        return None  # names only chats every reader is in (decided at run, from the readers)
+        # A report about ONE chosen chat (MIP-2348): everyone who reads this chat must be in it.
+        # The sentence names nobody. Without a choice, the run names only chats all are in.
+        return _picked_chat_problem(team_id, reader_ids, params)
     if job is not None and job.share_team:
         return None if reader_ids <= team_member_ids(team_id) else NOT_TEAM
     if job is None or job.share_project is None:
@@ -169,6 +175,23 @@ def problem(
     if owner:
         allowed.add(str(owner))
     return None if reader_ids <= allowed else NOT_EVERYONE
+
+
+def _picked_chat_problem(team_id: Any, reader_ids: set[str], params: dict[str, Any]) -> str | None:
+    picked = params.get("channel_id")
+    if picked in (None, ""):
+        return None  # names only chats every reader is in (decided at run, from the readers)
+    try:
+        key = uuid.UUID(str(picked))
+    except ValueError:
+        return NOT_EVERYONE_IN_CHAT
+    members = {
+        str(i)
+        for i in ChannelMember.objects.filter(
+            channel_id=key, channel__team_id=team_id, is_deleted=False
+        ).values_list("user_id", flat=True)
+    }
+    return None if reader_ids <= members else NOT_EVERYONE_IN_CHAT
 
 
 def readable_ids(user_id: Any, channel_ids: Any) -> set[Any]:
