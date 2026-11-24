@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from django.core.cache import cache
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -55,34 +54,23 @@ DEMO_LIMIT_MESSAGE = (
     "The demo's AI is at its limit for today. Create a free account to keep using Genos AI."
 )
 
-_IS_DEMO_TTL = 300
 _COUNTER_TTL = 2 * 24 * 3600
 
 
 def is_demo_user(user_id: str | None) -> bool:
-    """Whether `user_id` is a demo visitor. Cached five minutes; False for an unknown user or on
-    any error (a lookup that cannot run must not turn a real customer into a demo user)."""
+    """Whether `user_id` is a demo visitor. Read with the effective tier (one query, cached 60s,
+    shared with every tier check), so it costs nothing extra on a path that reads the tier anyway.
+    False for an unknown user or on any error: a lookup that cannot run must not turn a real
+    customer into a demo user."""
     if not user_id:
         return False
-    key = f"demo_user:{user_id}"
     try:
-        cached = cache.get(key)
-        if cached is not None:
-            return bool(cached)
-    except Exception:  # noqa: BLE001
-        log.debug("demo user cache read failed", exc_info=True)
-    try:
-        from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+        from origin.search_engine.quota import resolve_effective_tier  # noqa: PLC0415
 
-        found = CustomUser.objects.filter(id=user_id, is_demo=True).exists()
+        return bool(resolve_effective_tier(str(user_id)).get("is_demo"))
     except Exception:  # noqa: BLE001
         log.debug("demo user lookup failed", exc_info=True)
         return False
-    try:
-        cache.set(key, found, _IS_DEMO_TTL)
-    except Exception:  # noqa: BLE001
-        pass
-    return found
 
 
 def _day() -> str:
