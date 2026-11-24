@@ -2679,6 +2679,10 @@ SECURITY_EVENT_RETENTION_MIN_DAYS = 90
 # raise a `security.alert`. Normal use hits a 403 rarely; walking through
 # ids that aren't yours hits one per id.
 SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
+# MIP-2237: wrong passwords for one typed address within an hour before its sign-ins back off,
+# and how many distinct addresses failing within an hour count as a password spray.
+SIGNIN_BACKOFF_FAILURES = int(os.environ.get("SIGNIN_BACKOFF_FAILURES", "5"))
+SIGNIN_SPRAY_ACCOUNTS = int(os.environ.get("SIGNIN_SPRAY_ACCOUNTS", "50"))
 
 # --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
 # Who `ops_alert_tick` mails, through the same Resend transport as every
