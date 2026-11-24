@@ -303,7 +303,7 @@ class SizeAndRateTests(HtmlBase):
 
     def test_the_monthly_note_quota_applies_to_a_new_page(self):
         with mock.patch(
-            "origin.views.public.mcp.html_notes.save_html_note.check_remaining_monthly",
+            "origin.services.html_notes.check_remaining_monthly",
             return_value=(False, 5, 5),
         ):
             text = self.refused(SAVE, html=GOOD, note_type="personal", title="t")
@@ -311,9 +311,7 @@ class SizeAndRateTests(HtmlBase):
         self.assertEqual(PersonalNoteMaster.objects.count(), 0)
 
     def test_a_new_page_is_counted_against_the_note_quota(self):
-        with mock.patch(
-            "origin.views.public.mcp.html_notes.save_html_note.increment_usage"
-        ) as increment:
+        with mock.patch("origin.services.html_notes.increment_usage") as increment:
             self.save()
         increment.assert_called_once()
 
@@ -452,7 +450,7 @@ class ReplaceTests(HtmlBase):
     def test_a_replace_into_an_archived_project_is_refused(self):
         made = self.save(note_type="task", project_id=self.project.project_id)
         with mock.patch(
-            "origin.views.public.mcp.html_notes.save_html_note.archived_note_refusal",
+            "origin.services.html_notes.archived_note_refusal",
             return_value="This project is archived.",
         ):
             text = self.refused(
@@ -853,7 +851,7 @@ class CheapChecksComeBeforeTheScan(HtmlBase):
 class LiveEditorTests(HtmlBase):
     """A replaced page's placeholder reaches an open editor, as `update_note` does for its body."""
 
-    PUSH = "origin.views.public.mcp.html_notes.save_html_note.push_note_body_now"
+    PUSH = "origin.services.html_notes.push_note_body_now"
 
     def test_a_replace_pushes_the_new_placeholder_to_the_live_document(self):
         note = self.html_note()
