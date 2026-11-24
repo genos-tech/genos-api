@@ -1,8 +1,20 @@
 {
-  "release": "v0.5.3",
+  "release": "v0.6.0",
   "source": "https://github.com/genos-tech/genos-claude-plugin",
-  "docs_ref": "079081567b1d28c1f374cc41c5278a0963d3d016",
+  "docs_ref": "d1a502d405e03745e8ee255c8c11d256e26bc8e0",
   "skills": [
+    {
+      "slug": "create-task",
+      "title": "Create a task",
+      "description": "Create one task, or a few, in Genos with its place and its links always set: duplicate search, a parent that will outlive it (a task or a milestone), what blocks it and what it blocks (existing tasks too), a real body, and a read-back of the links.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/create-task/SKILL.md"
+    },
     {
       "slug": "handoff",
       "title": "Hand off a task",
@@ -464,6 +476,7 @@
     "catchup": "built on the connector-only briefing; the in-app built-in `/catch-me-up` already is the catch-up (MIP-2203)",
     "close-out": "reads merged pull requests and checks with gh on the person's machine",
     "design-review": "replies to and resolves note comments, which the in-app agent cannot do",
+    "html-page": "writes an HTML note with `save_html_note`, a connector-only tool the in-app agent does not have",
     "open-pr": "reads a pull request's checks with gh on the person's machine",
     "ready-to-merge": "reads a pull request's checks with gh on the person's machine",
     "setup": "writes the Genos rules into Claude's memory file and installs plugins: Claude Code only",
