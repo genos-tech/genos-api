@@ -1998,10 +1998,12 @@ SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"] = (
 # MIP-2328 (model-visible, dark-shipped OFF): `get_genos_help` for the in-app agent, the manual lookup MCP publishes
 # (MIP-2327), and the two prompt lines that send "how do I ... in Genos" to it instead of `search_web` (outside and
 # best-practice questions keep `search_web`). OFF = the tool is neither declared nor runnable and the prompt and the
-# declarations are byte-identical to before. NOT in any arm file and NOT run: the paid eval and the flip are MIP-2329
-# (the cases are written in `evals/group/t2328-help.yaml`).
+# declarations are byte-identical to before.
+# DEFAULT ON (MIP-2329, 2026-11-24) WITHOUT a measurement: Ken decided there is no paid eval for the help routing (user-guide
+# milestone MIP-2304, decision note 335). The 20 cases and the arm `t2328` are written (`evals/group/t2328-help.yaml`) and
+# were NOT run. Rollback: `AGENT_INAPP_HELP_TOOL=false` on the service and redeploy (no data to undo).
 SEARCH_ENGINE["AGENT_INAPP_HELP_TOOL"] = (
-    os.environ.get("AGENT_INAPP_HELP_TOOL", "false").lower() == "true"
+    os.environ.get("AGENT_INAPP_HELP_TOOL", "true").lower() == "true"
 )
 
 SEARCH_ENGINE["AGENT_INAPP_NOTE_COMMENT_TOOL"] = (

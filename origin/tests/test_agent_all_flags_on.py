@@ -77,7 +77,7 @@ ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped
 # paid run; its follow-ups 2026-11-15 after the second grouped run; the task-move parity 2026-11-16 after its grouped
-# run, 18/18 on the final code). Everything else in ALL_ON is held.
+# run, 18/18 on the final code); the help tool 2026-11-24 by Ken's decision, no paid eval (MIP-2329). Everything else in ALL_ON is held.
 SHIPPED_ON = frozenset(
     {
         "AGENT_RESUME_KEEPS_BLOCKS",
@@ -95,6 +95,7 @@ SHIPPED_ON = frozenset(
         "AGENT_PARITY_TOOLS",
         "AGENT_PARITY_FOLLOWUPS",
         "AGENT_TASK_MOVE_PARITY",
+        "AGENT_INAPP_HELP_TOOL",
     }
 )
 # The neighbours that change what is declared and are not flags under test.
