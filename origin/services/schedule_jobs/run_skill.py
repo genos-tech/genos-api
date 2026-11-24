@@ -25,8 +25,8 @@ keeps its time, so it runs again when credits are back. The loop also stops itse
 balance is spent (`credit_budget_usd_micro`), and the partial answer is kept.
 
 WHERE IT GOES. The owner's Inbox (the cost is on the Inbox item), or a chat the owner is ALONE in
-(MIP-2196): one system-authored message with the cost line in it. Never a chat other people read
-(`schedule_audience.HAS_AI`), checked when the schedule is saved and again before every run, so a
+(MIP-2196): one system-authored message, the cost on a cost-only Inbox item (MIP-2351). Never a chat
+other people read (`schedule_audience.AI_NOT_ALONE`), checked when the schedule is saved and again before every run, so a
 person added to that chat since stops the run BEFORE the model is called. One who joins while the
 model runs gets nothing: the report is filed in the Inbox with its cost (`schedule_delivery.deliver`).
 
