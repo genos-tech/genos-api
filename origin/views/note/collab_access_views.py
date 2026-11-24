@@ -60,20 +60,28 @@ _TASK_BODY_PREFIX = "task-body"
 def parse_document_name(document_name):
     """`"task-note:12"` -> `("task-note", 12)`; `None` if malformed.
 
-    Deliberately strict: the id must be a positive integer, because every
-    surface behind this grammar is keyed by one. A name we cannot parse
-    is refused rather than passed through.
+    Deliberately strict: the id must be a positive integer in its ONE
+    canonical spelling, because every surface behind this grammar is keyed
+    by one. A name we cannot parse is refused rather than passed through.
+
+    genos-collab keys the Yjs document by the raw name, so a spelling that
+    Python's `int()` forgives (`+1`, ` 1`, `015`, `1_0`, fullwidth or
+    Arabic-Indic digits) would be one more `yjs_documents` row for the same
+    note, stepping around anything keyed by the canonical name: per-document
+    caps, the forget/purge paths and the orphan sweep (MIP-2299). Only ASCII
+    digits, no sign, no spaces, no leading zero are accepted.
     """
     if not document_name or not isinstance(document_name, str):
         return None
     prefix, sep, raw_id = document_name.partition(":")
     if not sep:
         return None
-    try:
-        entity_id = int(raw_id)
-    except (TypeError, ValueError):
+    # `isdecimal()` alone accepts other scripts' digits, hence the ASCII check; the round trip
+    # through `str(int())` then rejects a leading zero (and `0` itself fails the `> 0` below).
+    if not (raw_id.isascii() and raw_id.isdecimal()):
         return None
-    if entity_id <= 0:
+    entity_id = int(raw_id)
+    if entity_id <= 0 or raw_id != str(entity_id):
         return None
     return prefix, entity_id
 
