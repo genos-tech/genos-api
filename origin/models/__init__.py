@@ -13,6 +13,7 @@ from .common.item_activity_models import *
 from .common.mcp_connection_models import *
 from .common.member_event_models import *
 from .common.member_importance_models import *
+from .common.mfa_models import *
 from .common.notification_models import *
 from .common.ops_models import *
 from .common.sample_data_models import *

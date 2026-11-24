@@ -67,6 +67,7 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.member_importance_models import (
     purge_for_user as purge_importance,
 )
+from origin.models.common.mfa_models import MFARecoveryCode, UserMFA
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
 from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.models.common.security_event_models import SecurityAction
@@ -173,6 +174,9 @@ def _delete_personal_data(user, closing_team_ids=()) -> None:
     `closing_team_ids` are the teams that die with the person: nothing of theirs is kept there."""
     NotificationPreference.objects.filter(user=user).delete()
     PushSubscription.objects.filter(user=user).delete()
+    # The two-factor secret and recovery-code hashes (MIP-2239): no cascade fires on a soft delete.
+    MFARecoveryCode.objects.filter(user=user).delete()
+    UserMFA.objects.filter(user=user).delete()
     # OAuth grants hold live third-party refresh tokens. With OAUTH_REVOKE_ON_DISCONNECT on they are
     # also revoked at the provider, once the erasure commits (MIP-1790); off, this is the plain delete.
     grants = oauth_revoke.capture(ConnectedAccount.objects.filter(user=user))

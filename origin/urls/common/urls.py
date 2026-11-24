@@ -77,6 +77,14 @@ from origin.views.common.mention_group_views import (
     MentionGroupResolveView,
     MentionGroupView,
 )
+from origin.views.common.mfa_views import (
+    MfaDisableView,
+    MfaEnableView,
+    MfaRecoveryCodesView,
+    MfaSetupView,
+    MfaStatusView,
+    SignInMfaView,
+)
 from origin.views.common.notification_views import (
     NotificationPreferenceView,
     PresenceAudienceView,
@@ -169,6 +177,14 @@ urlpatterns = [
     # User
     path("api/v2/user/signup/", user_list, name="signup"),
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/v2/user/signin/mfa/", SignInMfaView.as_view(), name="signin_mfa"),
+    path("api/v2/user/mfa/", MfaStatusView.as_view(), name="mfa_status"),
+    path("api/v2/user/mfa/setup/", MfaSetupView.as_view(), name="mfa_setup"),
+    path("api/v2/user/mfa/enable/", MfaEnableView.as_view(), name="mfa_enable"),
+    path("api/v2/user/mfa/disable/", MfaDisableView.as_view(), name="mfa_disable"),
+    path(
+        "api/v2/user/mfa/recovery-codes/", MfaRecoveryCodesView.as_view(), name="mfa_recovery_codes"
+    ),
     path("api/v2/user/signin/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
     path("api/v2/user/demo/", DemoSignInView.as_view(), name="demo_signin"),
     path("api/v2/user/demo/workspace/", DemoWorkspaceView.as_view(), name="demo_workspace"),

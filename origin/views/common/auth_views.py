@@ -29,7 +29,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import demo_v2
+from origin.services import demo_v2, mfa
 from origin.services.credential_revocation import end_all_credentials
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
@@ -307,6 +307,29 @@ def _record_signin_failed(request, email, *, reason: str) -> None:
     )
 
 
+def _signed_in_response(user_data: dict, access: str, refresh: str) -> dict:
+    """The body of a finished sign-in, shared by the password step and the two-factor step."""
+    return {
+        "access": access,
+        "refresh": refresh,
+        "username": user_data["username"],
+        "user_id": user_data["id"],
+        "email": user_data["email"],
+        "profile_image_file_name": user_data["profile_image_file_name"],
+        "ts_joined_at": user_data["ts_created_at"],
+        "is_offline_forced": user_data["is_offline_forced"],
+        "role": user_data["role"],
+        "base_country": user_data["base_country"],
+        # The client mirrors these into localStorage and builds
+        # `myself` from it, so without them your own profile card
+        # comes back blank after every sign-out.
+        "phone_number": user_data["phone_number"],
+        "current_location": user_data["current_location"],
+        "about_me": user_data["about_me"],
+        "custom_status": user_data["custom_status"],
+    }
+
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer  # Use custom serializer
     # Burst + sustained pair: the burst cap stops fast credential
@@ -348,6 +371,29 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                     status=403,
                 )
 
+        # Two-factor (MIP-2239). A person who turned it on gets NO token here, only a pending
+        # one that authenticates nothing; `POST /signin/mfa/` mints the session after the
+        # code. The password is checked once, here, so a wrong one costs the same as for
+        # an account without two-factor, and is answered exactly as simplejwt answers it.
+        if isinstance(email, str) and isinstance(password, str) and email and password.strip():
+            candidate = User.objects.with_email(email).first()
+            if candidate is not None and candidate.is_active and mfa.is_enabled(candidate):
+                # The serializer below strips the password (a DRF CharField does), and signup
+                # and reset store it stripped, so this check has to read it the same way.
+                if not candidate.check_password(password.strip()):
+                    _record_signin_failed(request, email, reason="bad_credentials")
+                    raise AuthenticationFailed(
+                        CustomTokenObtainPairSerializer.default_error_messages["no_active_account"],
+                        "no_active_account",
+                    )
+                return JsonResponse(
+                    {
+                        "mfa_required": True,
+                        "mfa_token": mfa.issue_pending_token(candidate),
+                        "expires_in": mfa.PENDING_MAX_AGE_SECONDS,
+                    }
+                )
+
         try:
             response = super().post(request, *args, **kwargs)
         except AuthenticationFailed:
@@ -362,27 +408,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         )
 
         # Create JSON response (access token sent in response, refresh token in cookie)
-        response = JsonResponse(
-            {
-                "access": data["access"],
-                "refresh": data["refresh"],
-                "username": data["user"]["username"],
-                "user_id": data["user"]["id"],
-                "email": data["user"]["email"],
-                "profile_image_file_name": data["user"]["profile_image_file_name"],
-                "ts_joined_at": data["user"]["ts_created_at"],
-                "is_offline_forced": data["user"]["is_offline_forced"],
-                "role": data["user"]["role"],
-                "base_country": data["user"]["base_country"],
-                # The client mirrors these into localStorage and builds
-                # `myself` from it, so without them your own profile card
-                # comes back blank after every sign-out.
-                "phone_number": data["user"]["phone_number"],
-                "current_location": data["user"]["current_location"],
-                "about_me": data["user"]["about_me"],
-                "custom_status": data["user"]["custom_status"],
-            }
-        )
+        response = JsonResponse(_signed_in_response(data["user"], data["access"], data["refresh"]))
 
         # Set the refresh token in a httpOnly cookie. SameSite/Secure
         # come from settings so the cookie is `SameSite=None; Secure`
