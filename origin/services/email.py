@@ -10,6 +10,8 @@ section in settings.py) — is picked by `EMAIL_BACKEND`; this helper is
 transport-agnostic.
 """
 
+import threading
+
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template import Context
@@ -60,3 +62,26 @@ def send_templated_email(
     )
     msg.attach_alternative(html_body, "text/html")
     msg.send(fail_silently=False)
+
+
+def run_after_response(send, *, on_error) -> None:
+    """Run `send()` (a mail send) without making the caller wait for it (MIP-2232).
+
+    The unauthenticated account endpoints (reset, resend, signup) send an email only when the
+    address has an account. Sent inside the request, a slow answer meant "this account exists".
+    A short-lived thread (not a daemon: a worker recycle or deploy waits for it) takes the send, so the response time no longer depends on it.
+    `on_error(exc)` logs a failure (the caller picks the wording; it must not quote the address).
+    The thread touches no database connection: callers pass everything already read. With
+    `EMAIL_SEND_AFTER_RESPONSE` False (the test settings) it runs inline.
+    """
+
+    def _run():
+        try:
+            send()
+        except Exception as exc:  # a mail failure must never reach the caller or the client
+            on_error(exc)
+
+    if not getattr(settings, "EMAIL_SEND_AFTER_RESPONSE", True):
+        _run()
+        return
+    threading.Thread(target=_run, name="account-email", daemon=False).start()
