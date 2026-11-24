@@ -15,7 +15,6 @@ the harness around the cases is sound:
 from __future__ import annotations
 
 import sys
-from unittest import mock
 
 from django.conf import settings
 from django.test import SimpleTestCase
@@ -59,25 +58,41 @@ class TheStubDrivesTheRealTool(BaseAPITestCase):
     means all of them, `quota.get_integrations`), so that is the condition
     reproduced here: the same gate, satisfied the way the eval user satisfies it."""
 
-    def setUp(self):
-        super().setUp()
-        patcher = mock.patch(
-            "origin.search_engine.agent.tools.web_search.get_integrations",
-            return_value=["web", "google_calendar", "github"],
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
+    def _free_viewer(self):
+        """A fresh person resolves to Free, whose plan has no `web` (the eval viewer's case, MIP-2303)."""
+        from origin.search_engine import quota
+
+        self.user.tier = "free"
+        self.user.save(update_fields=["tier"])
+        quota.invalidate_effective_tier([self.user.id])
+        self.assertEqual(quota.get_integrations(str(self.user.id)), [])
+
+    def test_a_free_viewer_reaches_the_stubbed_page(self):
+        """The bug: the real plan gate refused the eval viewer before the stub ran."""
+        self._free_viewer()
+        undo = wi.stub_web_search([PAGE])
+        try:
+            out = self._run()
+        finally:
+            undo()
+        self.assertIn("docs.frobnicator.example/rate-limits", repr(out))
+
+    def test_the_plan_gate_is_back_after_the_stub_is_undone(self):
+        self._free_viewer()
+        undo = wi.stub_web_search([PAGE])
+        undo()
+        with self.assertRaises(ToolError):
+            self._run()
 
     def test_without_the_web_integration_the_tool_refuses_before_the_stub(self):
         """The precondition the eval relies on, stated: no `web` on the plan means the
         stub is never reached, and a case would see only the refusal."""
         undo = wi.stub_web_search([PAGE])
         try:
-            with mock.patch(
-                "origin.search_engine.agent.tools.web_search.get_integrations", return_value=[]
-            ):
-                with self.assertRaises(ToolError):
-                    self._run()
+            self._free_viewer()
+            undo()
+            with self.assertRaises(ToolError):
+                self._run()
         finally:
             undo()
 
@@ -394,3 +409,16 @@ class WiredIntoTheRunner(SimpleTestCase):
         self.assertEqual(
             _check_behavior_expectations(events, {"links_only_from_tool_results": True}, []), []
         )
+
+
+class WebStubNotReached(SimpleTestCase):
+    def test_a_search_web_tool_error_is_reported_as_not_measured(self):
+        traces = [_trace({"error": "Web search is not available on this plan."})]
+        self.assertIn("not available on this plan", wi.web_stub_not_reached(traces))
+
+    def test_a_clean_run_is_measured(self):
+        self.assertEqual(wi.web_stub_not_reached([_trace({"results": [PAGE]})]), "")
+
+    def test_an_error_of_another_tool_is_not_this_cases_problem(self):
+        traces = [{"tool_name": "list_tasks", "arguments": {}, "result": {"error": "x"}}]
+        self.assertEqual(wi.web_stub_not_reached(traces), "")
