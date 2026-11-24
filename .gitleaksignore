@@ -49,3 +49,5 @@ cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_field_encryption.py:g
 9edb95613133eaf973ee85037b336da868184937:origin/tests/test_skills_hub.py:aws-access-token:157
 # Made-up password in a signup test that checks a password like the username is refused (MIP-2238); it belongs to no account.
 67b0be155872159e1ea80537705dcfaef803ffe7:origin/tests/test_password_policy_MIP2238.py:generic-api-key:54
+# RFC 4226 appendix D test secret ("12345678901234567890" in base32) in the MIP-2239 two-factor test vectors; a public constant, it belongs to no account.
+4e695c2585e080edff37b92d9b9a6fef33b31cf9:origin/tests/test_mfa.py:generic-api-key:55
