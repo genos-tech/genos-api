@@ -3507,6 +3507,12 @@ class NoteSummaryView(AuthenticatedAPIView):
         if limit_block is not None:
             return limit_block
 
+        # A demo visitor's daily caps (MIP-2364): counted here, on the cache-miss path, so a cached
+        # summary stays free. A no-op for everyone else.
+        demo_block = check_demo_ask(request, request.user)
+        if demo_block is not None:
+            return demo_block
+
         # 3. Generate. Metered exactly like ThreadSummaryView above —
         # regeneration only, cache hits post nothing.
         with metered.metered_request(
@@ -3686,6 +3692,12 @@ class ThreadSummaryView(AuthenticatedAPIView):
         limit_block = _billable_surface_gate(user_id, chosen)
         if limit_block is not None:
             return limit_block
+
+        # A demo visitor's daily caps (MIP-2364): counted here, on the cache-miss path, so a cached
+        # summary stays free. A no-op for everyone else.
+        demo_block = check_demo_ask(request, request.user)
+        if demo_block is not None:
+            return demo_block
 
         # 3. Generate. Set the LLM choice for the duration of the call so
         # the right provider/model fires. The metered block wraps ONLY

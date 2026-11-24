@@ -171,6 +171,8 @@ def _run(ctx, report, effort, default_effort, today_iso, out: Narrative) -> Narr
         return out
     if not reason:
         reason = llm.credit_block(ctx.user_id)  # out of AI credits: no call, so no charge
+    if not reason:
+        reason = llm.demo_block(ctx.user_id)  # a demo visitor's daily cap (MIP-2364)
     if reason:
         out.skipped = reason
         return out

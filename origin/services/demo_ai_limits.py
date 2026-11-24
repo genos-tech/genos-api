@@ -17,6 +17,11 @@ demo ask is refused, because the point of the cap is that spend stays bounded wh
 wrong. A non-demo user never reaches the counter, so Redis trouble does not touch real customers.
 The address is kept as a keyed marker (`ip_marker`), never raw, as in the throttles' log lines.
 
+The same count is on every other surface where a demo user's action makes a paid model call, on
+the cache-miss path only (MIP-2364): thread and note summaries, scheduled report sentences and
+skill runs, and MCP `search_workspace` (which then runs plain). `/agent/decide/` resumes a run an
+ask already counted, and Spotlight typeahead only embeds a cached query, so neither counts.
+
 Not covered here: the monthly money ceilings (`AI_TEAM_MONTHLY_CEILING_USD`,
 `AI_MONTHLY_BUDGET_JPY`) stay the operator's switch.
 """
@@ -122,12 +127,14 @@ def check_demo_ask(request, user) -> Response | None:
     from origin.services.throttles import throttle_cache  # noqa: PLC0415
 
     day = _day()
-    marker = ip_marker(client_ip(request)) if request is not None else "-"
     try:
         counter_cache = throttle_cache(breaker=False)
-        if _hit(counter_cache, f"demo_ai:ip:{marker}:{day}") > DEMO_AI_PER_IP_DAILY_ASKS:
-            log.warning("demo.ai_cap reason=ip client=%s", marker)
-            return _refusal("ip")
+        # A call with no request (a cron run) has no caller address: only the global cap applies.
+        if request is not None:
+            marker = ip_marker(client_ip(request))
+            if _hit(counter_cache, f"demo_ai:ip:{marker}:{day}") > DEMO_AI_PER_IP_DAILY_ASKS:
+                log.warning("demo.ai_cap reason=ip client=%s", marker)
+                return _refusal("ip")
         if _hit(counter_cache, f"demo_ai:global:{day}") > DEMO_AI_GLOBAL_DAILY_ASKS:
             log.warning("demo.ai_cap reason=global")
             return _refusal("global")
@@ -135,3 +142,17 @@ def check_demo_ask(request, user) -> Response | None:
         log.error("demo.ai_cap counter unavailable: refusing the demo ask", exc_info=True)
         return _refusal("unavailable")
     return None
+
+
+def demo_call_blocked(user_id: str | None) -> bool:
+    """Count one model call that has no request (a scheduled report or skill run) for a demo user
+    against the global daily cap. True = the cap stops it: the caller skips its AI step and files a
+    plain result. False at once for anyone who is not a demo user (no counter access). Fails closed
+    for a demo user, like `check_demo_ask`."""
+    if not is_demo_user(user_id):
+        return False
+
+    class _Demo:
+        is_demo = True
+
+    return check_demo_ask(None, _Demo()) is not None

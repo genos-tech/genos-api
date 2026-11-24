@@ -47,6 +47,8 @@ SKIP_NO_MODEL = "no_model_for_level"
 SKIP_FAILED = "call_failed"
 # The member has no AI credits left (MIP-1960): the report runs without its AI sentences and says so.
 SKIP_NO_CREDITS = "no_credits"
+# A demo visitor's daily AI cap is reached (MIP-2364): no call, the report files plain.
+SKIP_DEMO_LIMIT = "demo_limit"
 
 
 @dataclass
@@ -95,6 +97,14 @@ def credit_block(user_id: str) -> str:
     except Exception:  # noqa: BLE001
         log.warning("report_ai: credit check failed", exc_info=True)
     return ""
+
+
+def demo_block(user_id: str) -> str:
+    """`SKIP_DEMO_LIMIT` when this is a demo user and the demo daily cap stops the call, else "".
+    Counts one call, so it goes on the cache-miss path right before the model is called."""
+    from origin.services.demo_ai_limits import demo_call_blocked  # noqa: PLC0415
+
+    return SKIP_DEMO_LIMIT if demo_call_blocked(user_id) else ""
 
 
 def _client():
