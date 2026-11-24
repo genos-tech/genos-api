@@ -28,6 +28,7 @@ from origin.models.common.webhook_models import (
     generate_secret,
 )
 from origin.search_engine import quota
+from origin.services import credential_alert, recent_auth
 from origin.services.member_roles import can_manage, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.services.webhook_delivery import WebhookUrlError, validate_webhook_url
@@ -260,6 +261,10 @@ class WebhookListCreateView(AuthenticatedAPIView):
         return Response({"webhooks": [_serialize(e) for e in endpoints]}, status=status.HTTP_200_OK)
 
     def post(self, request):
+        # A webhook keeps receiving the team's chat and task payloads after the owner's password
+        # reset, so a stolen session must not be able to add one: ask for the password (MIP-2240).
+        if refused := recent_auth.refusal(request):
+            return refused
         team_id = request.data.get("team_id")
         if not team_id:
             return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -328,6 +333,9 @@ class WebhookListCreateView(AuthenticatedAPIView):
             target_id=endpoint.id,
             target_label=_host_label(url),
             metadata={"events": events},
+        )
+        credential_alert.notify_created(
+            request.user, kind=credential_alert.KIND_WEBHOOK, label=_host_label(url)
         )
 
         payload = _serialize(endpoint)

@@ -96,6 +96,7 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimRespondView,
     TeamOwnershipClaimStatusView,
 )
+from origin.views.common.recent_auth_views import ConfirmPasswordView
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.sample_data_views import SampleDataView
 from origin.views.common.schedule_views import ScheduleDetailView, ScheduleListView, ScheduleRunView
@@ -428,6 +429,11 @@ urlpatterns = [
         "api/v2/user/account/export/",
         AccountExportView.as_view(),
         name="account_export",
+    ),
+    path(
+        "api/v2/user/confirm-password/",
+        ConfirmPasswordView.as_view(),
+        name="confirm_password",
     ),
     path(
         "api/v2/user/account/",

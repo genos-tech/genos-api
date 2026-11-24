@@ -34,7 +34,7 @@ from origin.models.common.api_key_models import (
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import mcp_notice, mcp_tier_limits
+from origin.services import credential_alert, mcp_notice, mcp_tier_limits, recent_auth
 from origin.services.api_keys import key_label, revoke_api_key
 from origin.services.member_roles import OWNER, can_manage, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
@@ -83,6 +83,10 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
         return Response({"api_keys": [_serialize(k) for k in keys]}, status=status.HTTP_200_OK)
 
     def post(self, request):
+        # A stolen session must not be enough to mint a key that outlives the owner's password
+        # reset: the password is asked for again first (MIP-2240).
+        if refused := recent_auth.refusal(request):
+            return refused
         # Type-check before `.strip()`: `{"name": 123}` raised
         # `AttributeError: 'int' object has no attribute 'strip'` — a 500
         # from a settings form, and the request body is JSON so the type
@@ -217,6 +221,10 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
             credential=key,
             notice=mcp_notice.connected_notice(key, action="api_key"),
             tool_name="api_key_created",
+        )
+        # And an email to the owner, where a stolen session cannot dismiss it (MIP-2240).
+        credential_alert.notify_created(
+            request.user, kind=credential_alert.KIND_API_KEY, label=key.name
         )
         payload = _serialize(key)
         # The one and only time the plaintext exists in a response. The
