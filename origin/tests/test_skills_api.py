@@ -512,6 +512,9 @@ class PublicSkillTests(SkillBase):
 
         listed = self.client.get(f"{LIST}?tab=installed").json()["skills"]
         self.assertEqual([s["id"] for s in listed], [skill["id"]])
+        # The row carries the pinned version, and no update is waiting yet (MIP-2226).
+        self.assertEqual(listed[0]["installedVersionNo"], 1)
+        self.assertFalse(listed[0]["updateAvailable"])
 
         self.as_user(self.user)
         self.client.patch(
@@ -520,6 +523,13 @@ class PublicSkillTests(SkillBase):
         self.client.post(detail(skill["id"], "publish/"), {}, format="json")
 
         self.as_user(self.outsider)
+        listed = self.client.get(f"{LIST}?tab=installed").json()["skills"]
+        self.assertEqual(listed[0]["installedVersionNo"], 1)
+        self.assertTrue(listed[0]["updateAvailable"])
+        # Only the installed tab carries them: the same skill, starred, does not.
+        self.client.post(detail(skill["id"], "star/"))
+        starred = self.client.get(f"{LIST}?tab=starred").json()["skills"]
+        self.assertNotIn("installedVersionNo", starred[0])
         seen = self.client.get(detail(skill["id"])).json()["skill"]
         self.assertEqual(seen["installedVersionNo"], 1)
         self.assertTrue(seen["updateAvailable"])
