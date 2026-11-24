@@ -30,7 +30,7 @@ from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.services import demo_v2, mfa, signin_backoff
-from origin.services.credential_revocation import end_all_credentials
+from origin.services.credential_revocation import end_all_credentials, recent_webhooks
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
     DEMO_PROVISION_MAX_FAILURES,
@@ -1293,7 +1293,13 @@ class PasswordResetConfirmView(APIView):
         # Counts only. The frontend words the notice ("connected apps and API keys were
         # ended; reconnect them"); nothing in here names an app, a key or a token.
         return Response(
-            {"connections_ended": ended.connections, "api_keys_revoked": ended.api_keys},
+            {
+                "connections_ended": ended.connections,
+                "api_keys_revoked": ended.api_keys,
+                # Webhooks are not ended by a reset: list the last 7 days' so the owner can
+                # remove any they did not make (host and id only; MIP-2290).
+                "recent_webhooks": recent_webhooks(user),
+            },
             status=status.HTTP_200_OK,
         )
 

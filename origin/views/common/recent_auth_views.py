@@ -49,6 +49,7 @@ class ConfirmPasswordView(AuthenticatedAPIView):
         # A non-string would raise out of `check_password` (a 500 on request input).
         if not isinstance(password, str) or not password or not user.check_password(password):
             logger.warning("[recent-auth] password not confirmed user=%s", user.pk)
+            recent_auth.note_failure(user, request)
             return Response({"error": "Password is incorrect."}, status=status.HTTP_403_FORBIDDEN)
         return Response(
             {
