@@ -1,9 +1,8 @@
 # MIP-2328: which tool does the in-app agent reach for FIRST on "how do I ... in Genos" (flag
 # AGENT_INAPP_HELP_TOOL, arm t2328)? One cheap model call per case (kind: routing); no tool runs.
-# WRITTEN, NOT RUN (Ken 2026-11-24, user-guide milestone MIP-2304: no paid eval; MIP-2329 runs it).
-# NO arm file yet, on purpose (it would put the flag in the all-flags-on union and move its pins): MIP-2329 adds
-# arms/t2328.yaml and `requires_arm: t2328` on the six positives (they cannot pass without the tool). The eight
-# negatives run on arm0 too, so the baseline shows whether the new tool steals a question the old tools should keep: outside advice stays on
+# WRITTEN, NOT RUN (Ken 2026-11-24, user-guide milestone MIP-2304, decision note 335: no paid eval, locally or in CI).
+# Arm file `arms/t2328.yaml` (MIP-2329) turns the flag on; the twelve positives `requires_arm: t2328` (they cannot pass
+# without the tool; 6 topics x EN/JA). The eight negatives run on arm0 too, so the baseline shows whether the new tool steals a question the old tools should keep: outside advice stays on
 # search_web, the member's own data stays on search_knowledge_base / the structured reads.
 
 - id: t2328-en-two-step
@@ -14,6 +13,7 @@
   query: "Where do I turn on two-step verification in Genos?"
   note: "Positive: a setting in Genos itself. Today this goes to the web."
   ok: [get_genos_help]
+  requires_arm: t2328
 - id: t2328-ja-two-step
   kind: routing
   lang: ja
@@ -22,6 +22,7 @@
   query: "Genos で二段階認証はどこでオンにできますか?"
   note: "Positive: a setting in Genos itself. Today this goes to the web."
   ok: [get_genos_help]
+  requires_arm: t2328
 - id: t2328-en-invite
   kind: routing
   lang: en
@@ -30,6 +31,7 @@
   query: "How do I invite a teammate to my Genos workspace?"
   note: "Positive: a how-to about the product."
   ok: [get_genos_help]
+  requires_arm: t2328
 - id: t2328-ja-invite
   kind: routing
   lang: ja
@@ -38,6 +40,7 @@
   query: "Genos のワークスペースにチームメイトを招待するにはどうすればいいですか?"
   note: "Positive: a how-to about the product."
   ok: [get_genos_help]
+  requires_arm: t2328
 - id: t2328-en-schedule
   kind: routing
   lang: en
@@ -46,6 +49,7 @@
   query: "How does a Genos schedule work, and how do I make one?"
   note: "Positive: how a feature works."
   ok: [get_genos_help]
+  requires_arm: t2328
 - id: t2328-ja-schedule
   kind: routing
   lang: ja
@@ -54,6 +58,7 @@
   query: "Genos のスケジュールはどういう仕組みで、どうやって作りますか?"
   note: "Positive: how a feature works."
   ok: [get_genos_help]
+  requires_arm: t2328
 - id: t2328-en-web-practice
   kind: routing
   lang: en
@@ -118,3 +123,57 @@
   query: "WRD-5 を見せて"
   note: "Negative: one task by id."
   ok: [fetch_task]
+- id: t2328-en-notifications
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "How do I stop Genos from emailing me about every comment?"
+  note: "Positive: a notification setting in Genos itself."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-ja-notifications
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Genos からコメントのたびに届くメールを止めるにはどうすればいいですか?"
+  note: "Positive: a notification setting in Genos itself."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-en-api-key
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "How do I create an API key to connect Claude to Genos?"
+  note: "Positive: a how-to about the product (API keys, connecting)."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-ja-api-key
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Claude を Genos につなぐための API キーはどうやって作りますか?"
+  note: "Positive: a how-to about the product (API keys, connecting)."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-en-shortcuts
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "What keyboard shortcuts does Genos have?"
+  note: "Positive: a product reference question."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-ja-shortcuts
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Genos にはどんなキーボードショートカットがありますか?"
+  note: "Positive: a product reference question."
+  ok: [get_genos_help]
+  requires_arm: t2328

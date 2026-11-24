@@ -1,0 +1,6 @@
+# MIP-2328 / MIP-2329: publish get_genos_help to the in-app agent (declared + runnable) and route "how do I ... in Genos"
+# to it. Measured by t2328 (routing). WRITTEN, NOT RUN: Ken decided on 2026-11-24 that there is no paid eval for this.
+arm: t2328
+overrides:
+    AGENT_INAPP_HELP_TOOL: true
+requires: []
