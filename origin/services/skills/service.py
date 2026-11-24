@@ -266,13 +266,18 @@ def _editor_rows(note_id: Any):
 
 def is_editor(skill: Skill, user_id: Any) -> bool:
     """A co-editor: an Editor row on the body note, held by someone who is still on the skill's
-    team. The row alone is not enough (a person who left the team keeps no access even if a row
-    survived), and the owner is not counted here."""
+    team (and, for a PRIVATE skill, only while its owner is too). The row alone is not enough (a
+    person who left the team keeps no access even if a row survived), and the owner is not counted
+    here."""
     if skill.note_id is None or user_id is None or is_owner(skill, user_id):
         return False
     if not _editor_rows(skill.note_id).filter(user_id=user_id).exists():
         return False
-    return is_team_member(skill.team_id, user_id)
+    if not is_team_member(skill.team_id, user_id):
+        return False
+    # A private skill answers to its owner: once they have left the team nobody is left to be
+    # accountable for the draft, so its co-editors lose access with them (MIP-2190).
+    return skill.visibility != VISIBILITY_PRIVATE or is_team_member(skill.team_id, skill.owner_id)
 
 
 def is_team_owner(skill: Skill, user_id: Any) -> bool:
@@ -340,21 +345,25 @@ def skill_body_reader_pairs(user_ids: Any, note_ids: Any) -> tuple[set[int], set
     if not who or not wanted:
         return set(), set()
     skills = list(
-        Skill.objects.filter(note_id__in=wanted).values("note_id", "owner_id", "team_id", "status")
+        Skill.objects.filter(note_id__in=wanted).values(
+            "note_id", "owner_id", "team_id", "status", "visibility"
+        )
     )
     bodies = {row["note_id"] for row in skills}
     if not skills:
         return bodies, set()
     teams = {row["team_id"] for row in skills}
+    # the owners too: a private skill's co-editors count only while its owner is on the team
+    asked = who | {str(row["owner_id"]) for row in skills}
     on_team = {
         (str(team), str(user))
         for team, user in TeamMembers.objects.filter(
-            team_id__in=teams, attendee_id__in=who, is_deleted=False
+            team_id__in=teams, attendee_id__in=asked, is_deleted=False
         ).values_list("team_id", "attendee_id")
     } | {
         (str(team), str(user))
         for team, user in TeamMaster.objects.filter(
-            team_id__in=teams, owner_id__in=who
+            team_id__in=teams, owner_id__in=asked
         ).values_list("team_id", "owner_id")
     }
     editing = {
@@ -368,13 +377,32 @@ def skill_body_reader_pairs(user_ids: Any, note_ids: Any) -> tuple[set[int], set
         note, team, owner = row["note_id"], str(row["team_id"]), str(row["owner_id"])
         if owner in who and (team, owner) in on_team:
             pairs.add((owner, note))
-        if row["status"] != STATUS_TAKEN_DOWN:
+        owner_present = (team, owner) in on_team
+        if row["status"] != STATUS_TAKEN_DOWN and (
+            owner_present or row["visibility"] != VISIBILITY_PRIVATE
+        ):
             pairs |= {
                 (user, note)
                 for user in who
                 if user != owner and (user, note) in editing and (team, user) in on_team
             }
     return bodies, pairs
+
+
+def skill_body_acl_user_ids(note_id: Any) -> set[str] | None:
+    """The people the search index stamps as readers of a skill body note, or None when the note
+    is not a skill body (MIP-2190). The same rule as `skill_note_role`: the owner and the live
+    co-editors on the team, nobody else, and no co-editor of a taken-down skill."""
+    skill = Skill.objects.filter(note_id=note_id).values("owner_id", "team_id").first()
+    if skill is None:
+        return None
+    _, pairs = skill_body_reader_pairs(_reader_candidates(note_id, skill["owner_id"]), [note_id])
+    return {user for user, _ in pairs}
+
+
+def _reader_candidates(note_id: Any, owner_id: Any) -> set[str]:
+    rows = _editor_rows(note_id).values_list("user_id", flat=True)
+    return {str(u) for u in rows if u} | {str(owner_id)}
 
 
 def _note_ids(note_ids: Any) -> set[int]:
@@ -2206,11 +2234,23 @@ def is_starred(user_id: Any, skill: Skill) -> bool:
 
 
 def export_file(user_id: Any, skill_id: Any) -> tuple[str, str]:
-    """`(slug, SKILL.md text)`: a reader gets the published version's name and words."""
+    """`(slug, SKILL.md text)`. The owner gets the live draft. Everybody else, a co-editor too,
+    gets the PUBLISHED version, so a co-editor of a private skill cannot copy it out (MIP-2190)."""
     require_enabled()
     skill = get_readable(user_id, skill_id)
-    version = None if reads_draft(skill, user_id) else version_for(skill, user_id)
-    markdown = body_markdown_for(skill, user_id)
+    owner = is_owner(skill, user_id)
+    if not owner and skill.visibility == VISIBILITY_PRIVATE:
+        raise SkillForbidden(
+            "Only the owner can export a private skill. Ask the owner to share it with the team, "
+            "then export the published version."
+        )
+    version = None if owner else version_for(skill, user_id)
+    if not owner and version is None:
+        raise SkillForbidden(
+            "Nothing is published yet, so only the owner can export it. Ask the owner to publish "
+            "it first."
+        )
+    markdown = live_markdown(skill) if owner else version.body_markdown
     description = version.description if version else skill.description
     slug = (version.slug if version else "") or skill.slug
     return slug, text.build_skill_file(slug=slug, description=description, body_markdown=markdown)
