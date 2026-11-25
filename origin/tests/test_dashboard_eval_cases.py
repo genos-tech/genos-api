@@ -101,8 +101,6 @@ class TestTheCasesMatchTheTools(SimpleTestCase):
             for key in keys:
                 if key.startswith("params."):
                     self.assertIn(key.split(".", 1)[1], schema, f"{where}: {key}")
-                elif case.get("requires"):
-                    continue  # an argument of a task still in review (MIP-2358)
                 else:
                     self.assertIn(key, top, f"{where}: {key} is not an argument of the tool")
 
@@ -133,6 +131,6 @@ class TestTheCasesMatchTheTools(SimpleTestCase):
             if pattern:
                 self.assertTrue(any(re.search(pattern, f) for f in known), case["id"])
 
-    def test_the_cases_that_need_other_tasks_say_so(self):
-        needs = {c["id"] for c in load() if c.get("requires")}
-        self.assertEqual(needs, {"t2361.chat-notice.en", "t2361.leaky-folder.en"})
+    def test_no_case_waits_for_another_task(self):
+        # The chat and place arguments are on the tools (MIP-2358): every case is checked against them.
+        self.assertEqual({c["id"] for c in load() if c.get("requires")}, set())
