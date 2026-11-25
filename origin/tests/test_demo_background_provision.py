@@ -51,8 +51,9 @@ class BackgroundProvisionTests(BaseAPITestCase):
             res = self.client.post("/api/v2/user/demo/workspace/")
             self.assertEqual(res.json(), {"status": "pending"})  # a thread is running: no second
             spawned[0]()
-            reindex.assert_called_once()
-        team = TeamMaster.objects.get(team_id=data["team_id"])
+            team = TeamMaster.objects.get(team_id=data["team_id"])
+            # MIP-2374: the kick-off indexes this one team, not everything of the last 5 minutes.
+            reindex.assert_called_once_with(team.team_id)
         self.assertGreater(ProjectMaster.objects.filter(team=team).count(), 0)
         self.assertGreater(TaskMaster.objects.filter(team=team).count(), 0)
         res = self.client.post("/api/v2/user/demo/workspace/")

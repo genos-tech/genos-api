@@ -40,6 +40,7 @@ from datetime import datetime
 from typing import Iterator, Optional
 
 from django.conf import settings
+from django.db.models import Q
 
 from origin.models.chat.unified_models import Channel, ChannelMember, Message
 from origin.models.common.user_models import CustomUser
@@ -62,36 +63,46 @@ from origin.search_engine.text_extraction import extract_text
 
 
 def iter_dm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_DM, "dm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_DM, "dm", since, dirty, team_id)
 
 
 def iter_gm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_GM, "gm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_GM, "gm", since, dirty, team_id)
 
 
 def iter_mdm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_MDM, "mdm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_MDM, "mdm", since, dirty, team_id)
 
 
 def iter_pm_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from _iter_kind_chunks(CHAT_TYPE_PM, "pm", since, dirty)
+    yield from _iter_kind_chunks(CHAT_TYPE_PM, "pm", since, dirty, team_id)
 
 
 def iter_all_chat_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from iter_dm_chunks(since, dirty)
-    yield from iter_gm_chunks(since, dirty)
-    yield from iter_mdm_chunks(since, dirty)
-    yield from iter_pm_chunks(since, dirty)
+    yield from iter_dm_chunks(since, dirty, team_id)
+    yield from iter_gm_chunks(since, dirty, team_id)
+    yield from iter_mdm_chunks(since, dirty, team_id)
+    yield from iter_pm_chunks(since, dirty, team_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -100,17 +111,26 @@ def iter_all_chat_chunks(
 
 
 def _iter_kind_chunks(
-    kind_code: int, label: str, since: Optional[datetime], dirty: Optional[DirtyScopes] = None
+    kind_code: int,
+    label: str,
+    since: Optional[datetime],
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     """Yield one EntityChunks per (channel, thread) for a single chat kind.
 
-    With `since`, only channels with a message updated at/after `since`
-    are re-emitted (the whole channel re-chunks; ingestion dedupes the
-    unchanged chunks by hash), plus every channel whose readers changed
-    (`dirty`)."""
+    With `since`, only what changed is re-emitted (MIP-2383): a channel whose
+    readers changed (`dirty`) re-chunks whole (every chunk carries the ACL);
+    any other channel with a message updated at/after `since` re-emits only
+    its changed threads, and its main timeline only when that can have
+    changed (see `_incremental_scope`). Ingestion still dedupes unchanged
+    chunks by hash, so a wider emit is always safe, never wrong."""
     channels = Channel.objects.filter(kind=kind_code, is_deleted=False).select_related(
         "project", "team"
     )
+    if team_id is not None:
+        # One team's pass (MIP-2374): the same chunks a full pass writes for it.
+        channels = channels.filter(team_id=team_id)
 
     if since is not None:
         dirty_channel_ids = set(
@@ -125,6 +145,10 @@ def _iter_kind_chunks(
                 )
             )
         channels = channels.filter(id__in=dirty_channel_ids)
+        acl_ids = {str(i) for i in (dirty.acl_channel_ids if dirty else ())}
+        scopes = _incremental_scopes(kind_code, since, acl_ids)
+    else:
+        scopes = {}
 
     channel_list = list(channels)
     if not channel_list:
@@ -156,8 +180,16 @@ def _iter_kind_chunks(
             continue
         # One channel's messages at a time (MIP-1868): loading every dirty
         # channel up front held all of them in memory at once.
-        msgs = _load_channel_messages(channel.id)
-        if not msgs:
+        scope = scopes.get(channel.id)
+        if (
+            scope is not None
+            and Message.objects.filter(channel_id=channel.id, deleted_at__isnull=True).exists()
+        ):
+            msgs = _load_scope_messages(channel.id, scope)
+        else:
+            scope = None
+            msgs = _load_channel_messages(channel.id)
+        if not msgs and scope is None:
             # No live messages left (all soft-deleted): tombstone the main
             # entity so ingestion purges its chunks. Thread entities can't
             # be enumerated without messages — the orphan sweep in
@@ -195,7 +227,78 @@ def _iter_kind_chunks(
             project_id=project_id,
             sender_names=_load_sender_names({m.sender_id for m in msgs if m.sender_id}),
             summarized=summarized,
+            scope=scope,
         )
+
+
+class _Scope:
+    """What changed in one channel since `since` (MIP-2383).
+
+    `roots`: thread roots to rebuild. `main`: rebuild the main timeline."""
+
+    __slots__ = ("roots", "main")
+
+    def __init__(self) -> None:
+        self.roots: set = set()
+        self.main = False
+
+
+def _incremental_scopes(kind_code: int, since: datetime, acl_channel_ids: set) -> dict:
+    """channel id -> `_Scope`, for the channels with changed messages that are not
+    ACL-dirty (those re-chunk whole and are left out).
+
+    The main timeline is rebuilt when a top-level message changed (its text, and the
+    context of the two plain messages after it), or when a changed reply's thread has
+    no live reply older than `since`: then the root may just have gained its first
+    reply (it leaves the main timeline) or lost its last (it returns). A thread that
+    already had an untouched live reply keeps its root where it was."""
+    scopes: dict = {}
+    reply_roots: dict = defaultdict(set)
+    rows = Message.objects.filter(channel__kind=kind_code, ts_updated_at__gte=since).values_list(
+        "channel_id", "id", "is_thread_reply", "thread_root_id"
+    )
+    for channel_id, msg_id, is_reply, root_id in rows:
+        if str(channel_id) in acl_channel_ids:
+            continue
+        scope = scopes.setdefault(channel_id, _Scope())
+        if is_reply and root_id:
+            scope.roots.add(root_id)
+            reply_roots[channel_id].add(root_id)
+        elif not is_reply:
+            scope.main = True
+            scope.roots.add(msg_id)  # its anchor chunk lives in its thread, if it has one
+    for channel_id, roots in reply_roots.items():
+        stable = set(
+            Message.objects.filter(
+                channel_id=channel_id,
+                thread_root_id__in=roots,
+                is_thread_reply=True,
+                deleted_at__isnull=True,
+                ts_updated_at__lt=since,
+            ).values_list("thread_root_id", flat=True)
+        )
+        if roots - stable:
+            scopes[channel_id].main = True
+    return scopes
+
+
+def _live_thread_roots(channel_id) -> set:
+    return set(
+        Message.objects.filter(channel_id=channel_id, is_thread_reply=True, deleted_at__isnull=True)
+        .exclude(thread_root_id__isnull=True)
+        .values_list("thread_root_id", flat=True)
+        .distinct()
+    )
+
+
+def _load_scope_messages(channel_id, scope: _Scope) -> list[Message]:
+    """The live messages `_emit_channel_chunks` needs for a `_Scope`: the replies of
+    the rebuilt threads and their anchors, plus every top-level message when the main
+    timeline is rebuilt. Same columns and order as `_load_channel_messages`."""
+    cond = Q(thread_root_id__in=scope.roots) | Q(id__in=scope.roots)
+    if scope.main:
+        cond |= Q(is_thread_reply=False)
+    return _live_messages(Message.objects.filter(cond, channel_id=channel_id))
 
 
 def _load_channel_messages(channel_id) -> list[Message]:
@@ -203,8 +306,12 @@ def _load_channel_messages(channel_id) -> list[Message]:
     context window and thread window read chronologically. Streamed from the
     database in pages instead of one result set; no join, because the chunker
     reads only `sender_id` and `task_id`."""
+    return _live_messages(Message.objects.filter(channel_id=channel_id))
+
+
+def _live_messages(qs) -> list[Message]:
     return list(
-        Message.objects.filter(channel_id=channel_id, deleted_at__isnull=True)
+        qs.filter(deleted_at__isnull=True)
         .only(
             "id",
             "channel_id",
@@ -252,8 +359,12 @@ def _emit_channel_chunks(
     project_id: Optional[str],
     sender_names: dict[str, str],
     summarized: set[tuple[str, str, str]],
+    scope: Optional[_Scope] = None,
 ) -> Iterator[EntityChunks]:
-    """One EntityChunks per (channel main timeline) + per thread."""
+    """One EntityChunks per (channel main timeline) + per thread.
+
+    With a `scope` (MIP-2383) `messages` holds only what that scope needs, and only
+    the main timeline (if `scope.main`) and the scoped threads are emitted."""
     channel_uuid = str(channel.id)
     chat_title = channel.title or _placeholder_title(label, channel)
 
@@ -266,25 +377,32 @@ def _emit_channel_chunks(
     top_by_id = {m.id: m for m in top_level}
 
     # 1) Main channel: top-level messages that do NOT root a thread.
-    plain_main = [m for m in top_level if m.id not in root_ids]
-    main_entity_id = chat_entity_id(label, channel_uuid)
-    main_chunks = _build_message_chunks(
-        label=label,
-        channel_uuid=channel_uuid,
-        thread_id=None,
-        team_id=team_id,
-        acl_user_ids=acl_user_ids,
-        chat_title=chat_title,
-        entity_id=main_entity_id,
-        messages=plain_main,
-        project_id=project_id,
-        sender_names=sender_names,
-    )
-    # Yielded even when empty: an entity whose live messages are all gone
-    # (deleted / edited to empty) must reach ingestion as a tombstone so
-    # `_delete_stale` purges its previously-indexed chunks. Skipping it
-    # here would leave the dead chunks searchable forever.
-    yield EntityChunks(entity_type="chat", entity_id=main_entity_id, chunks=main_chunks)
+    if scope is None or scope.main:
+        # A partial load only holds the scoped threads' replies; the main timeline
+        # needs every root that still has a live reply.
+        main_roots = root_ids if scope is None else _live_thread_roots(channel.id)
+        plain_main = [m for m in top_level if m.id not in main_roots]
+        main_entity_id = chat_entity_id(label, channel_uuid)
+        main_chunks = _build_message_chunks(
+            label=label,
+            channel_uuid=channel_uuid,
+            thread_id=None,
+            team_id=team_id,
+            acl_user_ids=acl_user_ids,
+            chat_title=chat_title,
+            entity_id=main_entity_id,
+            messages=plain_main,
+            project_id=project_id,
+            sender_names=sender_names,
+        )
+        # Yielded even when empty: an entity whose live messages are all gone
+        # (deleted / edited to empty) must reach ingestion as a tombstone so
+        # `_delete_stale` purges its previously-indexed chunks. Skipping it
+        # here would leave the dead chunks searchable forever.
+        yield EntityChunks(entity_type="chat", entity_id=main_entity_id, chunks=main_chunks)
+
+    # A thread that lost its last live reply is no entity any more and is not emitted,
+    # as in the full pass: the orphan sweep in `search_engine.purge` reaps its chunks.
 
     # 2) One entity per thread (rooted at a top-level message).
     for root_id in root_ids:
