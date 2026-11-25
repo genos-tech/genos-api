@@ -102,6 +102,12 @@ def deliver_note(
             }
             if note_id is not None:
                 args["note_id"] = note_id
+            else:
+                # A new note goes where the schedule says (my notes, a folder of mine, a team
+                # folder); a later run replaces the page wherever the note sits now.
+                from origin.services.schedule_jobs.ai_dashboard import placement  # noqa: PLC0415
+
+                args.update(placement(sched.params or {}))
             try:
                 saved = html_notes.save_page(args, ctx)
             except (ToolError, ToolForbidden) as exc:

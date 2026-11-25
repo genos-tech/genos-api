@@ -888,6 +888,27 @@ def _run_params(sched: MemberSchedule, job) -> dict[str, Any]:
             )
             if channel is not None:
                 params[AUDIENCE_KEY] = sorted(schedule_audience.readers(channel))
+    if job.delivers_note and job.note_target is not None:
+        # The saved page is read by everyone its place lets in, as it sits NOW (MIP-2354): the job
+        # names only what every one of them may open. A place that cannot be read fails the run.
+        output = sched.output or {}
+        note_id = output.get("note_id") if output.get("target") == "note" else None
+        found: set[str] | None = None
+        if isinstance(note_id, int):
+            try:
+                found = schedule_audience.saved_note_readers(sched.user_id, sched.team_id, note_id)
+            except schedule_audience.NoteTargetError:
+                found = (
+                    None  # the note is gone: the delivery step pauses the schedule with a reason
+                )
+        try:
+            if found is None:
+                found = schedule_audience.note_readers(
+                    sched.user_id, sched.team_id, job.note_target(sched.params or {})
+                )
+        except schedule_audience.NoteTargetError as exc:
+            raise ScheduleRunError(str(exc)) from None
+        params[AUDIENCE_KEY] = sorted(found)
     if job.uses_ai:
         params[AI_EFFORT_KEY] = sched.ai_effort or ""
     return params

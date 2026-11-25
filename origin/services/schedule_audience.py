@@ -164,17 +164,22 @@ def problem(
     )
     if project is None:
         return NO_PROJECT
+    return NOT_EVERYONE if outside_project(reader_ids, project_id) else None
+
+
+def outside_project(reader_ids: set[str], project_id: int) -> bool:
+    """True when somebody in `reader_ids` is not on the project (its members, and its owner while
+    still on the team: `agent.acl.active_project_owners`)."""
     allowed = {
         str(i)
         for i in ProjectMembers.objects.filter(
             project_id=project_id, attendee_id__in=reader_ids
         ).values_list("attendee_id", flat=True)
     }
-    # The project's owner reads it while still on the team (`agent.acl.active_project_owners`).
     owner = active_project_owners([project_id]).get(project_id)
     if owner:
         allowed.add(str(owner))
-    return None if reader_ids <= allowed else NOT_EVERYONE
+    return not reader_ids <= allowed
 
 
 def _picked_chat_problem(team_id: Any, reader_ids: set[str], params: dict[str, Any]) -> str | None:
@@ -239,3 +244,141 @@ def chat_targets(user_id: Any, team_id: Any) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# ── who reads a saved NOTE (MIP-2354) ───────────────────────────────────────────────────────────
+# A dashboard is saved as a note, and a note is read by everyone its place lets in: wider than its
+# owner when it sits in a team folder, is shared, or is linked into a chat. What the page names is
+# limited to what EVERY one of them may open, so the readers are asked again on every run.
+
+NOTE_KINDS = ("me", "project", "chat", "team_folder", "personal_folder")
+MAX_NOTE_READERS = 500
+NOTE_PLACE_NOT_FOUND = "The place chosen for the dashboard note was not found."
+NOTE_TOO_MANY = "Too many people can read that place to check them all. Pick a smaller place."
+
+
+class NoteTargetError(Exception):
+    """The place a note is saved in is not usable; `str(exc)` is a sentence that names nobody."""
+
+
+def _owner_reads(user_id: Any, team_id: Any, folder_id: Any, note_id: int | None) -> set[str]:
+    """The owner plus the people the note is explicitly shared with (a personal note is read by
+    nobody else)."""
+    out = {str(user_id)}
+    if note_id is not None:
+        from origin.models.note.common_note_models import NotePermissionMaster  # noqa: PLC0415
+        from origin.views.utils.note_role import NOTE_TYPE_PERSONAL  # noqa: PLC0415
+
+        out |= {
+            str(u)
+            for u in NotePermissionMaster.objects.filter(
+                note_type=NOTE_TYPE_PERSONAL, note_id=note_id, user__isnull=False
+            ).values_list("user_id", flat=True)
+        }
+    return out
+
+
+def note_readers(
+    user_id: Any, team_id: Any, target: dict[str, Any], *, note_id: int | None = None
+) -> set[str]:
+    """Everyone who can read a note saved at `target` (`{"kind": ..., "id": ...}`), the owner
+    included, as user id strings. `note_id` is the note already saved there, whose explicit shares
+    count. Raises `NoteTargetError` for a place that does not exist or the owner may not use;
+    the sentence names nobody."""
+    kind, ident = target.get("kind", "me"), target.get("id")
+    owner = str(user_id)
+    if kind == "me":
+        return _owner_reads(user_id, team_id, None, note_id)
+    if kind == "project":
+        project = ProjectMaster.objects.filter(
+            project_id=ident, team_id=team_id, is_deleted=False
+        ).first()
+        if (
+            project is None
+            or not ProjectMembers.objects.filter(project_id=ident, attendee_id=user_id).exists()
+        ):
+            raise NoteTargetError(NOTE_PLACE_NOT_FOUND)
+        ids = {
+            str(i)
+            for i in ProjectMembers.objects.filter(
+                project_id=ident, attendee_id__isnull=False
+            ).values_list("attendee_id", flat=True)
+        }
+        owner_of = active_project_owners([ident]).get(ident)
+        return {owner, *ids, *([str(owner_of)] if owner_of else [])}
+    if kind == "chat":
+        channel = load_target(user_id, team_id, ident)
+        if channel is None:
+            raise NoteTargetError(NOTE_PLACE_NOT_FOUND)
+        return {owner, *readers(channel)}
+    if kind in ("team_folder", "personal_folder"):
+        from origin.models.note.personal_note_models import PersonalNoteFolder  # noqa: PLC0415
+        from origin.search_engine.agent.acl import owns_personal_folder  # noqa: PLC0415
+        from origin.views.utils.note_folder_role import (  # noqa: PLC0415
+            team_folder_reader_user_ids,
+        )
+
+        scope = PersonalNoteFolder.SCOPE_TEAM if kind == "team_folder" else "personal"
+        folder = PersonalNoteFolder.objects.filter(
+            folder_id=ident if isinstance(ident, int) else -1, team_id=team_id, scope=scope
+        ).first()
+        if folder is None:
+            raise NoteTargetError(NOTE_PLACE_NOT_FOUND)
+        if kind == "personal_folder":
+            if not owns_personal_folder(folder_id=ident, team_id=str(team_id), user_id=owner):
+                raise NoteTargetError(NOTE_PLACE_NOT_FOUND)
+            return _owner_reads(user_id, team_id, ident, note_id)
+        return {
+            owner,
+            *team_folder_reader_user_ids(ident),
+            *_owner_reads(user_id, team_id, ident, note_id),
+        }
+    raise NoteTargetError(NOTE_PLACE_NOT_FOUND)
+
+
+def saved_note_readers(user_id: Any, team_id: Any, note_id: int) -> set[str]:
+    """Everyone who can read the note as it sits NOW (its folder, its shares), wherever the
+    schedule was told to save it: a note the member later moved or shared is read by those people.
+    Raises `NoteTargetError` when the note is gone."""
+    from origin.models.note.personal_note_models import (  # noqa: PLC0415
+        PersonalNoteFolder,
+        PersonalNoteMaster,
+    )
+
+    row = PersonalNoteMaster.objects.filter(note_id=note_id, team_id=team_id).first()
+    if row is None:
+        raise NoteTargetError(NOTE_PLACE_NOT_FOUND)
+    kind = "me"
+    if row.folder_id is not None:
+        scope = (
+            PersonalNoteFolder.objects.filter(folder_id=row.folder_id)
+            .values_list("scope", flat=True)
+            .first()
+        )
+        kind = "team_folder" if scope == PersonalNoteFolder.SCOPE_TEAM else "personal_folder"
+    out = _owner_reads(user_id, team_id, row.folder_id, note_id)
+    if kind == "team_folder":
+        from origin.views.utils.note_folder_role import (  # noqa: PLC0415
+            team_folder_reader_user_ids,
+        )
+
+        out |= team_folder_reader_user_ids(row.folder_id)
+    return out
+
+
+def common_project_ids(reader_ids: set[str], team_id: Any) -> set[int]:
+    """The team's live projects EVERY one of `reader_ids` is on (a person's own projects, plus
+    the ones they own while on the team): what a page about 'my progress' may name."""
+    from django.db.models import Count  # noqa: PLC0415
+
+    if not reader_ids:
+        return set()
+    rows = (
+        ProjectMembers.objects.filter(
+            attendee_id__in=reader_ids, project__team_id=team_id, project__is_deleted=False
+        )
+        .values("project_id")
+        .annotate(n=Count("attendee_id", distinct=True))
+        .filter(n=len(reader_ids))
+    )
+    return {r["project_id"] for r in rows}
