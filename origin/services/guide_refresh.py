@@ -42,6 +42,7 @@ from origin.views.utils.note_version import keep_current_state, snapshot_note_ve
 log = logging.getLogger(__name__)
 
 SHIPPED_PATH = Path(__file__).resolve().parent / "guide_shipped.json"
+SHIPPED_MANUAL_PATH = Path(__file__).resolve().parent / "guide_shipped_manual.json"
 BATCH_FOLDERS = 200
 
 # locale -> {title it had when shipped: the title the manual gives it now}. A copy of the old title that is
@@ -79,11 +80,19 @@ def _shipped() -> dict:
     return json.loads(SHIPPED_PATH.read_text(encoding="utf-8"))
 
 
+@lru_cache(maxsize=None)
+def _shipped_manual() -> dict:
+    return json.loads(SHIPPED_MANUAL_PATH.read_text(encoding="utf-8"))
+
+
 def shipped_fingerprints(locale: str, title: str) -> frozenset[str]:
-    """Fingerprints of every text `title` has shipped with: from git history, plus the hand-written list as
+    """Fingerprints of every text `title` has shipped with: from git history, every text the vendored manual
+    has had (`guide_shipped_manual.json`, MIP-2395: without it an unedited copy of an earlier manual text read
+    as the member's own edit and no manual change reached an existing folder), plus the hand-written list as
     it stands in code with and without the OAuth section (its address is this deployment's own, so it cannot
     be in the file)."""
     found = set(_shipped().get(locale, {}).get(title, {}).get("sha256", ()))
+    found.update(_shipped_manual().get(locale, {}).get(title, {}).get("sha256", ()))
     for note_title, body in guide_notes._EDITIONS[locale][1]:
         if note_title != title:
             continue
