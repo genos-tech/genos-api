@@ -1088,6 +1088,97 @@ class RunNowTests(ScheduleBase):
         self.assertEqual(self.calls, [])
 
 
+class RunRightAwayTests(ScheduleBase):
+    """ "Run right away" (MIP-2402): a one-time schedule made and run in one step."""
+
+    def go(self, **over):
+        fields = {"name": "Now", "job": "ok", "frequency": "once", "now": NOW}
+        fields.update(over)
+        return schedules.create_and_run(self.ctx, **fields)
+
+    def test_it_runs_once_now_and_leaves_a_finished_one_time_schedule(self):
+        sched, out = self.go()
+        sched.refresh_from_db()
+        self.assertEqual(out, {"status": "ok", "error": "", "title": "Your day", "items": 2})
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(sched.frequency, "once")
+        self.assertTrue(sched.enabled)
+        self.assertIsNone(sched.next_run_at)
+        self.assertIsNone(sched.claimed_at)
+        self.assertEqual((sched.last_status, sched.last_run_at), ("ok", NOW))
+
+    def test_the_tick_never_runs_it_again(self):
+        self.go()
+        for later in (NOW + timedelta(minutes=1), NOW + timedelta(days=1)):
+            self.assertEqual(schedules.run_due(later).due, 0)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_the_date_and_time_are_now_in_the_members_zone_and_what_was_sent_is_ignored(self):
+        # 09:04 on Monday in Tokyo. A past date, a time, weekdays and a day of the month sent
+        # along are ignored: the server decides.
+        sched, _ = self.go(run_date="2020-01-01", time_of_day="03:00", weekdays=[1], month_day=9)
+        self.assertEqual(
+            (str(sched.run_date), sched.time_of_day.strftime("%H:%M")), ("2026-11-09", "09:04")
+        )
+        self.assertEqual(sched.weekdays, [])
+        self.assertIsNone(sched.month_day)
+
+    def test_only_a_one_time_schedule_can_run_right_away(self):
+        for frequency in ("daily", "weekdays", "weekly", "monthly", "", None):
+            with self.assertRaises(schedules.ScheduleError, msg=str(frequency)):
+                self.go(frequency=frequency)
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+        self.assertEqual(self.calls, [])
+
+    def test_a_failed_run_leaves_no_schedule_behind_and_says_why(self):
+        with self.assertLogs("origin.schedules", level="WARNING"):
+            with self.assertRaises(schedules.ScheduleError) as caught:
+                self.go(job="boom")
+        self.assertEqual(str(caught.exception), "RuntimeError")
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+
+    def test_a_refused_parameter_runs_nothing_and_saves_nothing(self):
+        with self.assertRaises(schedules.ScheduleError):
+            self.go(job="weekly_report", params={"scope": "everyone"})
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+        self.assertEqual(self.calls, [])
+
+    def test_a_double_press_in_the_same_minute_runs_once(self):
+        self.go()
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            self.go()
+        self.assertIn("same thing", str(caught.exception))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(MemberSchedule.objects.count(), 1)
+
+    def test_the_same_report_a_minute_later_runs_again_even_with_the_same_name(self):
+        self.go()
+        # A new row each time; the first is finished, so the cooldown is not in the way.
+        self.go(now=NOW + timedelta(minutes=2))
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(MemberSchedule.objects.filter(name="Now").count(), 2)
+
+    def test_the_plans_count_is_asked_before_anything_runs(self):
+        with mock.patch("origin.services.schedules.schedule_limit", return_value=1):
+            self.go()
+            with self.assertRaises(schedules.ScheduleLimitReached):
+                self.go(now=NOW + timedelta(minutes=2), name="Again")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_an_ordinary_create_still_refuses_a_time_that_has_passed(self):
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            schedules.create(
+                self.ctx,
+                name="Late",
+                job="ok",
+                frequency="once",
+                run_date="2026-11-09",
+                time_of_day="09:00",
+                now=NOW,
+            )
+        self.assertIn("already passed", str(caught.exception))
+
+
 class DeliveryAndRegistryTests(ScheduleBase):
     def test_the_default_hook_keeps_a_summary_and_logs_without_the_title(self):
         sched = self.make()

@@ -271,6 +271,36 @@ class TestListAndCreate(ScheduleViewBase):
         )
         self.assertIn("runDate", once)
 
+    def test_run_now_makes_a_one_time_schedule_and_runs_it_in_the_same_request(self):
+        res = self.client.post(
+            LIST,
+            self.body(name="Right now", frequency="once", timeOfDay="03:00", runNow=True),
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(
+            res.data["run"], {"status": "ok", "error": "", "title": "Your day (today)", "items": 2}
+        )
+        row = res.data["schedule"]
+        self.assertEqual(row["frequency"], "once")
+        self.assertIsNone(row["nextRun"])
+        self.assertEqual(row["lastStatus"], "ok")
+        self.assertIsNotNone(row["lastRun"])
+        # The time the form sent is not the time used: it is now, in the member's zone.
+        self.assertNotEqual(row["timeOfDay"], "03:00")
+        self.assertEqual(MemberSchedule.objects.count(), 1)
+
+    def test_run_now_is_refused_for_a_recurring_schedule_and_makes_nothing(self):
+        res = self.client.post(LIST, self.body(frequency="daily", runNow=True), format="json")
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertIn("one-time", res.data["error"])
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+
+    def test_run_now_false_or_missing_is_an_ordinary_create(self):
+        row = self.create(frequency="daily", runNow=False)
+        self.assertNotIn("run", row)
+        self.assertIsNotNone(row["nextRun"])
+
     def test_a_second_schedule_like_the_first_is_refused_in_one_sentence_in_error(self):
         first = self.create(name="Morning plan", timeOfDay="09:00", frequency="daily")
         res = self.client.post(

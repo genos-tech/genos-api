@@ -626,7 +626,11 @@ def create(
     ai_effort: Any = None,
     deliver_channel_id: Any = None,
     now: datetime | None = None,
+    immediate: bool = False,
 ) -> MemberSchedule:
+    """Save a schedule. `immediate` (MIP-2402, `create_and_run` only) makes a one-time schedule
+    that is not waiting for its time: it is saved with no next run, so no tick can pick it up, and
+    its time is allowed to be now. The caller runs it at once."""
     now = now or timezone.now()
     user = _require_member(ctx)
     _require_plan(user)
@@ -642,7 +646,7 @@ def create(
         run_date=run_date,
     )
     zone = user_zone(user)
-    first = _first_run(rec, zone, now)
+    first = None if immediate else _first_run(rec, zone, now)
     with transaction.atomic():
         # Two creates at once must not both slip under the cap: take the member's row.
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
@@ -656,7 +660,18 @@ def create(
                 used=used,
             )
         cleaned_params = _check_params_for_owner(ctx, job, cleaned_params, None)
-        _refuse_duplicate(ctx, name=clean, job=job, params=cleaned_params, rec=rec, target=target)
+        # A report made to run right away is a one-off: another one with the same NAME later is
+        # fine (it is the same report, run again), but the same thing in the same minute is a
+        # double press, and is refused.
+        _refuse_duplicate(
+            ctx,
+            name=clean,
+            job=job,
+            params=cleaned_params,
+            rec=rec,
+            target=target,
+            check_name=not immediate,
+        )
         return MemberSchedule.objects.create(
             user_id=user.pk,
             team_id=ctx.team_id,
@@ -675,6 +690,49 @@ def create(
             deliver_push=bool(deliver_push),
             ai_effort=effort,
         )
+
+
+def create_and_run(
+    ctx: ToolContext, *, frequency: Any, now: datetime | None = None, **fields: Any
+) -> tuple[MemberSchedule, dict[str, Any]]:
+    """A one-time schedule that runs RIGHT NOW (MIP-2402): "Run right away" in the form. Returns
+    the schedule and what the run gave (as `run_now`).
+
+    The server picks the date and the time (now, in the member's zone); whatever the caller sent
+    for them is ignored. The schedule is saved with no next run and then run by hand, which ends a
+    one-time schedule, so the tick can never file it a second time (MIP-2403). It stays in the
+    list as a finished one-time schedule, with its run time.
+
+    A run that failed leaves NO schedule behind and the sentence is the error: there is nothing
+    to wait for, and the form still holds what the member typed, so they can press again. A
+    report whose AI part was skipped (no credits) did not fail: it is the plain report.
+    Everything `create` refuses (the plan, the count, the checked parameters) is refused here
+    before anything runs."""
+    if str(frequency or "").strip().lower() != FREQ_ONCE:
+        raise ScheduleError("Run right away is only for a one-time schedule.")
+    now = now or timezone.now()
+    local = now.astimezone(user_zone(_require_member(ctx)))
+    for own in ("run_date", "time_of_day", "weekdays", "month_day", "immediate"):
+        fields.pop(own, None)
+    sched = create(
+        ctx,
+        frequency=FREQ_ONCE,
+        run_date=local.date().isoformat(),
+        time_of_day=local.strftime("%H:%M"),
+        now=now,
+        immediate=True,
+        **fields,
+    )
+    try:
+        out = run_now(ctx, sched.pk, now=now)
+    except ScheduleError:
+        delete(ctx, sched.pk)
+        raise
+    if out["status"] != STATUS_OK:
+        delete(ctx, sched.pk)
+        raise ScheduleError(out["error"] or "The report could not be made. Try again.")
+    sched.refresh_from_db()
+    return sched, out
 
 
 def update(

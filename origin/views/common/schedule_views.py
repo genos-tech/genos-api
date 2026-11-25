@@ -62,6 +62,7 @@ _FIELDS = {
     "deliverPush": "deliver_push",
     "aiEffort": "ai_effort",
     "deliverChannelId": "deliver_channel_id",
+    "runNow": "run_now",
 }
 
 
@@ -278,6 +279,27 @@ class ScheduleListView(_Base):
         if isinstance(ctx, Response):
             return ctx
         fields = _changes(body)
+        if fields.get("run_now") is True:
+            # "Run right away" (MIP-2402): a one-time schedule made and run in this request. The
+            # server picks the date and time; the run's own result comes back with the schedule.
+            made, problem = self._run(
+                lambda: schedules.create_and_run(
+                    ctx,
+                    name=fields.get("name"),
+                    job=fields.get("job"),
+                    params=fields.get("params"),
+                    frequency=fields.get("frequency"),
+                    deliver_push=bool(fields.get("deliver_push", True)),
+                    ai_effort=fields.get("ai_effort"),
+                    deliver_channel_id=fields.get("deliver_channel_id"),
+                )
+            )
+            if problem:
+                return problem
+            sched, out = made
+            return Response(
+                {"schedule": _row(sched, user_zone(request.user)), "run": out}, status=201
+            )
         sched, problem = self._run(
             lambda: schedules.create(
                 ctx,
