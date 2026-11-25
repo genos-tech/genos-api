@@ -1151,12 +1151,28 @@ class RunRightAwayTests(ScheduleBase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(MemberSchedule.objects.count(), 1)
 
-    def test_the_same_report_a_minute_later_runs_again_even_with_the_same_name(self):
+    def test_a_name_already_used_is_refused_even_for_a_report_run_right_away(self):
+        # A member never has two schedules with one name (MIP-1201): the finished row of the first
+        # run keeps its name, so the same report under the same name is refused, and nothing runs.
         self.go()
-        # A new row each time; the first is finished, so the cooldown is not in the way.
-        self.go(now=NOW + timedelta(minutes=2))
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            self.go(now=NOW + timedelta(minutes=2))
+        self.assertIn("'Now'", str(caught.exception))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(MemberSchedule.objects.count(), 1)
+
+    def test_the_same_report_under_another_name_runs_again(self):
+        self.go()
+        self.go(now=NOW + timedelta(minutes=2), name="Now again")
         self.assertEqual(len(self.calls), 2)
-        self.assertEqual(MemberSchedule.objects.filter(name="Now").count(), 2)
+        self.assertEqual(MemberSchedule.objects.count(), 2)
+
+    def test_a_name_used_by_an_ordinary_schedule_is_refused_too(self):
+        self.make(name="Morning plan")
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            self.go(name="morning PLAN ")
+        self.assertIn("Morning plan", str(caught.exception))
+        self.assertEqual(self.calls, [])
 
     def test_the_plans_count_is_asked_before_anything_runs(self):
         with mock.patch("origin.services.schedules.schedule_limit", return_value=1):
