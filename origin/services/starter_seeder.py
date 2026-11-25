@@ -961,4 +961,4 @@ def create_starter_workspace(user, team) -> None:
     # After commit, exactly like the demo path: content only becomes
     # searchable once OpenSearch has it, and the reindex must not run
     # inside the transaction.
-    kick_off_demo_reindex()
+    kick_off_demo_reindex(team.team_id)

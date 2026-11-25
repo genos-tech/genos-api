@@ -56,9 +56,13 @@ from origin.search_engine.text_extraction import extract_sections
 
 
 def iter_chat_note_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     qs = ChatNoteMaster.objects.select_related("team", "owner")
+    if team_id is not None:
+        qs = qs.filter(team_id=team_id)
     if since is not None:
         # Plus every note in a channel whose membership changed, and in a
         # PM channel whose project's did (PM members are project members).
@@ -166,9 +170,13 @@ def _resolve_chat_acls(notes: list[ChatNoteMaster]) -> dict:
 
 
 def iter_task_note_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     qs = TaskNoteMaster.objects.select_related("team", "project", "task", "owner")
+    if team_id is not None:
+        qs = qs.filter(team_id=team_id)
     if since is not None:
         window = Q(ts_updated_at__gte=since)
         if dirty and dirty.project_ids:
@@ -237,13 +245,17 @@ def iter_task_note_chunks(
 
 
 def iter_personal_note_chunks(
-    since: Optional[datetime] = None, note_ids: Optional[list[int]] = None
+    since: Optional[datetime] = None,
+    note_ids: Optional[list[int]] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     # A Genos Skill's body note is never indexed (MIP-2121): it is the skill's text, read by the
     # Skills editor and run on purpose, not a note the owner's search or agent should surface.
     qs = PersonalNoteMaster.objects.select_related("team", "owner").exclude(
         folder_id__in=PersonalNoteFolder.skill_folder_ids()
     )
+    if team_id is not None:
+        qs = qs.filter(team_id=team_id)
     if note_ids is not None:
         # One-off refresh of specific notes (a folder move), see
         # `refresh_personal_notes`.
@@ -549,10 +561,12 @@ def _note_to_section_chunks(
 
 
 def iter_all_note_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
-    yield from iter_chat_note_chunks(since, dirty)
-    yield from iter_task_note_chunks(since, dirty)
+    yield from iter_chat_note_chunks(since, dirty, team_id)
+    yield from iter_task_note_chunks(since, dirty, team_id)
     # Personal notes take no ACL from a project or channel; their team
     # folders already re-index through the folder's own timestamp.
-    yield from iter_personal_note_chunks(since)
+    yield from iter_personal_note_chunks(since, team_id=team_id)

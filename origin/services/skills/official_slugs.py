@@ -11,6 +11,7 @@ OFFICIAL_SLUGS = frozenset(
         "campaign-recap",
         "content-week",
         "course-plan",
+        "create-task",
         "design-handoff",
         "escalate",
         "exam-prep",

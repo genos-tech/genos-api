@@ -62,6 +62,7 @@ from origin.services.task_status_reason import (
     status_reason_error,
     status_reason_suggestions,
 )
+from origin.services.task_status_values import status_value_error
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.public.credentials import credential_of, reaches_team, team_for
@@ -74,8 +75,6 @@ from origin.views.utils.scope_guards import (
 
 MAX_OFFSET = 1_000_000
 MAX_PAGE = 100
-# What `PATCH /tasks/<id>` accepts as a status (MIP-1997); the same six values the app's tools take.
-_STATUSES = frozenset({"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"})
 
 
 class PublicApiDisabled(APIException):
@@ -341,6 +340,10 @@ class TaskListCreateView(PublicApiView):
             # 404 rather than 403: project ids are sequential integers.
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        # MIP-2391: the same six values on create as on PATCH.
+        if message := status_value_error(request.data.get("status") or "Open"):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
         task = TaskMaster.objects.create(
             team=team,
             project_id=raw_project,
@@ -402,11 +405,8 @@ class TaskDetailView(PublicApiView):
                     # MIP-1997: the new status must be a real one (the change is posted as a
                     # comment, "Open → banana" would read as a bug). A change should say why, but
                     # a missing reason is only suggested in the response (never refused).
-                    if not isinstance(value, str) or value not in _STATUSES:
-                        return Response(
-                            {"error": f"status must be one of {sorted(_STATUSES)}."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    if message := status_value_error(value, status_before):
+                        return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
                     if message := status_reason_error(
                         status_before, value, request.data.get("reason")
                     ):
