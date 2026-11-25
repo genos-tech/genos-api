@@ -140,6 +140,14 @@ class TestAFreeMembersAttempts(GateBase):
         self.refuse(lambda: self.make())
         self.assertEqual(MemberSchedule.objects.count(), 0)
 
+    def test_run_right_away_is_refused_with_the_upgrade_sentence_and_runs_nothing(self):
+        self.refuse(
+            lambda: schedules.create_and_run(
+                self.ctx, name="Now", job="ok", frequency="once", params={}
+            )
+        )
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+
     def test_edit_turning_on_and_run_now_are_refused(self):
         sched = self.made_as_core()
         schedules.set_enabled(self.ctx, sched.pk, False)
