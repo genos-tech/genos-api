@@ -709,6 +709,12 @@ def update(
             sched.params = _check_params_for_owner(
                 ctx, job, clean_params(job, changes.get("params", sched.params)), sched.pk
             )
+            if job != sched.job:
+                # The living note a dashboard keeps belongs to THAT report. Left behind, switching
+                # back would write over it, and a new place would be refused as a "move" (MIP-2405).
+                # The page itself stays, as an ordinary note.
+                sched.output = {}
+                dirty.append("output")
             sched.job = job
             dirty += ["job", "params"]
         if {"deliver_channel_id", "job", "params"} & set(changes):

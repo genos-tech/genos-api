@@ -283,8 +283,8 @@ def note_readers(
 ) -> set[str]:
     """Everyone who can read a note saved at `target` (`{"kind": ..., "id": ...}`), the owner
     included, as user id strings. `note_id` is the note already saved there, whose explicit shares
-    count. Raises `NoteTargetError` for a place that does not exist or the owner may not use;
-    the sentence names nobody."""
+    count. Raises `NoteTargetError` for a place that does not exist or the owner may not use (a
+    team folder they cannot add notes to included); the sentence names nobody."""
     kind, ident = target.get("kind", "me"), target.get("id")
     owner = str(user_id)
     if kind == "me":
@@ -328,6 +328,18 @@ def note_readers(
             if not owns_personal_folder(folder_id=ident, team_id=str(team_id), user_id=owner):
                 raise NoteTargetError(NOTE_PLACE_NOT_FOUND)
             return _owner_reads(user_id, team_id, ident, note_id)
+        # The page is made by the owner, so the owner must be allowed to add notes to the folder
+        # (Editor or more): a folder they can only read, or cannot see, fails the first run, and
+        # saying so at once is kinder. The sentence is the same as for a missing place (MIP-2404).
+        from origin.search_engine.agent.tools.base import ToolContext, ToolError  # noqa: PLC0415
+        from origin.search_engine.agent.tools.note_targets import (  # noqa: PLC0415
+            writable_team_folder,
+        )
+
+        try:
+            writable_team_folder(ident, ToolContext(team_id=str(team_id), user_id=owner))
+        except ToolError:
+            raise NoteTargetError(NOTE_PLACE_NOT_FOUND) from None
         return {
             owner,
             *team_folder_reader_user_ids(ident),

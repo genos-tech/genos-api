@@ -15,7 +15,7 @@ from unittest import mock
 from django.core.cache import cache
 
 from origin.models.common.schedule_models import PAUSE_NOTE, MemberSchedule
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.services import dashboard_page, html_notes, schedules
 from origin.services.collab_push import PushOutcome
 from origin.services.schedule_jobs import JOBS
@@ -225,6 +225,46 @@ class TestTheLivingNote(JobBase):
         self.assertIn("deleted", error)
         self.assertEqual(row._pause_reason, PAUSE_NOTE)
         self.assertEqual(self.notes().count(), 0)
+
+    def test_changing_the_job_lets_go_of_the_note_so_switching_back_starts_a_new_one(self):
+        # MIP-2405: the old note id stayed, so switching back replaced THAT note's page and a
+        # different place was refused as a "move".
+        schedules._execute(self.reload())
+        old = self.reload().output["note_id"]
+        schedules.update(self.ctx, self.sched.id, job="what_to_do_today", params={})
+        self.assertEqual(self.reload().output, {})
+        folder = PersonalNoteFolder.objects.create(
+            team=self.team,
+            owner=self.user,
+            name="Mine",
+            scope=PersonalNoteFolder.SCOPE_PERSONAL,
+            visibility=PersonalNoteFolder.VISIBILITY_PRIVATE,
+        )
+        schedules.update(
+            self.ctx,
+            self.sched.id,
+            job="ai_dashboard",
+            params={
+                "kind": "mine",
+                "period": "month",
+                "save_to": "personal_folder",
+                "folder_id": folder.folder_id,
+            },
+        )
+        self.assertEqual(schedules._execute(self.reload())[0], "ok")
+        new = self.reload().output["note_id"]
+        self.assertNotEqual(new, old)
+        self.assertEqual(PersonalNoteMaster.objects.get(note_id=new).folder_id, folder.folder_id)
+        # The first page is still there, as an ordinary note, and was not written over.
+        self.assertTrue(PersonalNoteMaster.objects.filter(note_id=old).exists())
+        self.assertEqual(self.notes().count(), 2)
+
+    def test_an_edit_that_keeps_the_job_keeps_the_note(self):
+        schedules._execute(self.reload())
+        note_id = self.reload().output["note_id"]
+        schedules.update(self.ctx, self.sched.id, name="Renamed")
+        schedules.update(self.ctx, self.sched.id, params={"kind": "mine", "period": "week"})
+        self.assertEqual(self.reload().output["note_id"], note_id)
 
     def test_resuming_after_the_note_is_gone_makes_a_new_one(self):
         schedules._execute(self.reload())
