@@ -54,6 +54,12 @@ PALETTE: tuple[str, ...] = (
 )
 NEUTRAL_COLOR = "#808080"
 NEUTRAL_TEXT = "white"
+# The built-in `template` tag (MIP-2398): a fixed slate-blue chip for every reader. An official
+# skill's other chips are grey to a stranger (a personal palette would link an author's skills
+# together); this one belongs to no author, so it keeps its colour.
+TEMPLATE_TAG = text.TEMPLATE_TAG
+TEMPLATE_COLOR = "#6a5acd"
+TEMPLATE_TEXT = "white"
 
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _TEXT_COLORS = {"black", "white"}
@@ -90,6 +96,10 @@ def clean_name(value: Any) -> str:
         raise TagError(str(exc)) from exc
     if not names:
         raise TagError("A tag needs a name.")
+    if names[0] == TEMPLATE_TAG:
+        raise TagError(
+            f'"{TEMPLATE_TAG}" is a built-in tag of the official skills. Pick another name.'
+        )
     return names[0]
 
 
@@ -151,6 +161,9 @@ def chips(
     a public skill, an official one)."""
     out = []
     for name in names:
+        if name == TEMPLATE_TAG:
+            out.append({"name": name, "color": TEMPLATE_COLOR, "textColor": TEMPLATE_TEXT})
+            continue
         color, text_color = (palette or {}).get(name, (NEUTRAL_COLOR, NEUTRAL_TEXT))
         if not coloured:
             color, text_color = NEUTRAL_COLOR, NEUTRAL_TEXT
@@ -194,7 +207,9 @@ def ensure(
 ) -> None:
     """Add the names the owner's catalog lacks. A copied or handed-over skill keeps the colour
     the SOURCE catalog (`colors_from=(team_id, owner_id)`) gave a name, else a palette colour
-    chosen from the name, so the chips do not all turn grey."""
+    chosen from the name, so the chips do not all turn grey. The built-in `template` tag is never a
+    catalog row: it is left out here, so no path (a copy, a hand-over, the official sync) makes one."""
+    names = [n for n in names if n != TEMPLATE_TAG]
     if not names:
         return
     have = set(

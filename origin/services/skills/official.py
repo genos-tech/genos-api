@@ -138,7 +138,8 @@ def load_catalog(directory: Path | None = None) -> list[Spec]:
                 slug=slug,
                 title=text.clean_title(row.get("title")),
                 description=text.clean_description(row.get("description")),
-                tags=text.clean_tags(row.get("tags")),
+                # Every official skill is a template (MIP-2398), first, then the pack tag it had.
+                tags=text.clean_tags([text.TEMPLATE_TAG, *(row.get("tags") or [])]),
                 icon=str(row.get("icon") or "")[:16],
                 tool_level=tool_level,
                 body_markdown=body.strip("\n"),

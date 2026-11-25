@@ -1026,6 +1026,11 @@ def create(
     )
     description = _wrap(lambda: text.clean_description(fields.description))
     tags = _wrap(lambda: text.clean_tags(fields.tags))
+    if tags_mode != "strict":
+        # A copy (or an agent's write) of an official skill is the member's own, and no member's
+        # skill is a template (MIP-2398). The editor's strict write is not stripped: it is refused
+        # below as a name that is not in the member's tag list, which is the honest answer.
+        tags = [t for t in tags if t != text.TEMPLATE_TAG]
     hint = _wrap(lambda: text.clean_argument_hint(fields.argument_hint))
     tool_level = _clean_choice(fields.tool_level or TOOL_LEVEL_READ, _TOOL_LEVELS, "The tool level")
     effort = _clean_choice(fields.effort, _EFFORTS, "The effort") if fields.effort else ""

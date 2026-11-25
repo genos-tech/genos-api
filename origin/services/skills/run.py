@@ -733,6 +733,16 @@ def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
             for v in SkillVersion.objects.filter(pairs).defer("body", "body_markdown")
         }
 
+    # The chips of every row, the owner's colours where a reader may see them (a public skill's
+    # are grey to a stranger; `template` keeps its own colour, MIP-2398): one query for all rows.
+    from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports service
+
+    colours = skill_tags.color_map(
+        [*mine, *team, *(i.skill for i in installs), *official],
+        user.pk,
+        {s.note_id for s in mine},
+    )
+
     def row(group: str, skill: Skill, *, pinned: int | None = None) -> dict[str, Any] | None:
         if group == GROUP_MINE:
             src: Any = skill
@@ -757,6 +767,13 @@ def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
             ),
             "visibility": skill.visibility,
             "isOfficial": skill.is_official,
+            # What the schedule's skill picker shows and filters by (MIP-2398).
+            "tags": list(src.tags or []),
+            "tagChips": skill_tags.chips(
+                list(src.tags or []),
+                colours.get((str(skill.team_id), str(skill.owner_id))),
+                coloured=group == GROUP_MINE or skill.visibility != "public",
+            ),
             "mine": group == GROUP_MINE,
             "ownerName": (skill.owner.username if skill.owner_id else "")
             if group in (GROUP_MINE, GROUP_TEAM)
