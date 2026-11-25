@@ -660,18 +660,7 @@ def create(
                 used=used,
             )
         cleaned_params = _check_params_for_owner(ctx, job, cleaned_params, None)
-        # A report made to run right away is a one-off: another one with the same NAME later is
-        # fine (it is the same report, run again), but the same thing in the same minute is a
-        # double press, and is refused.
-        _refuse_duplicate(
-            ctx,
-            name=clean,
-            job=job,
-            params=cleaned_params,
-            rec=rec,
-            target=target,
-            check_name=not immediate,
-        )
+        _refuse_duplicate(ctx, name=clean, job=job, params=cleaned_params, rec=rec, target=target)
         return MemberSchedule.objects.create(
             user_id=user.pk,
             team_id=ctx.team_id,
@@ -706,8 +695,10 @@ def create_and_run(
     A run that failed leaves NO schedule behind and the sentence is the error: there is nothing
     to wait for, and the form still holds what the member typed, so they can press again. A
     report whose AI part was skipped (no credits) did not fail: it is the plain report.
-    Everything `create` refuses (the plan, the count, the checked parameters) is refused here
-    before anything runs."""
+    Everything `create` refuses (the plan, the count, the checked parameters, a name or a
+    content already used by another of the member's schedules) is refused here before anything
+    runs. The finished row keeps its name, so the same report right away again needs another
+    name, or the finished row deleted (MIP-2407)."""
     if str(frequency or "").strip().lower() != FREQ_ONCE:
         raise ScheduleError("Run right away is only for a one-time schedule.")
     now = now or timezone.now()
