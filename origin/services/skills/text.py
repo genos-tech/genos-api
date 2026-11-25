@@ -20,6 +20,11 @@ SLUG_MAX = 40
 TITLE_MAX = 120
 DESCRIPTION_MAX = 280
 TAGS_MAX = 5
+
+# The built-in tag of the official skills (MIP-2398): every official skill is a template, and a
+# member's skill never is. It is not a catalog tag (a member cannot make, rename to or pick it), has
+# one fixed colour for every reader, and a copy of an official skill drops it.
+TEMPLATE_TAG = "template"
 TAG_MAX = 24
 ARGUMENT_HINT_MAX = 120
 BODY_MAX_CHARS = 12_000  # about 3k tokens: the block sent to the model counts toward input cost
