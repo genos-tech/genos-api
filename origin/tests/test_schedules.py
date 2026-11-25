@@ -1004,6 +1004,67 @@ class RunNowTests(ScheduleBase):
         self.assertTrue(sched.enabled)
         self.assertEqual(sched.last_status, "failed")
 
+    # ── a one-time schedule: run now uses it up (MIP-2403) ──
+
+    def make_once(self, **kw):
+        # Due at 09:00 Tokyo on the 9th; the tick has not come for it yet.
+        return self.make(
+            frequency="once",
+            run_date="2026-11-09",
+            due_at=SCHEDULED,
+            now=utc(2026, 11, 7),
+            **kw,
+        )
+
+    def test_run_now_ends_a_one_time_schedule_so_the_tick_never_runs_it_again(self):
+        sched = self.make_once()
+        result = schedules.run_now(self.ctx, sched.pk, now=NOW)
+        sched.refresh_from_db()
+        self.assertEqual(result["status"], "ok")
+        self.assertIsNone(sched.next_run_at)
+        self.assertIsNone(sched.claimed_at)
+        self.assertTrue(sched.enabled)
+        self.assertEqual((sched.last_status, sched.last_run_at), ("ok", NOW))
+        self.assertEqual(schedules.run_due(NOW + timedelta(minutes=1)).due, 0)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_failed_run_now_leaves_the_one_time_run_for_its_time(self):
+        sched = self.make_once(job="boom")
+        with self.assertLogs("origin.schedules", level="WARNING"):
+            result = schedules.run_now(self.ctx, sched.pk, now=NOW)
+        sched.refresh_from_db()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(sched.next_run_at, SCHEDULED)
+        self.assertIsNone(sched.claimed_at)
+
+    def test_a_tick_that_comes_while_run_now_is_inside_the_job_skips_it(self):
+        sched = self.make_once()
+        inner = []
+
+        def job(ctx, params):
+            inner.append(schedules.run_due(NOW + timedelta(minutes=1)))
+            return self._ok(ctx, params)
+
+        JOBS["ok"] = Job("ok", "OK", "Fine.", job)
+        schedules.run_now(self.ctx, sched.pk, now=NOW)
+        self.assertEqual(inner[0].due, 0)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_run_now_is_refused_while_a_tick_is_running_the_one_time_schedule(self):
+        sched = self.make_once()
+        MemberSchedule.objects.filter(pk=sched.pk).update(claimed_at=NOW - timedelta(minutes=1))
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            schedules.run_now(self.ctx, sched.pk, now=NOW)
+        self.assertIn("running", str(caught.exception))
+        self.assertEqual(self.calls, [])
+
+    def test_run_now_keeps_the_next_run_of_a_recurring_schedule(self):
+        sched = self.make(due_at=SCHEDULED)
+        schedules.run_now(self.ctx, sched.pk, now=NOW)
+        sched.refresh_from_db()
+        self.assertEqual(sched.next_run_at, SCHEDULED)
+        self.assertIsNone(sched.claimed_at)
+
     def test_a_second_run_inside_the_cooldown_is_refused_and_runs_nothing(self):
         sched = self.make()
         schedules.run_now(self.ctx, sched.pk, now=NOW)

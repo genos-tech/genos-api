@@ -961,6 +961,11 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
 
     Records `last_*` like a run, but leaves the next run, the failure count and the pause
     alone: a test run does not use up today's run or push a schedule toward pausing.
+
+    A one-time schedule is the exception (MIP-2403): its one run IS the report, so a run that
+    went through ends it (no next run), and the tick never files the same report again at the
+    set time. The row is claimed for the run, as a tick would, so a tick that comes while the
+    job is going skips it. A run that failed leaves the set time standing.
     """
     now = now or timezone.now()
     _require_plan(_require_member(ctx))
@@ -969,10 +974,31 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
         wait = int((RUN_NOW_COOLDOWN - (now - sched.last_run_at)).total_seconds()) + 1
         raise ScheduleError(f"This schedule ran a moment ago. Try again in {wait} seconds.")
     _require_ai_run_now_room(sched, now)
-    status, error = _execute(sched)
-    MemberSchedule.objects.filter(pk=sched.pk).update(
-        last_run_at=now, last_status=status, last_error=error, ts_updated_at=now
-    )
+    once = sched.frequency == FREQ_ONCE
+    if once and not _claim_for_run_now(sched.pk, now):
+        raise ScheduleError(
+            "This schedule is running right now. Try again in a minute, once its report is in."
+        )
+    status, error = STATUS_FAILED, ""
+    try:
+        status, error = _execute(sched)
+    finally:
+        fields: dict[str, Any] = {
+            "last_run_at": now,
+            "last_status": status,
+            "last_error": error,
+            "ts_updated_at": now,
+        }
+        if once:
+            fields["claimed_at"] = None
+            if status == STATUS_OK:
+                fields["next_run_at"] = None
+        # A one-time schedule is written only while our claim stands: one the member edited or
+        # deleted meanwhile wins.
+        rows = MemberSchedule.objects.filter(pk=sched.pk)
+        if once:
+            rows = rows.filter(claimed_at=now)
+        rows.update(**fields)
     sched.refresh_from_db()
     if status == STATUS_FAILED:
         log.warning(
@@ -1027,6 +1053,13 @@ def _claim(pk: Any, now: datetime) -> bool:
         ).update(claimed_at=now)
         == 1
     )
+
+
+def _claim_for_run_now(pk: Any, now: datetime) -> bool:
+    """Take the row for a hand run of a one-time schedule, so no tick runs it meanwhile (and a
+    second press is refused). Like `_claim`, but it asks neither for a due time nor for the
+    schedule to be on: a paused one may be run by hand."""
+    return MemberSchedule.objects.filter(_unclaimed(now), pk=pk).update(claimed_at=now) == 1
 
 
 def _advance(sched: MemberSchedule, now: datetime, zone) -> datetime | None:
