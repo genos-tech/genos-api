@@ -21,6 +21,7 @@ linear (no nested quantifiers).
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid
 from collections.abc import Iterator
@@ -51,6 +52,8 @@ from origin.services import html_note_limits
 from origin.services.archive import archived_note_refusal
 from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.services.html_note_limits import MAX_PAGE_BYTES, PLAN_PLACE
+
+log = logging.getLogger(__name__)
 
 BODY_FORMAT_BLOCKNOTE = "blocknote"
 BODY_FORMAT_HTML = "html"
@@ -540,12 +543,21 @@ def check_rate(user_id: str, per_hour: int) -> None:
     cache failure lets the save through rather than breaking the tool.
     """
     key = _rate_key(str(user_id))
-    cache.add(key, 0, 3700)
     try:
-        used = cache.incr(key)
-    except ValueError:  # the key expired between add and incr
-        cache.set(key, 1, 3700)
-        used = 1
+        cache.add(key, 0, 3700)
+        try:
+            used = cache.incr(key)
+        except ValueError:  # the key expired between add and incr
+            cache.set(key, 1, 3700)
+            used = 1
+    except Exception:  # noqa: BLE001 - a counter outage must never break a save
+        used = None
+    if not isinstance(used, int):
+        # The default cache has IGNORE_EXCEPTIONS: with Redis unreachable (the schedule-tick
+        # service has no REDIS_URL) `incr` returns None instead of raising. The rate is unknown,
+        # so the save goes through; the note-count and size limits still apply.
+        log.warning("html_notes_rate_check_unavailable")
+        return
     if used > per_hour:
         minutes = 60 - timezone.now().minute
         raise HtmlNoteRefused(

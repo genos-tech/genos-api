@@ -190,6 +190,32 @@ class TestTheLivingNote(JobBase):
         self.assertEqual(html_notes.latest_revision(html_notes.NOTE_TYPE_PERSONAL, note_id).rev, 2)
         self.assertEqual(self.notes().count(), 1)
 
+    def test_a_run_with_the_cache_unreachable_still_saves_the_page(self):
+        # schedule-tick has no REDIS_URL: the default cache ignores the outage, so `add` fails
+        # and `incr` answers None instead of raising (MIP-2394).
+        dead = mock.Mock()
+        dead.add.return_value = None
+        dead.incr.return_value = None
+        with mock.patch.object(html_notes, "cache", dead):
+            status, error = schedules._execute(self.reload(), run_at=self.now)
+        self.assertEqual((status, error), ("ok", ""))
+        self.assertEqual(self.notes().count(), 1)
+        dead.incr.assert_called_once()
+
+    def test_a_cache_that_raises_does_not_break_the_run_either(self):
+        dead = mock.Mock()
+        dead.add.side_effect = ConnectionError("redis down")
+        with mock.patch.object(html_notes, "cache", dead):
+            status, _ = schedules._execute(self.reload(), run_at=self.now)
+        self.assertEqual(status, "ok")
+        self.assertEqual(self.notes().count(), 1)
+
+    def test_a_working_cache_still_enforces_the_hourly_limit(self):
+        html_notes.check_rate("u1", 2)
+        html_notes.check_rate("u1", 2)
+        with self.assertRaises(html_notes.HtmlNoteRefused):
+            html_notes.check_rate("u1", 2)
+
     def test_a_deleted_note_pauses_the_run_with_a_reason_and_makes_no_second_note(self):
         schedules._execute(self.reload())
         PersonalNoteMaster.objects.filter(note_id=self.reload().output["note_id"]).delete()
