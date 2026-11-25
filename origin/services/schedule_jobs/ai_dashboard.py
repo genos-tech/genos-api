@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Iterable
 from datetime import date, timedelta
 from typing import Any
@@ -57,6 +58,14 @@ from origin.services.schedule_jobs.report_kit import (
     plain,
 )
 from origin.services.user_time import zone_for_user_id
+
+
+def dashboards_ai_enabled() -> bool:
+    """The operator switch for the AI summary of a dashboard (MIP-2355): off unless
+    `REPORT_AI_DASHBOARDS` is "true", on top of `REPORT_AI_SENTENCES`. A deploy of this code spends
+    nothing; a plain dashboard needs neither."""
+    return os.environ.get("REPORT_AI_DASHBOARDS", "").strip().lower() in ("true", "1", "on", "yes")
+
 
 KINDS = ("milestone", "project", "mine")
 PERIOD_DAYS = {"week": 7, "month": 30, "quarter": 91, "year": 365}
@@ -376,8 +385,13 @@ def data_fingerprint(dashboard: Dashboard) -> str:
 
 
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
-    """The report and the page's data, with a written summary when the member turned AI on."""
+    """The report and the page's data, with a written summary when the member turned AI on AND
+    the operator allowed it (`REPORT_AI_DASHBOARDS`, MIP-2355)."""
     report = _report(ctx, params)
+    if ai_sentences_on(params) and not dashboards_ai_enabled():
+        # No call, nothing read: filed plain with the reason, as when REPORT_AI_SENTENCES is off.
+        report["ai_skipped"] = "operator_off"  # llm.SKIP_OFF
+        return report
     report = add_narrative(
         ctx,
         params,

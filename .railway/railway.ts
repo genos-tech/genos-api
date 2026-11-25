@@ -364,6 +364,11 @@ export default defineRailway(() => {
       AI_COST_METER: preserve(),
       ALLOWED_HOSTS: preserve(),
       BLIND_INDEX_KEYS: preserve(),
+      // MIP-2355: a dashboard schedule saves its note from this service (`html_notes.save_page` pushes the page to
+      // genos-collab). Without these two the note is saved to the database but an open note does not refresh.
+      // The secret is the same value as on genos-collab and backend-django, and differs from JWT_SECRET_KEY.
+      COLLAB_INTERNAL_SECRET: preserve(),
+      COLLAB_INTERNAL_URL: preserve(),
       DATABASE_URL: preserve(),
       DJANGO_DEBUG: preserve(),
       DJANGO_SECRET_KEY: preserve(),
@@ -379,6 +384,8 @@ export default defineRailway(() => {
       GOOGLE_OAUTH_CLIENT_SECRET: preserve(),
       JWT_SECRET_KEY: preserve(),
       LOG_FORMAT: preserve(),
+      // MIP-2355: the operator switch for the AI summary of a dashboard page (off unless "true"), on top of REPORT_AI_SENTENCES.
+      REPORT_AI_DASHBOARDS: preserve(),
       REPORT_AI_SENTENCES: preserve(),
       // MIP-1374: a scheduled report's web push is sent from this service, and it is silently skipped without the VAPID keys
       // (`vapid_configured()` is false): the 17:00 recap of 2026-11-14 ran "ok" and no push arrived.
