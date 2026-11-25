@@ -43,7 +43,7 @@ from __future__ import annotations
 import logging
 import re
 import textwrap
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from django.conf import settings
@@ -98,6 +98,9 @@ UNATTENDED = (
     "that sums it up, then short lines, one fact each, at most 20 lines. No greeting and no "
     "closing question."
 )
+# The same words without the last two sentences (the shape of the answer), for a run whose answer
+# is not a report: a dashboard's is data (MIP-2399). `UNATTENDED` above is untouched.
+UNATTENDED_RULES = UNATTENDED[: UNATTENDED.index(" Write the answer as a short report")]
 
 
 def _enabled() -> bool:
@@ -136,16 +139,13 @@ def clean_input(value: Any) -> str:
     return cleaned
 
 
-def check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) -> dict[str, Any]:
-    """The params to store, or a refusal in words. The owner must be allowed to run the skill NOW
-    (the same rule as `/name`: theirs, a teammate's published team skill, an installed or official
-    one), the skill must have a published version, and the version is pinned in the result."""
-    from origin.models.common.schedule_models import MemberSchedule  # noqa: PLC0415
+def pin_skill(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """`{skill_id, version_no, input?}` to store, or a refusal in words. The owner must be allowed
+    to run the skill NOW (the same rule as `/name`: theirs, a teammate's published team skill, an
+    installed or official one), the skill must have a published version, and the version is pinned
+    in the result. Shared by the "Run a skill" job and a dashboard made by a skill (MIP-2399)."""
     from origin.models.common.user_models import CustomUser  # noqa: PLC0415
-    from origin.services.schedules import (  # noqa: PLC0415 (import cycle)
-        ScheduleError,
-        ScheduleLimitReached,
-    )
+    from origin.services.schedules import ScheduleError  # noqa: PLC0415 (import cycle)
     from origin.services.skills import run as skill_run  # noqa: PLC0415
     from origin.services.skills import service  # noqa: PLC0415
 
@@ -172,7 +172,19 @@ def check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) -> 
         ) from None
     except service.SkillError as exc:
         raise ScheduleError(str(exc)[:200]) from None
+    out: dict[str, Any] = {"skill_id": resolved.skill_id, "version_no": resolved.version_no}
+    if text := clean_input(params.get("input")):
+        out["input"] = text
+    return out
 
+
+def check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) -> dict[str, Any]:
+    """The params to store, or a refusal in words: the skill is pinned (`pin_skill`), and the
+    member's plan allows this many `run_skill` schedules."""
+    from origin.models.common.schedule_models import MemberSchedule  # noqa: PLC0415
+    from origin.services.schedules import ScheduleLimitReached  # noqa: PLC0415 (import cycle)
+
+    out = pin_skill(ctx, params)
     limit = skill_schedules_limit(ctx.user_id)
     # An edit of a schedule that ALREADY runs a skill adds none: after a plan downgrade it stays
     # editable (its input, its skill), as every existing schedule keeps running.
@@ -190,9 +202,6 @@ def check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) -> 
                 limit=limit,
                 used=used,
             )
-    out: dict[str, Any] = {"skill_id": resolved.skill_id, "version_no": resolved.version_no}
-    if text := clean_input(params.get("input")):
-        out["input"] = text
     return out
 
 
@@ -256,7 +265,31 @@ def _disabled_tools(user_id: str, resolved: Any) -> set[str]:
     )
 
 
-def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+@dataclass(frozen=True)
+class SkillAnswer:
+    """What one unattended run of a skill gave, before anything is made of it. `skipped` is the
+    code of a run that did not call the model (a switch, no credits); `failed` is the one line of a
+    run that did and could not give an answer (it is not charged)."""
+
+    title: str
+    answer: str = ""
+    failed: str = ""
+    credits_ran_out: bool = False
+    skipped: str = ""
+    request_id: str = ""
+
+
+def run_for_answer(
+    ctx: ToolContext,
+    params: dict[str, Any],
+    *,
+    answer_rules: str = UNATTENDED,
+    effort_default: str = EFFORT_DEFAULT,
+) -> SkillAnswer:
+    """Run the pinned skill read only, as its owner, and return what it said (MIP-2045). The one
+    place a scheduled skill's model loop lives: "Run a skill" files the answer as a report, a
+    dashboard made by a skill (MIP-2399) turns it into data. `answer_rules` is what the model is
+    told about the run and the shape of its answer, after the skill's own text."""
     from origin.models.common.user_models import CustomUser  # noqa: PLC0415
     from origin.models.skills.skill_models import TOOL_LEVEL_READ  # noqa: PLC0415
     from origin.search_engine.agent import controller  # noqa: PLC0415 - search_engine is heavy
@@ -301,16 +334,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     resolved = replace(resolved, tool_level=TOOL_LEVEL_READ)
     title = clip(resolved.title or resolved.slug, 120)
 
-    run_settings = effort_mod.resolve(params.get(AI_EFFORT_KEY), EFFORT_DEFAULT, ctx.user_id)
+    run_settings = effort_mod.resolve(params.get(AI_EFFORT_KEY), effort_default, ctx.user_id)
     skip = _skip_code(ctx.user_id, run_settings)
     if skip:
         log.info("run_skill_skipped user=%s reason=%s", ctx.user_id, skip)
-        return {
-            "title": title,
-            "summary": _SKIPPED.get(skip, _SKIPPED_OTHER),
-            "sections": [],
-            "ai_skipped": skip,
-        }
+        return SkillAnswer(title=title, skipped=skip)
 
     choice = LlmChoice(
         provider=run_settings.provider,
@@ -346,7 +374,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                         ctx,
                         events.append,
                         disabled_tools=_disabled_tools(ctx.user_id, resolved),
-                        system_extra=f"{skill_run.build_block(resolved)}\n\n{UNATTENDED}",
+                        system_extra=f"{skill_run.build_block(resolved)}\n\n{answer_rules}",
                     )
             except Exception as exc:  # noqa: BLE001 - one skill's failure is that schedule's
                 log.warning("run_skill_failed user=%s error=%s", ctx.user_id, type(exc).__name__)
@@ -374,15 +402,37 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 outcome.mark(AiRequestCost.RESULT_APPLICATION_FAILURE)
     finally:
         reset_llm_choice(token)
+    return SkillAnswer(
+        title=title,
+        answer="" if failed else answer,
+        failed=failed,
+        credits_ran_out=credits_ran_out,
+        request_id=request_id,
+    )
 
-    report = report_from_answer(title, "" if failed else answer)
-    if failed:
-        report["summary"] = failed
-    elif credits_ran_out:
+
+def skipped_report(got: SkillAnswer) -> Report:
+    """The one-line report of a run that did not call the model (`got.skipped` is its code)."""
+    return {
+        "title": got.title,
+        "summary": _SKIPPED.get(got.skipped, _SKIPPED_OTHER),
+        "sections": [],
+        "ai_skipped": got.skipped,
+    }
+
+
+def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+    got = run_for_answer(ctx, params)
+    if got.skipped:
+        return skipped_report(got)
+    report = report_from_answer(got.title, got.answer)
+    if got.failed:
+        report["summary"] = got.failed
+    elif got.credits_ran_out:
         report["summary"] = clip(
             "Stopped early: your AI credits ran out during the run. " + report["summary"], 280
         )
-    report["ai_request_id"] = request_id
+    report["ai_request_id"] = got.request_id
     return report
 
 

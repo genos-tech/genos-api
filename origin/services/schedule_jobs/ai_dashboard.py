@@ -68,6 +68,11 @@ def dashboards_ai_enabled() -> bool:
 
 
 KINDS = ("milestone", "project", "mine")
+# Where the page's content comes from (MIP-2399): the built-in kinds above, or one of the member's
+# skills. Parameters that belong to only one of the two.
+SOURCES = ("template", "skill")
+_TEMPLATE_ONLY = ("kind", "milestone_id", "project_id", "period", "focus", "ai_sentences")
+_SKILL_ONLY = ("skill_id", "version_no", "input")
 PERIOD_DAYS = {"week": 7, "month": 30, "quarter": 91, "year": 365}
 MAX_FOCUS_CHARS = 200
 MAX_LIST = 10
@@ -112,6 +117,10 @@ def audience_problem(params: dict[str, Any], readers: set[str], team_id: Any) ->
     it may. The sentences name nobody."""
     if len(readers) > schedule_audience.MAX_NOTE_READERS:
         return schedule_audience.NOTE_TOO_MANY
+    if params.get("source") == "skill" and len(readers) > 1:
+        # The page is whatever a model made of the OWNER's view: the every-reader limit (MIP-2354)
+        # cannot be applied to it, so nobody else may read it (MIP-2399, decision E3).
+        return SKILL_OWNER_ONLY
     if len(readers) > 1 and params.get("kind") in ("project", "milestone"):
         project_id = _share_project(params, str(team_id))
         if project_id is not None and schedule_audience.outside_project(readers, project_id):
@@ -119,6 +128,11 @@ def audience_problem(params: dict[str, Any], readers: set[str], team_id: Any) ->
     return None
 
 
+# Under 200 characters: a failed run's error is kept to that, and this one is the whole answer.
+SKILL_OWNER_ONLY = (
+    "A dashboard made by a skill shows your own view of your data, so only you may read it. Save "
+    "it in My notes or an unshared folder of yours, and do not share the page."
+)
 NOT_EVERYONE_ON_PROJECT = (
     "Not everyone who can read the place you chose for this page is on that project, so not "
     "everyone could open what it shows. Save it in a place only the project's people read."
@@ -350,8 +364,13 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     if note:
         dashboard["note"] = note
 
-    # The report the Inbox or the chat shows: a short statement and the same numbers, so a reader
-    # that never opens the page still learns where things stand.
+    return report_of(dashboard)
+
+
+def report_of(dashboard: Dashboard) -> Report:
+    """The report the Inbox or the chat shows: a short statement and the same numbers, so a reader
+    that never opens the page still learns where things stand."""
+    title, subtitle, stats = dashboard["title"], dashboard["subtitle"], dashboard["stats"]
     line = ", ".join(f"{s['value']} {s['label']}" for s in stats[:4])
     sections = [
         {
@@ -360,7 +379,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
             "items": [item(f"{s['value']} {s['label']}") for s in stats],
         }
     ]
-    for block in lists:
+    for block in dashboard.get("lists") or []:
         sections.append(
             {"heading": block["heading"], "key": "items", "items": [item(r) for r in block["rows"]]}
         )
@@ -384,9 +403,48 @@ def data_fingerprint(dashboard: Dashboard) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _run_from_skill(ctx: ToolContext, params: dict[str, Any]) -> Report:
+    """A page made by a skill (MIP-2399): the skill reads the owner's data, read only, and answers
+    with data; the server cleans it and draws the page (`skill_dashboard`). A run that gives no
+    usable page FAILS in words and the previous page stays (`deliver_note` saves only a report that
+    carries a dashboard). Not run at all when the page has a reader other than the owner, before
+    a model is called, so nothing is spent on a page that could not be saved."""
+    from origin.services.schedule_jobs import run_skill, skill_dashboard  # noqa: PLC0415
+
+    readers = audience(ctx, params)
+    if (why := audience_problem(params, readers, ctx.team_id)) is not None:
+        raise _public(why)
+    got = run_skill.run_for_answer(
+        ctx,
+        params,
+        answer_rules=f"{run_skill.UNATTENDED_RULES} {skill_dashboard.DIRECTIVE}",
+    )
+    if got.skipped:
+        return run_skill.skipped_report(got)
+    if got.failed:
+        raise _public(got.failed)
+    try:
+        dashboard = skill_dashboard.parse_dashboard(got.answer, default_title=got.title)
+    except skill_dashboard.DashboardAnswerError as exc:
+        if got.credits_ran_out:
+            raise _public(
+                "Your AI credits ran out before the page was finished, so it was not changed."
+            ) from None
+        raise _public(f"{exc} The page was not changed.") from None
+    if not dashboard["subtitle"]:
+        today = timezone.now().astimezone(zone_for_user_id(ctx.user_id)).date()
+        dashboard["subtitle"] = f"As of {today.isoformat()}"
+    report = report_of(dashboard)
+    report["ai_request_id"] = got.request_id
+    return report
+
+
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     """The report and the page's data, with a written summary when the member turned AI on AND
-    the operator allowed it (`REPORT_AI_DASHBOARDS`, MIP-2355)."""
+    the operator allowed it (`REPORT_AI_DASHBOARDS`, MIP-2355). With `source` of `skill` the page is
+    made by one of the member's skills instead (`_run_from_skill`)."""
+    if params.get("source") == "skill":
+        return _run_from_skill(ctx, params)
     report = _report(ctx, params)
     if ai_sentences_on(params) and not dashboards_ai_enabled():
         # No call, nothing read: filed plain with the reason, as when REPORT_AI_SENTENCES is off.
@@ -434,13 +492,38 @@ def _check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) ->
         raise ScheduleError(
             f"{not_on_plan} Dashboards are saved as HTML notes, so this report needs a Core plan."
         ) from None
-    kind = params.get("kind")
-    needs = {"milestone": "milestone_id", "project": "project_id"}
-    for other_kind, key in needs.items():
-        if kind == other_kind and params.get(key) is None:
-            raise ScheduleError(f"A {kind} dashboard needs `{key}`.")
-        if kind != other_kind and params.get(key) is not None:
-            raise ScheduleError(f"`{key}` is only for a {other_kind} dashboard.")
+    source = params.get("source") or "template"
+    if source == "skill":
+        # A page made by one of the member's skills (MIP-2399): the skill is pinned like "Run a
+        # skill" pins it, and nothing of the built-in kinds may ride along.
+        from origin.services.schedule_jobs import run_skill  # noqa: PLC0415
+
+        for key in _TEMPLATE_ONLY:
+            if params.get(key) not in (None, "", False):
+                raise ScheduleError(
+                    f"`{key}` is for a built-in dashboard, not one made by a skill."
+                )
+        if not params.get("skill_id"):
+            raise ScheduleError("A dashboard made by a skill needs `skill_id`: the skill to use.")
+        pinned = run_skill.pin_skill(ctx, params)
+        params = {k: v for k, v in params.items() if k not in _SKILL_ONLY}
+        params.update(pinned)
+    else:
+        for key in _SKILL_ONLY:
+            if params.get(key) not in (None, ""):
+                raise ScheduleError(f"`{key}` is only for a dashboard made by a skill.")
+        # Not stored: a built-in dashboard is the default, so the rows made before `source` existed
+        # and the ones made after read the same.
+        params = {k: v for k, v in params.items() if k != "source"}
+        kind = params.get("kind")
+        if kind is None:
+            raise ScheduleError("A dashboard needs `kind`: milestone, project or mine.")
+        needs = {"milestone": "milestone_id", "project": "project_id"}
+        for other_kind, key in needs.items():
+            if kind == other_kind and params.get(key) is None:
+                raise ScheduleError(f"A {kind} dashboard needs `{key}`.")
+            if kind != other_kind and params.get(key) is not None:
+                raise ScheduleError(f"`{key}` is only for a {other_kind} dashboard.")
     # Counted inside the member's row lock the caller holds, so two saves at once cannot both pass.
     others = MemberSchedule.objects.filter(user_id=ctx.user_id, job="ai_dashboard")
     if schedule_id is not None:
@@ -543,6 +626,10 @@ register_job(
         share_project=_share_project,
         params_schema={
             "properties": {
+                "source": {"type": "string", "enum": list(SOURCES)},
+                "skill_id": {"type": "string"},
+                "version_no": {"type": "integer", "minimum": 1},
+                "input": {"type": "string"},
                 "kind": {"type": "string", "enum": list(KINDS)},
                 "milestone_id": {"type": "integer", "minimum": 1},
                 "project_id": {"type": "integer", "minimum": 1},
@@ -552,11 +639,16 @@ register_job(
                 "folder_id": {"type": "integer", "minimum": 1},
                 "ai_sentences": AI_SUMMARY_PARAM,
             },
-            "required": ["kind"],
+            # `kind` is required of a built-in dashboard and absent from one made by a skill, so
+            # `_check_params` asks for it, not the schema.
         },
         check_params=_check_params,
         uses_ai=True,
-        ai_when=ai_sentences_on,
+        # A page made by a skill always uses the model; a built-in one only with its summary on.
+        ai_when=lambda p: p.get("source") == "skill" or ai_sentences_on(p),
+        # A skill's loop is long and records its spend as it goes: not inside a savepoint that a
+        # failed run would roll back (`schedules._execute`, MIP-1210). Built-in runs are unaffected.
+        unwrapped=True,
         effort_default=SUMMARY_EFFORT_DEFAULT,
         cost_basis="narrative",
         delivers_note=True,
