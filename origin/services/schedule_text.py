@@ -139,6 +139,20 @@ def _effort_cost(job) -> dict[str, Any] | None:
     }
 
 
+def note_save_sentence() -> str:
+    """What a note-saving job (a dashboard) tells the form about the plan's hourly save limit: a
+    scheduled save counts against the same limit as a note the member saves by hand (MIP-2359)."""
+    from origin.services import html_note_limits  # noqa: PLC0415
+
+    core = html_note_limits.HTML_NOTE_LIMITS["core"]
+    pro = html_note_limits.HTML_NOTE_LIMITS["pro"]
+    return (
+        "Each run saves the page, and that counts against your plan's limit of HTML note saves per "
+        f"hour ({core.saves_per_hour} on Core, {pro.saves_per_hour} on Pro and up), together with "
+        "the notes you save yourself. A run over the limit fails; the next run tries again."
+    )
+
+
 def _catalog_params(job: Any) -> dict[str, Any]:
     """The job's parameters for the catalog: each spec as declared, plus `required: true`
     on the ones its schema lists under `required` (MIP-1216), so a form can mark them
@@ -164,6 +178,7 @@ def job_catalog() -> list[dict[str, Any]]:
             "description": job.description,
             "params": _catalog_params(job),
             "uses_ai": job.uses_ai,
+            **({"saves_note": note_save_sentence()} if job.delivers_note else {}),
             "effort_default": job.effort_default if job.uses_ai else None,
             "effort_cost": _effort_cost(job),
             **({"agent_note": job.agent_note} if job.agent_note else {}),
