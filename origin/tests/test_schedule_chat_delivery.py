@@ -275,11 +275,15 @@ class TestSavingAndEditing(ChatBase):
             with self.assertRaises(schedules.ScheduleLimitReached):
                 self.save(chat, name="Two", time_of_day="11:00")
 
-    def test_the_connected_ai_tools_see_no_new_field(self):
-        sched = self.save(self.gm(self.user, self.user2))
+    def test_the_connected_ai_tools_see_the_chat_and_no_other_new_field(self):
+        # MIP-2358: `deliver_chat_id` is read back, so an agent that set it can see it; nothing
+        # else about the delivery is shown.
+        chat = self.gm(self.user, self.user2)
+        sched = self.save(chat)
         shown = schedule_text.present(sched, user_zone(self.user))
         extra = [k for k in shown if k != "deliver_push" and ("deliver" in k or "channel" in k)]
-        self.assertFalse(extra, shown)
+        self.assertEqual(extra, ["deliver_chat_id"], shown)
+        self.assertEqual(shown["deliver_chat_id"], str(chat.id))
         for row in schedule_text.job_catalog():
             self.assertNotIn("shareable", row)
 

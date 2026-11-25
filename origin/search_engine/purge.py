@@ -253,9 +253,7 @@ def purge_task_comment(task_id, comment_id) -> None:
     try:
         purge_chunks([f"task:{task_id}:comment:{comment_id}"])
     except Exception:  # noqa: BLE001
-        log.exception(
-            "Best-effort purge failed for task %s comment %s", task_id, comment_id
-        )
+        log.exception("Best-effort purge failed for task %s comment %s", task_id, comment_id)
 
 
 # The two index lanes an `AgentRun` can feed. Both name their single chunk
@@ -292,6 +290,49 @@ def purge_agent_runs(run_ids, *, lanes: Iterable[str] = AGENT_RUN_LANES) -> None
 
 
 # --------------------------------------------------------------------------- #
+# Deleted teams                                                               #
+# --------------------------------------------------------------------------- #
+
+
+def purge_team_chunks(team_id) -> None:
+    """A team row was deleted: drop every chunk tracked under its `team_id`.
+
+    Best-effort like its siblings (never raises); `sweep_orphans` retries what this misses, because
+    the team no longer exists (`dead_team_ids`). Targets the tracked chunks only: the team's agent
+    runs are deleted by the team purge itself, and a chunk with no tracking row is invisible to
+    every sweep (healed by a recreate + full reindex).
+    """
+    try:
+        ids = list(RagChunk.objects.filter(team_id=team_id).values_list("chunk_id", flat=True))
+        if ids:
+            purge_chunks(ids)
+    except Exception:  # noqa: BLE001
+        log.exception("Best-effort purge failed for the chunks of a deleted team")
+
+
+def dead_team_ids() -> list:
+    """Team ids that have chunks in `RagChunk` but no `TeamMaster` row (hard-deleted teams).
+
+    A soft-closed team (`is_deleted`) still has its row: it is `purge_closed_teams`' job, which
+    removes the chunks together with the rest of the team. Only a team that is GONE is dead here.
+    """
+    from origin.models.common.team_models import TeamMaster
+
+    tracked = set(RagChunk.objects.values_list("team_id", flat=True).distinct())
+    if not tracked:
+        return []
+    live = set()
+    ids = list(tracked)
+    for i in range(0, len(ids), _BATCH):
+        live.update(
+            TeamMaster._base_manager.filter(team_id__in=ids[i : i + _BATCH]).values_list(
+                "team_id", flat=True
+            )
+        )
+    return sorted(tracked - live, key=str)
+
+
+# --------------------------------------------------------------------------- #
 # Orphan sweep                                                                #
 # --------------------------------------------------------------------------- #
 
@@ -311,13 +352,32 @@ def sweep_orphans(*, dry_run: bool = False) -> dict:
         "chunks_purged": 0,
         "kept_unparseable": 0,
         "kept_unknown_type": 0,
+        "dead_teams": 0,
+        "dead_team_chunks": 0,
         "purged_by_type": defaultdict(int),
     }
 
+    # A team that no longer exists takes all its chunks with it, whatever their entity still says
+    # (an agent run of a deleted team survives its team: the run row has no foreign key to it).
+    dead_teams = dead_team_ids()
+    stats["dead_teams"] = len(dead_teams)
+    dead_team_chunk_ids: list[str] = []
+    for i in range(0, len(dead_teams), _BATCH):
+        dead_team_chunk_ids.extend(
+            RagChunk.objects.filter(team_id__in=dead_teams[i : i + _BATCH]).values_list(
+                "chunk_id", flat=True
+            )
+        )
+    stats["dead_team_chunks"] = len(dead_team_chunk_ids)
+    team_chunks_purged = 0
+    if dead_team_chunk_ids and not dry_run:
+        team_chunks_purged = purge_chunks(dead_team_chunk_ids, refresh=False)
+
     ids_by_type: dict[str, list[str]] = defaultdict(list)
-    for etype, eid in (
-        RagChunk.objects.values_list("entity_type", "entity_id").distinct().iterator()
-    ):
+    entity_rows = RagChunk.objects.values_list("entity_type", "entity_id").distinct()
+    if dead_teams:
+        entity_rows = entity_rows.exclude(team_id__in=dead_teams)
+    for etype, eid in entity_rows.iterator():
         ids_by_type[etype].append(eid)
         stats["entities_scanned"] += 1
 
@@ -344,14 +404,17 @@ def sweep_orphans(*, dry_run: bool = False) -> dict:
 
     stats["entities_purged"] = len(dead_pairs)
     if dry_run:
-        stats["chunks_purged"] = sum(
+        stats["chunks_purged"] = stats["dead_team_chunks"] + sum(
             RagChunk.objects.filter(entity_type=etype, entity_id=eid).count()
             for etype, eid in dead_pairs
         )
-    elif dead_pairs:
+    else:
         # Defer per-batch refresh; one refresh at the end (mirrors
         # ingest_all's deferred-refresh policy).
-        stats["chunks_purged"] = purge_entities(dead_pairs, refresh=False)
+        stats["chunks_purged"] = team_chunks_purged + (
+            purge_entities(dead_pairs, refresh=False) if dead_pairs else 0
+        )
+    if not dry_run and (dead_pairs or dead_team_chunk_ids):
         try:
             get_client().indices.refresh(index=get_index_alias())
         except Exception:  # noqa: BLE001 — refresh failure is non-fatal
@@ -417,9 +480,9 @@ def _resolve_milestones(eids: list[str]) -> tuple[set[str], int]:
         else:
             by_pk[pk] = eid
     live = set(
-        MilestoneMaster.objects.filter(
-            milestone_id__in=by_pk.keys(), is_deleted=False
-        ).values_list("milestone_id", flat=True)
+        MilestoneMaster.objects.filter(milestone_id__in=by_pk.keys(), is_deleted=False).values_list(
+            "milestone_id", flat=True
+        )
     )
     return {eid for pk, eid in by_pk.items() if pk not in live}, unparseable
 
@@ -459,9 +522,7 @@ def _resolve_notes(eids: list[str]) -> tuple[set[str], int]:
     dead: set[str] = set()
     for label, by_pk in by_label.items():
         model = _note_model(label)
-        live = set(
-            model.objects.filter(note_id__in=by_pk.keys()).values_list("note_id", flat=True)
-        )
+        live = set(model.objects.filter(note_id__in=by_pk.keys()).values_list("note_id", flat=True))
         if label == "personal":
             live -= _skill_note_ids(by_pk.keys())
         dead.update(eid for pk, eid in by_pk.items() if pk not in live)
@@ -525,9 +586,9 @@ def _resolve_note_summaries(eids: list[str]) -> tuple[set[str], int]:
             model.objects.filter(note_id__in=by_pk.keys()).values_list("note_id", flat=True)
         )
         live_summaries = set(
-            NoteSummary.objects.filter(
-                note_type=code, note_id__in=by_pk.keys()
-            ).values_list("note_id", flat=True)
+            NoteSummary.objects.filter(note_type=code, note_id__in=by_pk.keys()).values_list(
+                "note_id", flat=True
+            )
         )
         if code == 1:
             live_notes -= _skill_note_ids(by_pk.keys())
@@ -542,9 +603,9 @@ def _live_channel_uuids(by_kind: dict[int, set]) -> set:
     live: set = set()
     for kind, cuuids in by_kind.items():
         live.update(
-            Channel.objects.filter(
-                kind=kind, id__in=cuuids, is_deleted=False
-            ).values_list("id", flat=True)
+            Channel.objects.filter(kind=kind, id__in=cuuids, is_deleted=False).values_list(
+                "id", flat=True
+            )
         )
     return live
 
@@ -557,9 +618,9 @@ def _roots_with_live_replies(root_uuids: set) -> set:
     from origin.models.chat.unified_models import Message
 
     return set(
-        Message.objects.filter(
-            thread_root_id__in=root_uuids, deleted_at__isnull=True
-        ).values_list("thread_root_id", flat=True)
+        Message.objects.filter(thread_root_id__in=root_uuids, deleted_at__isnull=True).values_list(
+            "thread_root_id", flat=True
+        )
     )
 
 
@@ -696,9 +757,7 @@ def _resolve_todos(eids: list[str]) -> tuple[set[str], int]:
             unparseable += 1
             continue
         by_pk[pk].append(eid)
-    live = set(
-        ToDoItem.objects.filter(item_id__in=by_pk.keys()).values_list("item_id", flat=True)
-    )
+    live = set(ToDoItem.objects.filter(item_id__in=by_pk.keys()).values_list("item_id", flat=True))
     dead: set[str] = set()
     for pk, ids in by_pk.items():
         if pk not in live:

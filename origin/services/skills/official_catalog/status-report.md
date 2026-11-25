@@ -56,4 +56,4 @@ Period: <from> to <to>. Read from Genos on <date>.
 
 Leave a heading out when it is empty; say "nothing" for Needs a decision only if you checked.
 
-Source: [Genos skills v0.5.3](https://github.com/genos-tech/genos-claude-plugin/blob/v0.5.3/plugins/genos-product/skills/status-report/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.6.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.6.0/plugins/genos-product/skills/status-report/SKILL.md), the runbook this skill was made from.

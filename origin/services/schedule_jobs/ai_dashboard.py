@@ -443,15 +443,13 @@ def _check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) ->
             raise ScheduleError(f"`{key}` is only for a {other_kind} dashboard.")
     # Counted inside the member's row lock the caller holds, so two saves at once cannot both pass.
     others = MemberSchedule.objects.filter(user_id=ctx.user_id, job="ai_dashboard")
-    # An edit of a dashboard the member already has is never refused for the count.
-    editing_own = schedule_id is not None and others.filter(pk=schedule_id).exists()
     if schedule_id is not None:
-        others = others.exclude(pk=schedule_id)
-    if not editing_own and others.count() >= MAX_DASHBOARD_SCHEDULES:
-        raise ScheduleError(
-            f"You can keep {MAX_DASHBOARD_SCHEDULES} dashboard schedules, and you have that many. "
-            "Delete one you no longer need first."
-        )
+        # An edit of a dashboard the member already has is never refused for the count.
+        if not others.filter(pk=schedule_id).exists():
+            if others.count() >= MAX_DASHBOARD_SCHEDULES:
+                raise ScheduleError(_CAP_MESSAGE)
+    elif others.count() >= MAX_DASHBOARD_SCHEDULES:
+        raise ScheduleError(_CAP_MESSAGE)
     kept = {k: v for k, v in params.items() if v not in (None, "")}
     save_to, folder_id = kept.get("save_to", "me"), kept.get("folder_id")
     if (save_to == "me") != (folder_id is None):
@@ -472,6 +470,10 @@ def _check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) ->
     return kept
 
 
+_CAP_MESSAGE = (
+    f"You can keep {MAX_DASHBOARD_SCHEDULES} dashboard schedules, and you have that many. "
+    "Delete one you no longer need first."
+)
 _NO_NOTE = object()
 
 

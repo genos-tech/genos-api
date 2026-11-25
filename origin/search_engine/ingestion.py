@@ -101,11 +101,26 @@ class IngestionStats:
         }
 
 
+# The lanes whose entities belong to one team. `conversation` and `spotlight_answer` are owner
+# scoped (an AgentRun), indexed as each run finishes, so a team pass never covers them.
+TEAM_SCOPED_ENTITY_TYPES: tuple[str, ...] = (
+    "chat",
+    "task",
+    "milestone",
+    "note",
+    "note_folder",
+    "thread_summary",
+    "note_summary",
+    "todo",
+)
+
+
 def ingest_all(
     since: Optional[datetime] = None,
     entity_types: Optional[list[str]] = None,
     dry_run: bool = False,
     dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> IngestionStats:
     """Run a full or incremental ingestion across chats/tasks/notes.
 
@@ -121,8 +136,19 @@ def ingest_all(
         dirty: Projects and channels whose membership changed (see
             `acl_dirty`). With `since`, their entities are re-emitted
             too, so the chunk ACLs follow the membership.
+        team_id: Index only this team's entities (MIP-2374): the same chunks, ids and hashes a
+            full pass writes for it, without walking any other team. A whole-team pass: it
+            takes no `since` or `dirty`, and only the lanes in `TEAM_SCOPED_ENTITY_TYPES`.
     """
     stats = IngestionStats()
+    if team_id is not None:
+        if since is not None or dirty is not None:
+            raise ValueError("team_id is a whole-team pass: it takes no since or dirty.")
+        bad = set(entity_types or ()) - set(TEAM_SCOPED_ENTITY_TYPES)
+        if bad:
+            raise ValueError(f"not team-scoped lanes: {sorted(bad)}")
+        team_id = str(team_id)
+        entity_types = list(entity_types or TEAM_SCOPED_ENTITY_TYPES)
     entity_types = entity_types or [
         "chat",
         "task",
@@ -143,7 +169,12 @@ def ingest_all(
     # a caller that already bound a request keeps its own attribution.
     with spend.spend_context(surface="index"), spend.spend_purpose("index"):
         return _ingest_all_bound(
-            stats, since=since, entity_types=entity_types, dry_run=dry_run, dirty=dirty
+            stats,
+            since=since,
+            entity_types=entity_types,
+            dry_run=dry_run,
+            dirty=dirty,
+            team_id=team_id,
         )
 
 
@@ -154,31 +185,50 @@ def _ingest_all_bound(
     entity_types: list[str],
     dry_run: bool,
     dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> IngestionStats:
     if "chat" in entity_types:
         log.info("Ingesting chats (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_all_chat_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
+        _ingest_stream(
+            iter_all_chat_chunks(since=since, dirty=dirty, team_id=team_id), stats, dry_run=dry_run
+        )
     if "task" in entity_types:
         log.info("Ingesting tasks (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_task_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
+        _ingest_stream(
+            iter_task_chunks(since=since, dirty=dirty, team_id=team_id), stats, dry_run=dry_run
+        )
     if "milestone" in entity_types:
         log.info("Ingesting milestones (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_milestone_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
+        _ingest_stream(
+            iter_milestone_chunks(since=since, dirty=dirty, team_id=team_id), stats, dry_run=dry_run
+        )
     if "note" in entity_types:
         log.info("Ingesting notes (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_all_note_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
+        _ingest_stream(
+            iter_all_note_chunks(since=since, dirty=dirty, team_id=team_id), stats, dry_run=dry_run
+        )
     if "note_folder" in entity_types:
         log.info("Ingesting note folders (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_note_folder_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(
+            iter_note_folder_chunks(since=since, team_id=team_id), stats, dry_run=dry_run
+        )
     if "thread_summary" in entity_types:
         log.info("Ingesting thread summaries (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_thread_summary_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
+        _ingest_stream(
+            iter_thread_summary_chunks(since=since, dirty=dirty, team_id=team_id),
+            stats,
+            dry_run=dry_run,
+        )
     if "note_summary" in entity_types:
         log.info("Ingesting note summaries (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_note_summary_chunks(since=since, dirty=dirty), stats, dry_run=dry_run)
+        _ingest_stream(
+            iter_note_summary_chunks(since=since, dirty=dirty, team_id=team_id),
+            stats,
+            dry_run=dry_run,
+        )
     if "todo" in entity_types:
         log.info("Ingesting todos (since=%s, dry_run=%s)...", since, dry_run)
-        _ingest_stream(iter_todo_chunks(since=since), stats, dry_run=dry_run)
+        _ingest_stream(iter_todo_chunks(since=since, team_id=team_id), stats, dry_run=dry_run)
     if "conversation" in entity_types:
         log.info("Ingesting conversations (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_conversation_chunks(since=since), stats, dry_run=dry_run)
@@ -580,7 +630,7 @@ def _bulk_index(actions: list[dict]) -> BulkResult:
     #
     # It has to be filtered because concurrency is normal here, not
     # exceptional: the Railway cron overlaps itself by a minute by design,
-    # `kick_off_demo_reindex` fires a full reindex per demo signin / team
+    # `kick_off_demo_reindex` fires a one-team reindex per demo signin / team
     # join / starter seed, and `ingest_conversation_run` writes one chunk
     # per completed ask. Left at ERROR, the `CronCommand` tripwire reds a
     # run whose work in fact all landed — which trains the operator to
@@ -735,7 +785,7 @@ def _upsert_tracking(
     # order across concurrent writers is the textbook deadlock, and it is
     # reachable: the Railway cron runs every 10 minutes with
     # `--since-minutes 11` (a deliberate overlap), `kick_off_demo_reindex`
-    # fires a whole reindex on a daemon thread after every demo signin /
+    # fires a one-team reindex in a child process after every demo signin /
     # team join / starter-workspace seed, and `ingest_conversation_run`
     # re-enters this same function once per completed ask.
     #

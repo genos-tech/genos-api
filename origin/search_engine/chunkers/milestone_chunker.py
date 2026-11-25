@@ -44,7 +44,9 @@ from origin.services.member_removal import active_team_member_ids
 
 
 def iter_milestone_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     """Yield one EntityChunks (single chunk) per milestone.
 
@@ -54,6 +56,8 @@ def iter_milestone_chunks(
     qs = MilestoneMaster.objects.filter(is_deleted=False).select_related(
         "team", "project", "task__project"
     )
+    if team_id is not None:
+        qs = qs.filter(team_id=team_id)
     if since is not None:
         window = Q(ts_updated_at__gte=since)
         if dirty and dirty.project_ids:

@@ -257,7 +257,12 @@ export default defineRailway(() => {
       LOG_FORMAT: preserve(),
       OPENSEARCH_CA_CERT: preserve(),
       OPENSEARCH_HOST: preserve(),
+      // The capacity alert (MIP-2385) reads node stats and counts the alias: it logs in, and
+      // needs the index name the other services use.
+      OPENSEARCH_INDEX: preserve(),
+      OPENSEARCH_PASSWORD: preserve(),
       OPENSEARCH_PORT: preserve(),
+      OPENSEARCH_USERNAME: preserve(),
       OPENSEARCH_USE_SSL: preserve(),
       OPS_ALERT_EMAIL: preserve(),
       RESEND_API_KEY: preserve(),

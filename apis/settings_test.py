@@ -112,6 +112,8 @@ SEARCH_ENGINE = {  # noqa: F405
 # EMBEDDING_PROVIDER=vertex without GEMINI_USE_VERTEX, and every ingestion-touching test logged a
 # caught "requires GEMINI_USE_VERTEX" error. Pinned to what CI runs.
 SEARCH_ENGINE = {**SEARCH_ENGINE, "EMBEDDING_PROVIDER": "openai"}  # noqa: F405
+# Tests never start a child process to index a team (MIP-2374); they call the pieces directly.
+SEARCH_TEAM_REINDEX_MODE = "off"
 
 # Speed up user-creation-heavy tests.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]

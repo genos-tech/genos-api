@@ -93,7 +93,7 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
 
     def _join(self, user, team, attendee=None):
         self.authenticate(user)
-        with _mock_reindex():
+        with _mock_reindex() as self.reindex:
             return self.client.post(
                 JOIN_URL,
                 {"team_id": str(team.team_id), "attendee_id": str((attendee or user).id)},
@@ -130,6 +130,15 @@ class GuideNotesOnJoinTests(BaseAPITestCase):
         )
         member = TeamMembers.objects.get(team=self.fresh_team, attendee=self.user)
         self.assertIsNotNone(member.guide_seeded_at)
+
+    def test_guide_seed_indexes_only_the_notes_of_that_team(self):
+        """MIP-2374: a join must not re-chunk the busy channels of a team that already exists."""
+        self._join(self.user, self.fresh_team)
+        self.reindex.assert_called_once_with(
+            self.fresh_team.team_id, entity_types=("note", "note_folder")
+        )
+        self._join(self.user, self.fresh_team)  # a repeat seeds nothing, so indexes nothing
+        self.reindex.assert_not_called()
 
     def test_existing_member_picks_the_guide_up_on_next_switch(self):
         # The fixture already made self.user a member of self.team — the
