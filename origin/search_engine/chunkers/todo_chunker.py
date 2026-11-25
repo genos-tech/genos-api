@@ -25,8 +25,12 @@ from origin.search_engine.chunkers.base import Chunk, EntityChunks, iso, make_sn
 from origin.search_engine.text_extraction import extract_text
 
 
-def iter_todo_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def iter_todo_chunks(
+    since: Optional[datetime] = None, team_id: Optional[str] = None
+) -> Iterator[EntityChunks]:
     qs = ToDoItem.objects.select_related("group", "group__team", "group__user", "category")
+    if team_id is not None:
+        qs = qs.filter(group__team_id=team_id)
     if since is not None:
         # Pick up items whose own row updated, OR whose group updated
         # (e.g. group-level metadata churn).

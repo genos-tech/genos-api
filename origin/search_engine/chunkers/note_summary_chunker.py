@@ -110,9 +110,13 @@ def _dirty_note_keys(dirty: Optional[DirtyScopes]) -> set[tuple[int, int]]:
 
 
 def iter_note_summary_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     qs = NoteSummary.objects.all().order_by("id")
+    if team_id is not None:
+        qs = qs.filter(team_id=str(team_id))  # a CharField here
     # Also read on a full pass: that pass releases the marks too, so it
     # is the last chance to tombstone.
     dirty_keys = _dirty_note_keys(dirty)

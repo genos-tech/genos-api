@@ -68,6 +68,12 @@ EXPOSE 8000
 # dropped every request in flight (502 under four parallel briefings), so the limit is
 # 300: ~150 MB + 300 x 0.3 MB = ~240 MB at the recycle, well under 400 MB, and a recycle is
 # cheap with `--preload` (a fork). With the jitter a worker serves 300 to 400 requests.
+# MIP-2393: the MIP-2092 change had edited only this comment, the CMD still said 1000. The
+# value now lives in ONE place, the two `ENV` lines just below (a Railway variable of the
+# same name overrides them), and `origin/tests/test_gunicorn_max_requests.py` fails when the
+# CMD, this comment or a doc disagrees with them.
+ENV GUNICORN_MAX_REQUESTS=300 \
+    GUNICORN_MAX_REQUESTS_JITTER=100
 #
 # `--keep-alive 0` (MIP-944, second half): a retiring gthread worker stops
 # accepting, then waits for every open connection before it exits, and the
@@ -93,5 +99,5 @@ CMD ["sh", "-c", "\
     --graceful-timeout 30 \
     --keep-alive 0 \
     --preload \
-    --max-requests 1000 \
-    --max-requests-jitter 100"]
+    --max-requests ${GUNICORN_MAX_REQUESTS} \
+    --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER}"]

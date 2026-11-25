@@ -37,6 +37,8 @@ PURPOSE = "report_sentences"
 # The spend purpose of the written summary of a whole report (MIP-2350), so the cost reports tell it
 # from the sentence under a task.
 NARRATIVE_PURPOSE = "report_narrative"
+# The same, for the summary on a dashboard page (MIP-2359): its own line in the AI cost dashboard.
+DASHBOARD_PURPOSE = "report_dashboard"
 SURFACE = "schedule"
 
 # Why a run had no AI part (kept on the run's result and logged; never an error).

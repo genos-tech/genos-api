@@ -230,6 +230,10 @@ class Job:
     # note, replaced on every run (MIP-2353, `schedule_dashboard_note.deliver_note`). The note is
     # the one thing a job's run writes to the workspace, and the job never writes it itself.
     delivers_note: bool = False
+    # For a `delivers_note` job: `note_target(params) -> {"kind": ..., "id": ...}`, the place its
+    # note is saved (`schedule_audience.NOTE_KINDS`). The runner asks who reads that place before
+    # every run and hands the job the readers under `AUDIENCE_KEY` (MIP-2354).
+    note_target: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
     @property
     def shareable(self) -> bool:

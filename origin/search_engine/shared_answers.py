@@ -378,7 +378,7 @@ def reshare_team_lane_in_background(user_id: str) -> None:
 
 
 def _run_in_background(job: Callable[[], None], *, name: str) -> None:
-    """The pattern of `demo_seeder.kick_off_demo_reindex`: best-effort work
+    """The pattern of the old `demo_seeder.kick_off_demo_reindex`: best-effort work
     after the response's data is committed goes on a daemon thread, whose
     failures are logged, never raised, and which releases its own DB
     connection. A restart of the process loses a job in flight; the callers

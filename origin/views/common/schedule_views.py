@@ -5,6 +5,7 @@
     PATCH  /api/v2/schedules/<id>/?team_id=       change, pause (`enabled: false`) or resume one
     DELETE /api/v2/schedules/<id>/?team_id=       delete one
     POST   /api/v2/schedules/<id>/run/?team_id=   run one now (once a minute at most)
+    GET    /api/v2/schedules/dashboards/?team_id= the dashboards to open: own and shared (MIP-2356)
 
 The same service as the MCP tools (`services/schedules.py`), so a schedule made here and one
 made from Claude are the same rows with the same rules, and the words come from the same place
@@ -22,8 +23,15 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from origin.models.common.team_models import TeamMembers
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedule_audience, schedule_defaults, schedule_text, schedules
+from origin.services import (
+    schedule_audience,
+    schedule_dashboards,
+    schedule_defaults,
+    schedule_text,
+    schedules,
+)
 from origin.services.schedule_jobs import JOBS
 from origin.services.throttles import WindowRateThrottle
 from origin.services.user_time import user_zone
@@ -148,6 +156,9 @@ def _job(entry: dict[str, Any]) -> dict[str, Any]:
         "shareable": JOBS[entry["job"]].shareable if entry["job"] in JOBS else False,
         "effortDefault": entry["effort_default"],
         "effortCost": _camel_cost(entry["effort_cost"]),
+        # A job that saves a note on each run (a dashboard): the plan's saves-per-hour sentence the
+        # form shows beside the schedule (MIP-2359). Absent for the others.
+        **({"savesNote": entry["saves_note"]} if entry.get("saves_note") else {}),
     }
 
 
@@ -333,3 +344,45 @@ class ScheduleRunView(_Base):
         if problem:
             return problem
         return Response(out)
+
+
+def _dashboard_note(note) -> dict[str, Any]:
+    return {"noteId": note.note_id, "noteType": schedule_dashboards.NOTE_TYPE, "title": note.title}
+
+
+class ScheduleDashboardsView(_Base):
+    """The "Custom dashboards by AI" tab (MIP-2356): the member's own dashboard schedules and the
+    dashboards other members' schedules keep that this member may read. Only the note's id and
+    title and its owner's display name are sent for a shared one; the schedule behind it is
+    private, and a note the member cannot open never appears (the note ACL decides)."""
+
+    def get(self, request):
+        ctx = self._ctx(request, request.query_params.get("team_id"))
+        if isinstance(ctx, Response):
+            return ctx
+        found = TeamMembers.objects.filter(
+            team_id=ctx.team_id, attendee_id=ctx.user_id, is_deleted=False, team__is_deleted=False
+        ).exists()
+        if not found:
+            return _error("Schedule not found.", status.HTTP_404_NOT_FOUND)
+        data = schedule_dashboards.list_dashboards(ctx)
+        zone = user_zone(request.user)
+        own = []
+        for row in data["own"]:
+            p = schedule_text.present(row["schedule"], zone)
+            item: dict[str, Any] = {
+                "scheduleId": p["schedule_id"],
+                "name": p["name"],
+                "enabled": p["enabled"],
+                "lastRun": p["last_run"],
+                "lastStatus": p["last_status"],
+                "note": _dashboard_note(row["note"]) if row["note"] else None,
+            }
+            if "paused_reason" in p:
+                item["pausedReason"] = p["paused_reason"]
+            own.append(item)
+        shared = [
+            {**_dashboard_note(row["note"]), "ownerName": row["owner"].username or ""}
+            for row in data["shared"]
+        ]
+        return Response({"own": own, "shared": shared})

@@ -13,9 +13,11 @@ from origin.services import schedule_text, schedules
 from origin.services.user_time import user_zone
 from origin.views.public.mcp.secretary._schedule_args import (
     AI_EFFORT_PROPERTY,
+    PLACEMENT_PROPERTIES,
     RECURRENCE_PROPERTIES,
     guarded,
     job_params_schema,
+    placement_args,
     recurrence_args,
 )
 
@@ -26,6 +28,12 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     schedule_id = args.get("schedule_id")
     changes = {k: args[k] for k in _CHANGES if k in args}
     changes.update(recurrence_args(args))
+    if any(k in args for k in PLACEMENT_PROPERTIES):
+        current = next(
+            (s.params for s in schedules.list_schedules(ctx) if str(s.id) == str(schedule_id)),
+            None,
+        )
+        changes.update(placement_args(args, current))
     enabled = args.get("enabled")
     if enabled is not None and not isinstance(enabled, bool):
         raise ToolError("`enabled` must be true or false.")
@@ -57,6 +65,7 @@ UPDATE_MY_SCHEDULE = Tool(
             **RECURRENCE_PROPERTIES,
             "deliver_push": {"type": "BOOLEAN", "description": "Send a push with the report."},
             "ai_effort": AI_EFFORT_PROPERTY,
+            **PLACEMENT_PROPERTIES,
             "enabled": {
                 "type": "BOOLEAN",
                 "description": "false pauses the schedule, true resumes it from now.",

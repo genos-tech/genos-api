@@ -32,7 +32,6 @@ from datetime import date, timedelta
 from importlib import import_module
 from typing import List
 
-from django.core.management import call_command
 from django.db import connection, models, transaction
 from django.utils import timezone
 
@@ -1362,7 +1361,7 @@ def provision_demo_workspace(team_id) -> bool:
 
         change_feed.bump_team(team.team_id)
     # After the commit: the seeded rows must be visible to the reindexer.
-    kick_off_demo_reindex()
+    kick_off_demo_reindex(team.team_id)
     return True
 
 
@@ -1486,33 +1485,21 @@ def _delete_demo_team_search_chunks(team_id: uuid.UUID) -> None:
         )
 
 
-def kick_off_demo_reindex(since_minutes: int = 5) -> None:
-    """Fire `manage.py opensearch_reindex --since-minutes N` on a daemon
-    thread so Spotlight (Cmd-K) can search the demo user's seeded
-    content right after signin — without waiting for the next 10-min
-    cron tick.
+def kick_off_demo_reindex(team_id, *, entity_types=None) -> None:
+    """Index ONE team so Spotlight (Cmd-K) finds its seeded content right after sign-up, starter
+    seed or team join, without waiting for the next 10-minute cron tick.
 
-    Runs in a background thread so the demo signin response returns
-    immediately. Failures (OpenSearch down, no creds, etc.) are logged
-    but never raised: the demo flow must work even when the search
-    index is unavailable; the next cron tick will reconcile.
+    MIP-2374: this used to run `opensearch_reindex --since-minutes 5` for every team on a thread
+    inside the web worker. It now indexes only `team_id`, in a child process (see
+    `origin.search_engine.team_reindex`), with no orphan sweep and no ACL-mark claim. Vectors are
+    kept for demo teams too (about $0.003 per sign-in).
 
-    Must be called AFTER the seeding transaction commits — the
-    reindexer filters by ts_updated_at, so it needs the rows to be
-    visible in the DB.
+    Best-effort: it returns at once, never raises, and a lost run is covered by the cron. Runs
+    after the surrounding transaction commits, so the seeded rows are visible to the indexer.
     """
+    from origin.search_engine.team_reindex import request_team_reindex
 
-    def _run() -> None:
-        try:
-            call_command("opensearch_reindex", since_minutes=since_minutes)
-        except Exception as exc:
-            logger.warning("Demo opensearch reindex failed: %s", exc, exc_info=True)
-        finally:
-            # Each spawned thread gets its own ORM connection; release
-            # it so the pool doesn't accumulate idle handles.
-            connection.close()
-
-    threading.Thread(target=_run, daemon=True, name="demo-reindex").start()
+    request_team_reindex(team_id, entity_types=entity_types)
 
 
 def _create_v2_team(demo_user: CustomUser, short: str, lang: str) -> TeamMaster:

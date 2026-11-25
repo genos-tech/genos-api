@@ -263,6 +263,10 @@ REGISTRY = {
     "origin.views.common.schedule_views.ScheduleDetailView": self_only(
         "the caller's own schedule: looked up by id AND user AND team, anything else is a 404"
     ),
+    "origin.views.common.schedule_views.ScheduleDashboardsView": self_only(
+        "own dashboard schedules by user AND team (the caller must be a live member of the team); "
+        "another member's dashboard appears only when `may_read_note` lets the caller read its note"
+    ),
     "origin.views.common.schedule_views.ScheduleRunView": self_only(
         "the caller's own schedule: looked up by id AND user AND team, anything else is a 404"
     ),

@@ -110,7 +110,12 @@ from origin.views.common.ownership_claim_views import (
 from origin.views.common.recent_auth_views import ConfirmPasswordView
 from origin.views.common.runtime_config_views import RuntimeConfigView
 from origin.views.common.sample_data_views import SampleDataView
-from origin.views.common.schedule_views import ScheduleDetailView, ScheduleListView, ScheduleRunView
+from origin.views.common.schedule_views import (
+    ScheduleDashboardsView,
+    ScheduleDetailView,
+    ScheduleListView,
+    ScheduleRunView,
+)
 from origin.views.common.security_event_views import (
     MySecurityEventListView,
     TeamSecurityEventListView,
@@ -553,6 +558,11 @@ urlpatterns = [
         name="mcp_oauth_consent_context",
     ),
     path("api/v2/schedules/", ScheduleListView.as_view(), name="schedules"),
+    path(
+        "api/v2/schedules/dashboards/",
+        ScheduleDashboardsView.as_view(),
+        name="schedule_dashboards",
+    ),
     path(
         "api/v2/schedules/<uuid:schedule_id>/",
         ScheduleDetailView.as_view(),

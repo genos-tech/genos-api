@@ -47,6 +47,9 @@ log = logging.getLogger(__name__)
 # Bump when the words below change: it is part of the cache key.
 PROMPT_VERSION = "1"
 CACHE_SECONDS = 24 * 3600
+# A summary keyed by a data fingerprint stays for a week (a weekly dashboard on unchanged data
+# makes no call); a cache outage or eviction only costs one call.
+FINGERPRINT_CACHE_SECONDS = 8 * 24 * 3600
 # What one prompt may hold, so the cost of a run is bounded whatever the report lists. Reports cap
 # their own lists (8 to 30 lines a section); this is the ceiling over all of them.
 MAX_LINES = 40
@@ -118,8 +121,11 @@ def build_user_message(report: dict[str, Any], today_iso: str) -> str:
     return "\n".join(parts) + "\n\nAnswer with the JSON object only."
 
 
-def _key(user_id: str, level: str, user_message: str) -> str:
-    raw = f"{user_id}|{level}|{PROMPT_VERSION}|{user_message}"
+def _key(user_id: str, level: str, user_message: str, fingerprint: str = "") -> str:
+    # With a data fingerprint (a dashboard, MIP-2359) the key is the DATA, not the prompt: the prompt
+    # holds today's date, so a page whose numbers did not move would otherwise be paid for each day.
+    body = f"fp:{fingerprint}" if fingerprint else user_message
+    raw = f"{user_id}|{level}|{PROMPT_VERSION}|{body}"
     return "reportnarr:" + hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -136,11 +142,13 @@ def narrative_for(
     effort: Any,
     default_effort: str,
     today_iso: str,
+    purpose: str = llm.NARRATIVE_PURPOSE,
+    fingerprint: str = "",
 ) -> Narrative:
     """The summary of `report`, or why there is none. NEVER raises and never fails a report."""
     out = Narrative()
     try:
-        return _run(ctx, report, effort, default_effort, today_iso, out)
+        return _run(ctx, report, effort, default_effort, today_iso, out, purpose, fingerprint)
     except Exception as exc:  # noqa: BLE001 - a report never fails because of its AI part
         log.warning("report_ai: narrative skipped (%s)", type(exc).__name__, exc_info=True)
         out.text = ""
@@ -148,7 +156,9 @@ def narrative_for(
         return out
 
 
-def _run(ctx, report, effort, default_effort, today_iso, out: Narrative) -> Narrative:
+def _run(
+    ctx, report, effort, default_effort, today_iso, out: Narrative, purpose: str, fingerprint: str
+) -> Narrative:
     if report.get("quiet") is True:
         # The job found nothing worth the member's attention (a quiet tick files nothing). Asking
         # for a summary would charge for it and, with a request id, make the tick post (MIP-1417).
@@ -161,7 +171,7 @@ def _run(ctx, report, effort, default_effort, today_iso, out: Narrative) -> Narr
     reason = llm.preflight(run)
     level = run.effort if run else default_effort
     user_message = build_user_message(report, today_iso)
-    key = _key(str(ctx.user_id), level, user_message)
+    key = _key(str(ctx.user_id), level, user_message, fingerprint)
     try:
         hit = cache.get(key)
     except Exception:  # noqa: BLE001 - a cache outage costs a call, nothing else
@@ -184,7 +194,7 @@ def _run(ctx, report, effort, default_effort, today_iso, out: Narrative) -> Narr
         user_id=ctx.user_id,
         team_id=ctx.team_id,
         max_output_tokens=_output_cap(run.thinking_budget),
-        purpose=llm.NARRATIVE_PURPOSE,
+        purpose=purpose,
     )
     out.request_id = result.request_id
     out.called = bool(result.request_id)
@@ -199,7 +209,7 @@ def _run(ctx, report, effort, default_effort, today_iso, out: Narrative) -> Narr
     )
     if REF in parsed:  # an answer, even "nothing": a missing key is not cached
         try:
-            cache.set(key, out.text, CACHE_SECONDS)
+            cache.set(key, out.text, FINGERPRINT_CACHE_SECONDS if fingerprint else CACHE_SECONDS)
         except Exception:  # noqa: BLE001
             log.warning("report_ai: narrative cache write failed")
     return out

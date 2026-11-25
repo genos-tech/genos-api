@@ -70,7 +70,13 @@ SUMMARY_EFFORT_DEFAULT = "low"
 
 
 def add_narrative(
-    ctx: ToolContext, params: dict[str, Any], report: Report, *, effort_default: str
+    ctx: ToolContext,
+    params: dict[str, Any],
+    report: Report,
+    *,
+    effort_default: str,
+    purpose: str | None = None,
+    fingerprint: str = "",
 ) -> Report:
     """The AI part of a job whose report may open with a written summary (MIP-2350).
 
@@ -95,6 +101,8 @@ def add_narrative(
         effort=params.get(AI_EFFORT_KEY),
         default_effort=effort_default,
         today_iso=timezone.now().astimezone(zone).date().isoformat(),
+        purpose=purpose or llm.NARRATIVE_PURPOSE,
+        fingerprint=fingerprint,
     )
     if result.text:
         report["narrative"] = result.text

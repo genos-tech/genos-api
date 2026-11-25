@@ -2531,7 +2531,9 @@ CATALOG: tuple[McpTool, ...] = (
             "Create a schedule: run one of Genos's jobs at a time the member chooses, for "
             "example 'every weekday at 09:00, what to do today' or 'every Friday at 17:00, "
             "what I did'. Times are in the member's own time zone. The report goes to their "
-            "Inbox, with a push notification unless `deliver_push` is false. Check `list_my_schedules` "
+            "Inbox (or to a chat, `deliver_chat_id`), with a push notification unless "
+            "`deliver_push` is false. For `ai_dashboard`, `save_to` and `folder_id` say where its "
+            "note is kept. Check `list_my_schedules` "
             "first so you do not add a duplicate, and choose `job` from its `jobs`. A "
             "member can keep a limited number of schedules. Say back what you created, in "
             "words. Requires a write-scoped API key."
@@ -2542,11 +2544,11 @@ CATALOG: tuple[McpTool, ...] = (
         name="update_my_schedule",
         registry_name="update_my_schedule",
         description=(
-            "Change one of the member's schedules: its name, job, parameters, time, days or "
-            "push, or pause it (`enabled: false`) or turn it back on (`enabled: true`, which "
-            "also clears a pause from repeated failures). Send only what changes. Pausing "
-            "is how to stop one without losing it. Get `schedule_id` from "
-            "`list_my_schedules`. Requires a write-scoped API key."
+            "Change one of the member's schedules: its name, job, parameters, time, days, "
+            "push, chat (`deliver_chat_id`) or dashboard note place (`save_to`), or pause it "
+            "(`enabled: false`) or turn it back on (`enabled: true`, which also clears a pause "
+            "from repeated failures). Send only what changes. Pausing is how to stop one "
+            "without losing it. Get `schedule_id` from `list_my_schedules`. Requires a write-scoped API key."
         ),
         write=True,
     ),

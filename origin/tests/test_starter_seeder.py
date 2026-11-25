@@ -46,6 +46,24 @@ class StarterWorkspaceTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         return TeamMaster.objects.get(team_id=resp.data["teamDetails"]["teamId"])
 
+    def test_starter_seed_indexes_only_the_new_team(self):
+        """MIP-2374: the kick-off after the seed is for this team, not a global window."""
+        self.authenticate()
+        with mock.patch("origin.services.starter_seeder.kick_off_demo_reindex") as reindex:
+            resp = self.client.post(
+                self.URL,
+                {
+                    "team_name": "Acme3",
+                    "team_email": "acme3@example.com",
+                    "owner_id": str(self.user.id),
+                    "with_starter": True,
+                },
+                format="json",
+            )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        team = TeamMaster.objects.get(team_id=resp.data["teamDetails"]["teamId"])
+        reindex.assert_called_once_with(team.team_id)
+
     def test_opt_in_seeds_the_full_starter_content(self):
         team = self._create_team(with_starter=True)
 
