@@ -10,19 +10,23 @@ from origin.services import schedule_text, schedules
 from origin.services.user_time import user_zone
 from origin.views.public.mcp.secretary._schedule_args import (
     AI_EFFORT_PROPERTY,
+    PLACEMENT_PROPERTIES,
     RECURRENCE_PROPERTIES,
     guarded,
     job_params_schema,
+    placement_args,
 )
 
 
 def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    place = placement_args(args)
     sched = guarded(
         lambda: schedules.create(
             ctx,
             name=args.get("name"),
             job=args.get("job"),
-            params=args.get("params"),
+            params=place.get("params", args.get("params")),
+            deliver_channel_id=place.get("deliver_channel_id"),
             frequency=args.get("frequency"),
             time_of_day=args.get("time_of_day"),
             weekdays=args.get("weekdays"),
@@ -58,6 +62,7 @@ CREATE_MY_SCHEDULE = Tool(
                 "description": "Also send a push notification with the report. Default true; pass false for a quiet schedule.",
             },
             "ai_effort": AI_EFFORT_PROPERTY,
+            **PLACEMENT_PROPERTIES,
         },
         "required": ["name", "job", "frequency", "time_of_day"],
     },
