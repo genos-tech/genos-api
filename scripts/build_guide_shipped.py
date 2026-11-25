@@ -19,7 +19,8 @@ where the TSV is `sha<TAB>YYYY-MM-DD` per commit. Writes
   origin/tests/fixtures/guide_notes_shipped.json   the bodies (a test pins the hashes)
   origin/services/guide_shipped.json               {locale: {title: {"first_shipped": date, "sha256": [..]}}}
 Commits are read oldest first, so a text's `first_shipped` is the date of the first commit with it.
-Only the manual-based text (MIP-2324) is NOT in here: it has not shipped yet.
+The manual-based text (MIP-2324) is NOT in here: every text the vendored manual has had is recorded in
+  origin/services/guide_shipped_manual.json by scripts/record_manual_shipped.py (MIP-2395).
 """
 
 import json

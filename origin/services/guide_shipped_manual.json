@@ -1,0 +1,231 @@
+{
+ "_comment": "Fingerprints of every text the vendored manual has had, per language and topic title (MIP-2395). Written by scripts/record_manual_shipped.py; a test pins the current texts to it.",
+ "en": {
+  "API keys and webhooks, step by step": {
+   "sha256": [
+    "4c6304c0205ad5c9d6843c2a0de522d6f38ed218a4194da9c5eee84fa63d503f"
+   ]
+  },
+  "Chat: messages, threads, and mentions": {
+   "sha256": [
+    "500f21e02092acd39ab43a33a070a9edfcd38529e331f2b078c9506fe980ef9c"
+   ]
+  },
+  "Connecting Genos to other tools: API, MCP, and realtime": {
+   "sha256": [
+    "bc96462c414acba8d5821afab63c6e51d7933b64254c9b509f51880ead48f711"
+   ]
+  },
+  "Fixes for specific problems": {
+   "sha256": [
+    "717b4e63b641736b868bf20751d07ec4ce67cfd52d07a9263c993ed1f8902aad"
+   ]
+  },
+  "Genos AI: ask, act, and stay ahead": {
+   "sha256": [
+    "0e2b0ae60fde2609374802d5bc4c8d7bb449aa238f58ea4110142dc38c3b04c7",
+    "557a4a6b09f6bd0986d0a40901d2fc3a1dfff258dab991d710dc43b368dad6eb",
+    "6b9d7a72fee845c8f3d3d2519d9b5bbfe52162cb927bbfc1bec287a8314659c2"
+   ]
+  },
+  "Genos basics: layout and navigation": {
+   "sha256": [
+    "43f65e23a31343b9d0c5e8d8bbd07b49bc6aba38f8539ae99edb9324a3e3984d"
+   ]
+  },
+  "Keyboard shortcuts, in full": {
+   "sha256": [
+    "80311fd6672eae2f206e78713f60505a60e00b7008550f63bc00c42171a0924a"
+   ]
+  },
+  "Notes: personal, team, and shared": {
+   "sha256": [
+    "ed9ddb73535b1c0f552d0cebc4c11bddd280b9560e8edc70128abd39a340336d"
+   ]
+  },
+  "Notifications: in-app, push, and email": {
+   "sha256": [
+    "0d5637c63e62ee2859d2c3e6392a7713eba3c90b78885474845b473b2680d821"
+   ]
+  },
+  "Organising a large workspace: one team, many departments": {
+   "sha256": [
+    "40fa81ac9de8a30fbbe51d16095c7f39e330c6789d682fcda79a3e274a6c2be8"
+   ]
+  },
+  "Plans, limits, and what happens when you hit one": {
+   "sha256": [
+    "290222ca60a6ab6367c44bef20aaa0c73ab1a24e573301aa9993cb56267e7227",
+    "2e1eede8dc50bd636c92cb19689752811abd7a487ebb91363b92dfe0385bc512"
+   ]
+  },
+  "Playbooks: how different kinds of work fit Genos": {
+   "sha256": [
+    "542d35b924ef0429c468cba43cbb831291ee7decba83cbec3c21ed52390d57fb",
+    "720cd66d2431bc777d0a5502e22d748ce21a84ba032365ffc2a580a235a9a50e"
+   ]
+  },
+  "Searching and asking: how to get better answers": {
+   "sha256": [
+    "2d038be837251fac21c408e9f4e93d789db33c36c925298000bff8890e9251c7"
+   ]
+  },
+  "Security and sign-in": {
+   "sha256": [
+    "634c13203ec1ec15ba3dca8a2e5b1dbb44dc0675d93c2576bfb105e40df9cab3"
+   ]
+  },
+  "Setting up Genos for your company: an owner's checklist": {
+   "sha256": [
+    "f5af912402e8ab50085a451466018682cc5a7a79895415be77797267648da5b9"
+   ]
+  },
+  "Settings A-Z": {
+   "sha256": [
+    "ad165fa3939e273180fdeee91b5347d0edc940f00dc50f591812a6efb3ce9b7b",
+    "d1ddf265cae42cb53676124bb91377ecbe6444101bfa0ab7fe90eccf02cfd54e"
+   ]
+  },
+  "Settings: every option, and where to find it": {
+   "sha256": [
+    "2595290008e12582c6968ecb7c26d67d94adb4d02bf5395597326bc81502f6a1"
+   ]
+  },
+  "Tasks and projects": {
+   "sha256": [
+    "3cd469cc59994ebcad9efdcf106ad3c2b7cb943b0a628c3bd3968720e0def9fd",
+    "acb8ddd710176895f74d0ded0c32bb19ef6b2ab7e9b39d47858d69915a1c9448"
+   ]
+  },
+  "Teams, members, and roles": {
+   "sha256": [
+    "bf87558f65a088814dbb1d02ec2694b5c003292fa65e30376c86aef38d7c9ea1"
+   ]
+  },
+  "Tips, shortcuts, and getting unstuck": {
+   "sha256": [
+    "e4d85f5c37b1305adce65d56ad372e9428a7fa1a03bc9976c1b34cbb62bc7a4a"
+   ]
+  },
+  "Working with another company: cross-team sharing": {
+   "sha256": [
+    "21b2abc494e8d3e1e9b33fce99b28f27f2ee6aa241d439a6f5162ae09958f7b9",
+    "6bc5258ed963f9668ab8eafb689fbd828220b60f63c4dd91e4e92160ee79916d"
+   ]
+  }
+ },
+ "ja": {
+  "API キーと Webhook の手順": {
+   "sha256": [
+    "62f660b14e17640294123f1f21747dd78bbc91ed09a2d6a383c030bf8c27ee17"
+   ]
+  },
+  "Genos AI: 質問し、作業を任せ、先回りする": {
+   "sha256": [
+    "5e92db579c26f801c761c00a9376904724f26a0dc811b77c154e9079551cf803",
+    "6062c7f86790f155bd140163af9759b6dd6ba6151fc05769ed83a6af9a416b85",
+    "ac06f01f0366d1bff75b4e065ce468b001a56a2c5715a19086456ad1c233c664"
+   ]
+  },
+  "Genos の基本: 画面構成とナビゲーション": {
+   "sha256": [
+    "11f17c8ba782d38168a16f35eaabc632505547a8b17c15bfeab852896a8a57ee"
+   ]
+  },
+  "Genos を他のツールにつなぐ: API、MCP、リアルタイム": {
+   "sha256": [
+    "8c8584f8c42040d11da0063e14de274c6301691be95da41527455b55cef13f4e"
+   ]
+  },
+  "よくある困りごとの対処法": {
+   "sha256": [
+    "7b8f72e7b7fe29fc9b07ab42122f6743c91b748dff81c8762fec3da90c7b88ab"
+   ]
+  },
+  "キーボードショートカット一覧": {
+   "sha256": [
+    "e86cb8b272c13daacc49296098749624ec5788c8619d10ba1a6f4e057bdd4bad"
+   ]
+  },
+  "セキュリティとサインイン": {
+   "sha256": [
+    "e081ba4428226ecd67e8eb9bdeb1f603886ffd501febbf25db67a7bf45a8048a"
+   ]
+  },
+  "タスクとプロジェクト": {
+   "sha256": [
+    "664901f7253916831ca93297989f3e702e7b64d71d63e6df1ca53638c9f9fa92",
+    "7650d4c0f9084cebe35d9f90b2178ee2bf3c1963fed5fb081d6bedbe834d8cea"
+   ]
+  },
+  "チャット: メッセージ、スレッド、メンション": {
+   "sha256": [
+    "76fa8f54fe531f2247a88270f85cd9622f54b026ca1eb987cff11405dd2f0036"
+   ]
+  },
+  "チーム、メンバー、ロール": {
+   "sha256": [
+    "31bf1c23c57bb3e043a0d8fa13a7e3f5afa111efadc2144279a18d334adf3fb5"
+   ]
+  },
+  "ノート: 個人用、チーム用、共有": {
+   "sha256": [
+    "5c5c147ce98220d837f057271c2e1fe4f7264ca94c39fe4bea4c029dfe37f3a4"
+   ]
+  },
+  "プラン、上限、上限に達したときの動き": {
+   "sha256": [
+    "538dc5efa63515f324dd9e1dad98a67fad6dbffe20cac1ea792e94f0b3884219",
+    "df8cd72a9418b623ce0e096c83438b30f6706f49d0696acbe87b7167e3575408"
+   ]
+  },
+  "プレイブック: 仕事の種類ごとの Genos の使い方": {
+   "sha256": [
+    "b4fef23fd38e21c70d26acb5bf738fc878baaafaaa632f8c6e7d05f2cafc6456",
+    "db9daa6a9a49cefcf28e79aec48410e1b0c9304a2a8867e9e9081dc810daef50"
+   ]
+  },
+  "他社との協業: チーム間共有": {
+   "sha256": [
+    "6a2e368c1d23af9136e6af05a2f0927ee721b275bc11832ae83fad6290de12f0",
+    "bf2e43747b2a724ed250150e2262e07ef66686ff4c619ca052ef56c44c05f5a4"
+   ]
+  },
+  "会社で Genos を始める: オーナー向けチェックリスト": {
+   "sha256": [
+    "04943092516707340c6a20440245e6dce92ee7d106735969491236e217844770"
+   ]
+  },
+  "便利な使い方、ショートカット、困ったときは": {
+   "sha256": [
+    "96f2c536a21f33fceb4a5b7343ffb798ad9d0c4d6182dae58ee986c42c9ee20c"
+   ]
+  },
+  "大きなワークスペースの整え方: 1 つのチームに多くの部署": {
+   "sha256": [
+    "b99adf526fe48cb54984410cb7c516aca627680d7e4e023fe9280ffcb88e4df2"
+   ]
+  },
+  "検索と質問: より良い答えを得るには": {
+   "sha256": [
+    "22088d43272d2da10af75dff4e4b8699e4f8891234fe8bb2a1c53af55772294b"
+   ]
+  },
+  "設定: すべてのオプションと、その場所": {
+   "sha256": [
+    "2c99ef6f8039b302fee42b3a467b8909671cacebcf5a83f0e469f74bbfde7c67"
+   ]
+  },
+  "設定一覧(A〜Z)": {
+   "sha256": [
+    "85688c15b9c3d29be37f32e48b0d066ddf761da43740fd4d8c8ec1a53a53c9c6",
+    "8ad58a8543f9491bab8ae22ac389185a8f77fdf86c16f07c4b58c2a56670e33c"
+   ]
+  },
+  "通知: アプリ内、プッシュ、メール": {
+   "sha256": [
+    "68425e5bd874240388c1b2adf126bded52da403a32d5e46d7006a77306fcc26a"
+   ]
+  }
+ }
+}
