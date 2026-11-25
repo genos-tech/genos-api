@@ -26,7 +26,7 @@ from origin.services.schedule_jobs import AUDIENCE_KEY, JOBS
 from origin.services.schedule_jobs.ai_dashboard import visible_tasks
 from origin.tests.test_schedule_job_ai_dashboard import PUSH, TIER_PATH
 from origin.tests.test_schedule_jobs import JobBase
-from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_VIEWER
+from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR, ROLE_VIEWER
 
 OUTSIDER = "outsider-name-zz"
 
@@ -61,9 +61,9 @@ class ReadersBase(JobBase):
             visibility=visibility,
         )
 
-    def grant(self, folder, user):
+    def grant(self, folder, user, role_id=ROLE_VIEWER):
         NoteFolderPermission.objects.create(
-            team=self.team, folder=folder, user=user, role_id=ROLE_VIEWER
+            team=self.team, folder=folder, user=user, role_id=role_id
         )
 
     def save(self, folder=None, scope="team_folder", **params):
@@ -172,6 +172,46 @@ class TestWhoReadsTheNote(ReadersBase):
             str(self.outsider.id),
             audience.saved_note_readers(self.user.id, self.team.team_id, note.note_id),
         )
+
+
+class TestATeamFolderTheOwnerCannotWriteTo(ReadersBase):
+    """The first run creates the note, which needs Editor on the folder. The save must say so
+    at once (MIP-2404), in the words of a place that is not there, and name nobody."""
+
+    def theirs(self, visibility):
+        return self.folder(visibility, owner=self.user2)
+
+    def refused_at_save(self, folder):
+        with self.assertRaises(schedules.ScheduleError) as raised:
+            self.save(folder, kind="mine")
+        self.assertEqual(str(raised.exception), audience.NOTE_PLACE_NOT_FOUND)
+        self.assertNotIn(self.user2.username, str(raised.exception))
+        self.assertFalse(schedules.MemberSchedule.objects.filter(job="ai_dashboard").exists())
+
+    def test_a_private_folder_of_someone_else_with_no_grant_is_refused(self):
+        self.refused_at_save(self.theirs(PersonalNoteFolder.VISIBILITY_PRIVATE))
+
+    def test_a_folder_the_owner_may_only_read_is_refused(self):
+        private = self.theirs(PersonalNoteFolder.VISIBILITY_PRIVATE)
+        self.grant(private, self.user, ROLE_VIEWER)
+        self.refused_at_save(private)
+
+    def test_a_public_folder_of_someone_else_is_fine_every_member_may_add_notes_there(self):
+        # Public means Editor for the whole team, so the first run can create the note.
+        public = self.theirs(PersonalNoteFolder.VISIBILITY_PUBLIC)
+        sched = self.save(public, kind="mine")
+        self.assertEqual(schedules._execute(self.reload(sched))[0], "ok")
+
+    def test_a_folder_the_owner_may_add_notes_to_is_saved_and_its_first_run_works(self):
+        private = self.theirs(PersonalNoteFolder.VISIBILITY_PRIVATE)
+        self.grant(private, self.user, ROLE_EDITOR)
+        sched = self.save(private, kind="mine")
+        self.assertEqual(schedules._execute(self.reload(sched))[0], "ok")
+        note = PersonalNoteMaster.objects.get(note_id=self.reload(sched).output["note_id"])
+        self.assertEqual(note.folder_id, private.folder_id)
+
+    def test_a_folder_the_owner_made_still_saves(self):
+        self.save(self.folder(PersonalNoteFolder.VISIBILITY_PRIVATE), kind="mine")
 
 
 class TestRefusedWhenAReaderIsOffTheProject(ReadersBase):
