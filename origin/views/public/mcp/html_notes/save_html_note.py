@@ -3,8 +3,8 @@
 Stores an HTML page as a note, or replaces the page of an HTML note, and answers with what the page
 needs to be fixed. The save NEVER fails for a fixable reason: it stores and warns. HTML notes are a
 Core feature with per-plan limits (`services/html_note_limits.py`, the one table): a Free member's
-call stores nothing and is answered with a suggestion (not an error); the size, the count of HTML
-notes and the hourly rate are the plan's numbers. The only things
+call stores nothing and is answered with a suggestion (not an error); the page size, the storage
+quota and the hourly rate are the plan's numbers (the number of HTML notes is not limited). The only things
 refused are those limits (worded as what to do), a note that is not an HTML
 note (a BlockNote note is never converted: the answer suggests a new note), and what any note write
 refuses (no access, archived, wrong target).
@@ -48,10 +48,11 @@ def _size_limits_text() -> str:
     return f"{core.max_bytes // 1024} KB on Core, {pro.max_bytes // 1024} KB on Pro and up"
 
 
-def _count_limits_text() -> str:
+def _storage_limits_text() -> str:
     core = html_note_limits.HTML_NOTE_LIMITS["core"]
     pro = html_note_limits.HTML_NOTE_LIMITS["pro"]
-    return f"{core.max_notes} on Core, {pro.max_notes} on Pro and up"
+    size = html_note_limits.size_text
+    return f"{size(core.max_storage_bytes)} on Core, {size(pro.max_storage_bytes)} on Pro and up"
 
 
 def _rate_limits_text() -> str:
@@ -148,11 +149,14 @@ def mcp_description() -> str:
         "rules as every note, or, with `note_id` and `note_type`, REPLACES the page of an HTML "
         "note you can edit (the earlier page is kept as a revision). HTML notes are a Core "
         "plan feature: on the Free plan nothing is stored and the answer says what to tell the "
-        "user. It stores the page and warns: the save is refused only when the page is over "
-        f"the plan's size ({_size_limits_text()}), the member already owns the plan's count of "
-        f"HTML notes ({_count_limits_text()}), or the plan's saves per hour are used "
-        f"({_rate_limits_text()}); each refusal says the numbers and the fix. Anything else the page needs is returned as `warnings`, each with a "
-        "fix in `suggestions`: read them and save again with `note_id` if you can improve the "
+        "user. The number of HTML notes is not limited; each note owner has a storage quota "
+        f"that counts every kept version, up to {html_notes.KEEP_REVISIONS} per note "
+        f"({_storage_limits_text()}). It stores the page and warns: the save is refused only "
+        f"when the page is over the plan's size ({_size_limits_text()}), it would take the "
+        "owner's HTML storage past the quota, or the plan's saves per hour are used "
+        f"({_rate_limits_text()}); each refusal says what to do. Anything else the page needs "
+        "is returned as `warnings`, each with a fix in `suggestions`: read them and save again "
+        "with `note_id` if you can improve the "
         "page. The page is shown in a sandboxed frame with no network, so follow these rules. "
         + rules_text()
         + " An ordinary note is never converted into an HTML note: to make a page, create a "
