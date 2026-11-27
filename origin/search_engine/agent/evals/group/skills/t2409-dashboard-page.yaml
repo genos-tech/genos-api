@@ -1,0 +1,21 @@
+# MIP-2409: a dashboard made by the official skill `dashboard-page`. Does the model answer with ONE
+# JSON object the server can draw, from numbers it read?
+#
+# WRITTEN, NOT RUN (Ken: no paid eval without their go). The group loader globs `group/*.yaml` only,
+# so neither CI nor `agent_eval_group` reads this folder. The in-app runner cannot yet put a skill's
+# text in front of the model; a driver for these needs `system_extra` = the skill block of the
+# published `dashboard-page` + `UNATTENDED_RULES` + `skill_dashboard.DIRECTIVE` (what
+# `run_skill.run_for_answer` sends), on the in-app v1 fixture. Pass = `parse_dashboard` accepts the
+# answer, then `expect`, then Claude judges the transcript against the fixture's real counts.
+
+- id: t2409.dashboard-page.mine.en
+  lang: en
+  tags: [eval-skills, t2409]
+  fixture: v1
+  skill: dashboard-page
+  query: "Run this skill now."
+  note: "No input: the member's own tasks. Blocks status, trend, attention, timeline; refs from tool results."
+  expect:
+    no_writes: true
+    tools_used_contains_any: [get_my_task_summary, list_tasks]
+    answer_does_not_match: ["^[^{\\s]", "https?://", "/workspace/"]
