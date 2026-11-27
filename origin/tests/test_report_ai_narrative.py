@@ -33,7 +33,7 @@ from origin.services import schedule_delivery, schedules
 from origin.services.report_ai import estimate, llm, narrative, validate
 from origin.services.schedule_jobs import AI_EFFORT_KEY, JOBS
 from origin.services.schedule_text import job_catalog
-from origin.tests.spend_limit_support import over_the_monthly_budget
+from origin.tests.spend_limit_support import over_the_monthly_budget, over_the_team_ceiling
 from origin.tests.test_report_ai_sentences import LIVE, AiBase
 
 FOUR_JOBS = ("project_updates", "milestone_updates", "team_activity", "what_is_left")
@@ -205,6 +205,11 @@ class TestSkipPaths(NarrativeBase):
         with over_the_monthly_budget():
             report = self.skipped("monthly_limit")
         self.assertIn("monthly limit", report["summary"])
+
+    def test_the_team_ceiling_reaches_the_summary(self):
+        self.seed()
+        with over_the_team_ceiling(self.team.pk):
+            self.skipped("monthly_limit")
 
     def test_a_failed_call_is_a_plain_report_that_names_the_request(self):
         self.seed()

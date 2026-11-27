@@ -88,13 +88,13 @@ def configured(provider: str) -> bool:
     return False
 
 
-def credit_block(user_id: str, team_id: str = "") -> str:
+def credit_block(user_id: str, team_id: str = "", *, monthly: bool = True) -> str:
     """`SKIP_MONTHLY_LIMIT` while a monthly spend limit is reached (`spend_limits`, credits on or
-    off). Else `SKIP_NO_CREDITS` when the member's AI credits are used up AND credits are the customer's
+    off; `monthly=False` asks about the member's credits only). Else `SKIP_NO_CREDITS` when the member's AI credits are used up AND credits are the customer's
     limit (`credits_authoritative`); else "". In shadow-only mode a charge is recorded but nothing
     is refused, as for an ask. An unlimited plan has no balance to run out of. Never raises: a doubt
     is "may call", the same fail-open a plan gate has."""
-    if monthly_limit_reached(team_id):
+    if monthly and monthly_limit_reached(team_id):
         return SKIP_MONTHLY_LIMIT
     try:
         from origin.search_engine import credit_ledger, quota  # noqa: PLC0415

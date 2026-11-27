@@ -27,7 +27,7 @@ from origin.search_engine.quota import resolve_effective_tier
 from origin.services import demo_ai_limits
 from origin.services.report_ai import llm
 from origin.services.schedule_jobs import run_skill
-from origin.tests.spend_limit_support import over_the_monthly_budget
+from origin.tests.spend_limit_support import over_the_monthly_budget, over_the_team_ceiling
 from origin.tests.test_demo_ai_limits import _make_user
 from origin.views.public.mcp import views as mcp_views
 
@@ -248,6 +248,16 @@ class SummaryViewTests(_Base):
             self.assertEqual(resp.json()["category"], "ai_monthly_limit")
             regen.assert_not_called()
             self.assertEqual(kept.status_code, 200, call.__name__)
+
+    def test_the_team_ceiling_reaches_both_summaries_of_that_team_only(self):
+        for call in (self._note, self._thread):
+            with over_the_team_ceiling(self.pro_team.pk):
+                resp, regen = call(self.pro, self.pro_team, cached=False)
+            self.assertEqual(resp.json()["category"], "ai_monthly_limit", call.__name__)
+            regen.assert_not_called()
+            with over_the_team_ceiling(self.demo_team.pk):
+                resp, _ = call(self.pro, self.pro_team, cached=False)
+            self.assertEqual(resp.status_code, 200, call.__name__)
 
     def test_a_normal_user_is_served_while_the_demo_cap_is_zero_and_never_counted(self):
         with (

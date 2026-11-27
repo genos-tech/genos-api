@@ -33,3 +33,18 @@ def over_the_monthly_budget():
             yield
     finally:
         cache.clear()
+
+
+@contextmanager
+def over_the_team_ceiling(team_id):
+    """That team's ceiling is 1 dollar and it has spent it; every other team is under. What a
+    path that forgets to pass its team id fails on."""
+    spend_row(team_id=team_id, usd_micro=1_000_000)
+    cache.clear()
+    try:
+        with override_settings(
+            SEARCH_ENGINE={**settings.SEARCH_ENGINE, "AI_TEAM_MONTHLY_CEILING_USD": 1.0}
+        ):
+            yield
+    finally:
+        cache.clear()

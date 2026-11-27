@@ -49,7 +49,7 @@ from origin.services.report_ai import effort as effort_mod
 from origin.services.schedule_jobs import JOBS, run_skill
 from origin.services.skills import service
 from origin.tests.skill_fence_helpers import strip_tag
-from origin.tests.spend_limit_support import over_the_monthly_budget
+from origin.tests.spend_limit_support import over_the_monthly_budget, over_the_team_ceiling
 from origin.tests.test_skills_api import SkillBase
 
 BODY_V1 = (
@@ -748,6 +748,13 @@ class CreditTests(Base):
         self.assertNotIn("ai", item.item_optionals)
         sched.refresh_from_db()
         self.assertTrue(sched.enabled)
+
+    def test_the_team_ceiling_reaches_the_skill_run(self):
+        sched = self.schedule(self.skill())
+        with over_the_team_ceiling(sched.team_id):
+            self.assertEqual(self.execute(sched)[0], STATUS_OK)
+        self.assertEqual(self.agent.calls, [])
+        self.assertEqual(self.inbox()[0].item_optionals["ai_skipped"], "monthly_limit")
 
     def test_with_credits_left_the_run_goes_ahead(self):
         sched = self.schedule(self.skill())

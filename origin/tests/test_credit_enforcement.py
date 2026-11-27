@@ -46,7 +46,7 @@ from origin.search_engine.agent_views import (
 )
 from origin.search_engine.llm import spend
 from origin.search_engine.models import AgentRun, AiCreditEntry, AiRequestCost
-from origin.tests.spend_limit_support import over_the_monthly_budget
+from origin.tests.spend_limit_support import over_the_monthly_budget, over_the_team_ceiling
 from origin.tests.test_base import BaseAPITestCase
 from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
@@ -605,6 +605,13 @@ class AskPathEnforcementTests(_StreamingBase):
         self.assertEqual(block["balance"], round(balance / 1000, 2))
         # Under the limit again, the same ask is served.
         self.assertEqual(self._ask().status_code, 200)
+
+    @AUTHORITATIVE
+    def test_the_team_ceiling_refuses_that_teams_ask_only(self):
+        with over_the_team_ceiling(self.team.pk):
+            self.assertEqual(self._ask().json()["category"], "ai_monthly_limit")
+        with over_the_team_ceiling(uuid.uuid4()):
+            self.assertEqual(self._ask().status_code, 200)
 
     @AUTHORITATIVE
     def test_the_free_breaker_is_off_by_default(self):
