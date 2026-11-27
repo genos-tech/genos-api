@@ -85,7 +85,7 @@ class _StreamingAPIBase(CheapFlushTransactionTestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
 
 
-def _usage(model="gemini-3.6-flash", provider="gemini", **kw):
+def _usage(model="gemini-4-hydrogen", provider="gemini", **kw):
     u = CallUsage(provider=provider, model=model)
     for k, v in kw.items():
         setattr(u, k, v)

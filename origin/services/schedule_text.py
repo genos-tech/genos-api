@@ -49,7 +49,7 @@ def describe_recurrence(sched: MemberSchedule) -> str:
     return at
 
 
-def _local(value, zone) -> str | None:
+def local_time(value, zone) -> str | None:
     return value.astimezone(zone).isoformat(timespec="minutes") if value else None
 
 
@@ -68,8 +68,8 @@ def present(sched: MemberSchedule, zone) -> dict[str, Any]:
         "time_of_day": f"{sched.time_of_day:%H:%M}",
         "enabled": sched.enabled,
         "deliver_push": sched.deliver_push,
-        "next_run": _local(sched.next_run_at, zone),
-        "last_run": _local(sched.last_run_at, zone),
+        "next_run": local_time(sched.next_run_at, zone),
+        "last_run": local_time(sched.last_run_at, zone),
         "last_status": sched.last_status or None,
     }
     if sched.frequency == FREQ_WEEKLY:

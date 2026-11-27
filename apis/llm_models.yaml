@@ -118,6 +118,19 @@
 #                  on the higher card; llm_catalog.ModelPrice.for_prompt
 #                  does the same. `price` stays the typical (low) card:
 #                  it drives the ordering check and the picker.
+#   thinking_level (opt) — Gemini 4 and later: low | medium | high, the
+#            level this model is called with. It also says the model takes
+#            no `thinking_budget` (400) and cannot turn thinking off: the
+#            client turns a caller's budget into `low`, and adds room for
+#            thinking to any output cap. Omitted = the older request.
+#   explicit_cache (opt, default true) — false for Gemini models with no
+#            explicit context caching (Gemini 4): GEMINI_EXPLICIT_CACHE
+#            then does nothing for them.
+#   group_parallel_calls (opt, default false) — true for models that 400
+#            unless the calls of one parallel turn are replayed as one
+#            turn, with the thought signature on the first only.
+#   replaces (opt) — ids this entry took over from. A saved preference for
+#            one of them keeps this entry's effort level.
 #   effort   (opt) — Anthropic `output_config.effort` for this model:
 #                  low | medium | high | xhigh | max. When set the client
 #                  also sends `thinking: {type: adaptive}`. Required for
@@ -138,8 +151,8 @@
 #                  API. Test a new model BOTH ways before listing it —
 #                  one request each, and it is the only proof.
 #
-#  Prices verified 2026-11-01; the OpenAI rungs and
-#  text-embedding-3-small on 2026-11-27. Re-check on every swap; they
+#  Prices verified 2026-11-01; the OpenAI rungs,
+#  text-embedding-3-small and gemini-4-hydrogen on 2026-11-27. Re-check on every swap; they
 #  move.
 # =====================================================================
 
@@ -324,24 +337,35 @@ providers:
           # is the model to point RAG_RERANKER_MODEL / RAG_REWRITE_MODEL
           # at (LLM_SPEND_MAP.md section 7, levers 2 and 3).
 
-        - model: gemini-3.6-flash
+        - model: gemini-4-hydrogen
           class: light
-          label: Gemini 3.6 Flash
+          label: Gemini 4 Hydrogen
           note: Balanced speed and quality — the default.
-          price: { input: 1.50, output: 7.50, cached_input: 0.15, cache_write: 1.50 }
-          # Released 2026-07-21. The server default (GEMINI_MODEL), and
-          # the direct successor to gemini-3.5-flash: same input price,
-          # 17% cheaper output, and it beats 3.1 Pro on coding.
+          # Global endpoint, USD per 1M tokens, one card (no long-prompt
+          # tier): https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing
+          # read 2026-11-27. `cache_write` is the price Google lists as
+          # effective 2027-01-12 (explicit cache controls); nothing
+          # records a cache write for this model before then.
+          price: { input: 1.50, output: 7.50, cached_input: 0.075, cache_write: 1.875 }
+          # The three Gemini 4 request rules (model page and developer guide,
+          # read 2026-11-27, MIP-2366):
+          # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen
+          # MEDIUM is what gemini-3.6-flash defaulted to; Hydrogen's own
+          # default is HIGH, which would bill and wait for more thinking.
+          # A member whose saved model is the one this took over from stays
+          # on this rung instead of falling to the default effort.
+          replaces: [gemini-3.6-flash]
+          thinking_level: medium
+          explicit_cache: false
+          group_parallel_calls: true
+          supports_temperature: false
+          # The server default (GEMINI_MODEL), GA 2026-11-12, replacing
+          # gemini-3.6-flash at the same list price with half-price cache
+          # reads (MIP-2366, Ken 2026-11-27: switched without an eval run).
           #
-          # `light` because gemini-3.5-flash was flash-class (~JPY1-2 per
-          # ask) and this is cheaper still. Light caps equal the umbrella
-          # `llm_ask_daily`, i.e. the default model is effectively
+          # `light` for the same reason 3.6 Flash was: light caps equal the
+          # umbrella `llm_ask_daily`, i.e. the default model is effectively
           # unmetered — which is exactly what it must be.
-          #
-          # The 10x cached-input discount matters more here than the
-          # headline rate: Genos re-sends 57 tool schemas on every call,
-          # which is precisely the stable prefix implicit caching rewards
-          # (LLM_SPEND_MAP.md section 2).
 
         - model: gemini-3.1-pro-preview
           class: middle
@@ -354,8 +378,14 @@ providers:
           # cap sized for those would be gratuitously tight here.
           # Unchanged from the previous catalog, where it was also mid.
           #
+          # gemini-4-neon ($3/$15) was chosen to take this rung (MIP-2366)
+          # and is NOT listed yet: Google's model page says it "is available
+          # to verified enterprise customers in select regions" (read
+          # 2026-11-27) and our access is not confirmed. Confirm it with one
+          # call on the production project before listing it.
+          #
           # Two caveats worth knowing:
-          #   * gemini-3.6-flash above reportedly beats it on coding at
+          #   * the Flash line above reportedly beats it on coding at
           #     lower cost, so this is a thinking-depth rung, not a
           #     quality-dominance one.
           #   * Price steps to $4.00/$18.00 above 200K context, and the
@@ -366,9 +396,9 @@ providers:
           # Keep the `-preview` suffix: GA reporting is contradictory and
           # this id is the one known to serve.
           #
-          # Google currently ships nothing in the premium cost band, so
-          # Gemini has no `highend` entry. That is a fact about Google's
-          # lineup, not a gap to paper over.
+          # Gemini has no `highend` entry: Google's premium-band models
+          # (Gemini 4 Argon and Carbon) are kept out of the picker on
+          # purpose (MIP-2366, Ken 2026-11-27).
 
     # -----------------------------------------------------------------
     # Claude — DIRECT to the Anthropic API (`anthropic.Anthropic(api_key
@@ -540,7 +570,7 @@ providers:
 #  genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md section 12. The
 #  numbers survive the 2026-07-25 model refresh unchanged because the
 #  worst case per class did not move:
-#    light   gemini-3.6-flash $1.50/$7.50 (the sizing used gpt-5.6-luna
+#    light   gemini-4-hydrogen $1.50/$7.50 (the sizing used gpt-5.6-luna
 #            at $1/$6; luna is now $0.20/$1.20)
 #    middle  gpt-5.6-terra and gemini-3.1-pro-preview $2/$12 (the 2026-07
 #            sizing used $3/$15, so the worst case at the middle cap is
@@ -655,8 +685,9 @@ efforts:
         # the DEFAULT experience; see the MEDIUM INVARIANT note above.
         thinking_budget: null
         # The two-tier target: planning on flash-lite (~$0.006/call
-        # even on a cache miss vs ~$0.028 on 3.6-flash), synthesis on
-        # 3.6-flash. Loop calls are 99%+ of medium's cost.
+        # even on a cache miss vs ~$0.028 on the middle rung, measured on
+        # gemini-3.6-flash), synthesis on the middle rung. Loop calls are
+        # 99%+ of medium's cost.
         loop_rung: 0
     high:
         rung: 2

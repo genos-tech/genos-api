@@ -136,11 +136,28 @@ def _row(sched, zone, readable_chats: set[Any] | None = None) -> dict[str, Any]:
             "title": title,
             "kind": "project" if channel.project_id else "group",
         }
+    out.update(_running(sched, zone))
     # The stable code beside the English label above (MIP-1231): `manual`, `failures`,
     # `left_team`, `inactive` or `plan`. REST only; the connected-AI-app tools keep their shape.
     if not sched.enabled and sched.paused_reason:
         out["pausedReasonCode"] = sched.paused_reason
     return out
+
+
+def _running(sched, zone) -> dict[str, Any]:
+    """Whether a run holds the schedule right now (MIP-2457), so the page can say "Running…"
+    from the server's word. `runningSince` is written as `lastRun` will be for that run."""
+    since = schedules.running_since(sched)
+    if since is None:
+        return {"running": False}
+    return {"running": True, "runningSince": schedule_text.local_time(since, zone)}
+
+
+def _run_answer(out: dict[str, Any]) -> dict[str, Any]:
+    """The service's run answer with the REST casing."""
+    if "started_at" not in out:
+        return out
+    return {**{k: v for k, v in out.items() if k != "started_at"}, "startedAt": out["started_at"]}
 
 
 def _job(entry: dict[str, Any]) -> dict[str, Any]:
@@ -280,8 +297,9 @@ class ScheduleListView(_Base):
             return ctx
         fields = _changes(body)
         if fields.get("run_now") is True:
-            # "Run right away" (MIP-2402): a one-time schedule made and run in this request. The
-            # server picks the date and time; the run's own result comes back with the schedule.
+            # "Run right away" (MIP-2402): a one-time schedule made and run at once. The server
+            # picks the date and time; the run's own result, or `started` for a slow job
+            # (MIP-2457), comes back with the schedule.
             made, problem = self._run(
                 lambda: schedules.create_and_run(
                     ctx,
@@ -298,7 +316,8 @@ class ScheduleListView(_Base):
                 return problem
             sched, out = made
             return Response(
-                {"schedule": _row(sched, user_zone(request.user)), "run": out}, status=201
+                {"schedule": _row(sched, user_zone(request.user)), "run": _run_answer(out)},
+                status=201,
             )
         sched, problem = self._run(
             lambda: schedules.create(
@@ -365,7 +384,7 @@ class ScheduleRunView(_Base):
         out, problem = self._run(lambda: schedules.run_now(ctx, schedule_id))
         if problem:
             return problem
-        return Response(out)
+        return Response(_run_answer(out))
 
 
 def _dashboard_note(row) -> dict[str, Any]:
@@ -406,6 +425,7 @@ class ScheduleDashboardsView(_Base):
                 "lastRun": p["last_run"],
                 "lastStatus": p["last_status"],
                 "note": _dashboard_note(row) if row["note"] else None,
+                **_running(row["schedule"], zone),
             }
             if "paused_reason" in p:
                 item["pausedReason"] = p["paused_reason"]

@@ -13,6 +13,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     out = guarded(lambda: schedules.run_now(ctx, args.get("schedule_id")))
     if out["status"] == "ok":
         summary = f"Ran: {out['title']} ({out['items']} item(s)). The report is in the Inbox."
+    elif out["status"] == schedules.STATUS_STARTED:
+        summary = (
+            "Started: the report arrives in the Inbox (or the chat) when it is done, usually "
+            "within a few minutes. `list_my_schedules` shows how it went."
+        )
     else:
         summary = f"The run failed: {out['error'] or out['status']}."
     return {**out, "__summary__": summary}
