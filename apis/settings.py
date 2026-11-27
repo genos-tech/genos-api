@@ -965,6 +965,13 @@ SEARCH_TEAM_REINDEX_MODE = os.environ.get("SEARCH_TEAM_REINDEX_MODE", "subproces
 SEARCH_TEAM_REINDEX_MAX_PROCS = int(os.environ.get("SEARCH_TEAM_REINDEX_MAX_PROCS", "2"))
 SEARCH_TEAM_REINDEX_TIMEOUT_S = int(os.environ.get("SEARCH_TEAM_REINDEX_TIMEOUT_S", "600"))
 
+# MIP-2457: where "Run now" of a slow report (a skill, a dashboard, AI) runs. "subprocess" is a
+# `schedule_run_now` child process (at most MAX_PROCS at once, stopped after TIMEOUT_S); "sync" is
+# the rollback: inside the web request, where gunicorn's timeout kills a long run.
+SCHEDULE_RUN_NOW_MODE = os.environ.get("SCHEDULE_RUN_NOW_MODE", "subprocess")
+SCHEDULE_RUN_NOW_MAX_PROCS = int(os.environ.get("SCHEDULE_RUN_NOW_MAX_PROCS", "2"))
+SCHEDULE_RUN_NOW_TIMEOUT_S = int(os.environ.get("SCHEDULE_RUN_NOW_TIMEOUT_S", "900"))
+
 SEARCH_ENGINE = {
     "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
     "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),

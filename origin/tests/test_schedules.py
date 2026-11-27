@@ -599,7 +599,9 @@ class RunDueTests(ScheduleBase):
         sched = self.make(due_at=SCHEDULED)
         self.assertTrue(schedules._claim(sched.pk, NOW))
         self.assertFalse(schedules._claim(sched.pk, NOW))
-        self.assertFalse(schedules._claim(sched.pk, NOW + timedelta(minutes=14)))
+        self.assertFalse(schedules._claim(sched.pk, NOW + timedelta(seconds=59)))
+        # No heartbeat for over a minute: the run is gone and the claim is free (MIP-2457).
+        self.assertTrue(schedules._claim(sched.pk, NOW + timedelta(seconds=61)))
 
     def test_a_stale_claim_is_taken_over(self):
         sched = self.make(due_at=SCHEDULED)
