@@ -370,6 +370,10 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> int:
         forget_object_team("task", task_id)
     for note_id in moved_note_ids:
         forget_object_team("note", note_id, NOTE_TYPE_TASK)
+    # The chat card and the comment thread under it live in the project's chat (MIP-2505).
+    from origin.services.task_card_move import move_task_cards
+
+    move_task_cards(task_ids, project_id=project_id)
     return narrowed
 
 
