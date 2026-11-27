@@ -31,6 +31,10 @@ def _catalog(*no_temperature):
     """A catalog stub whose `supports_temperature` is false for the named models."""
     cat = MagicMock()
     cat.supports_temperature.side_effect = lambda m: m not in no_temperature
+    # No Gemini 4 request rules (test_gemini4_requests.py has those).
+    cat.thinking_level.return_value = None
+    cat.supports_explicit_cache.return_value = True
+    cat.group_parallel_calls.return_value = False
     return cat
 
 

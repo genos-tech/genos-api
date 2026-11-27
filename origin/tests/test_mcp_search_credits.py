@@ -18,11 +18,12 @@ from django.conf import settings as dj_settings
 from django.core.cache import cache
 from django.test import override_settings
 
-from origin.search_engine import credit_ledger, quota
+from origin.search_engine import credit_ledger, quota, reranker
 from origin.search_engine.agent.tools import search_kb
 from origin.search_engine.llm import spend
+from origin.search_engine.llm.choice import get_llm_choice
 from origin.search_engine.llm.types import CallUsage
-from origin.search_engine.models import AiCreditEntry, AiRequestCost
+from origin.search_engine.models import AiCreditEntry, AiRequestCost, AiSpendEvent
 from origin.tests.spend_limit_support import over_the_monthly_budget, over_the_team_ceiling
 from origin.views.public.mcp import mcp_search_credits
 
@@ -59,7 +60,7 @@ def _paid_search(calls):
     def fake(**kwargs):
         calls.append(kwargs)
         if kwargs.get("rewrite") and kwargs.get("overlays") is not False:
-            usage = CallUsage(provider="gemini", model="gemini-3.6-flash")
+            usage = CallUsage(provider="gemini", model="gemini-4-hydrogen")
             usage.prompt_tokens = 100_000
             spend.record_llm_call(usage)
         return RESULTS
@@ -206,3 +207,46 @@ class UsageLineTests(_Base):
         spent = -AiCreditEntry.objects.get(entry_type="charge").credits_milli
         self.assertAlmostEqual(block["mcp_search_used"], round(spent / 1000, 2))
         self.assertGreater(block["used"], 0)
+
+
+class RerankModelTests(_Base):
+    """MIP-2371: a connected app picks no model, so its rerank used to run on the answer model."""
+
+    def rerank_row(self, **settings_overrides):
+        def fake(**kwargs):
+            reranker.rerank(
+                query=kwargs["query"],
+                entities=[{"title": "a", "snippet": "a"}, {"title": "b", "snippet": "b"}],
+                input_k=2,
+                output_k=2,
+            )
+            return RESULTS
+
+        client = mock.MagicMock()
+        client.models.generate_content_stream.return_value = iter(())
+        overrides = dict(
+            AUTHORITATIVE,
+            LLM_PROVIDER="gemini",
+            GEMINI_MODEL="gemini-4-hydrogen",
+            RAG_RERANKER_MODEL="",
+            **settings_overrides,
+        )
+        with (
+            override_settings(SEARCH_ENGINE=_se(**overrides)),
+            mock.patch(
+                "origin.search_engine.llm.gemini_client._get_client", return_value=client
+            ),
+            mock.patch.object(search_kb, "search", side_effect=fake),
+        ):
+            _, is_error = self._tool_text(self._call("search_workspace", {"query": "login"}))
+        self.assertFalse(is_error)
+        self.assertIsNone(get_llm_choice(), "the binding must not outlive the call")
+        return AiSpendEvent.objects.get(purpose="rerank")
+
+    def test_the_rerank_is_recorded_on_the_light_model(self):
+        row = self.rerank_row(AGENT_EFFORT_LEVELS=True)
+        self.assertEqual(row.model, "gemini-3.5-flash-lite")
+        self.assertEqual(row.surface, "mcp_search")
+
+    def test_without_effort_levels_nothing_is_pinned(self):
+        self.assertEqual(self.rerank_row(AGENT_EFFORT_LEVELS=False).model, "gemini-4-hydrogen")
