@@ -24,7 +24,7 @@ import time
 from django.utils import timezone
 
 from origin.management.cron_command import CronCommand
-from origin.services import schedule_defaults, schedules
+from origin.services import automation_engine, schedule_defaults, schedules
 
 log = logging.getLogger("origin.schedules")
 
@@ -60,6 +60,10 @@ class Command(CronCommand):
             self.stdout.write(f"[dry-run] {len(pending)} member(s) would be seeded")
             return
 
+        # Automation rules nobody flushed (MIP-2498): a worker that died between a change and
+        # its rules, or a command that wrote tasks.
+        if swept := automation_engine.sweep():
+            self.stdout.write(f"schedule_tick: {swept} pending automation task(s) run")
         started = time.monotonic()
         # Schedules follow the plan (MIP-1213): pause Free members', resume the ones paused for
         # the plan whose member has it again. Before the run, so nothing runs that should not.

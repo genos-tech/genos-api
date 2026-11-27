@@ -44,11 +44,12 @@ from origin.models.project.prj_models import (
     ProjectMaster,
     ProjectStatus,
 )
+from origin.models.task.automation_models import AutomationTrigger
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskAttachments, TaskComments, TaskMaster
-from origin.services import task_progress
+from origin.services import automation_engine, task_progress
 from origin.services.activity_suppression import activity_suppressed
 from origin.services.calendar_sync import (
     LINK_ONLY_FIELDS,
@@ -730,6 +731,7 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             },
         )
         _schedule_task_webhook(instance, created=True)
+        automation_engine.offer(instance, AutomationTrigger.CREATED)
         return
 
     original = getattr(instance, "_activity_original", None)
@@ -760,6 +762,7 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             },
         )
         instance._activity_finalized_creation = True
+        automation_engine.offer(instance, AutomationTrigger.CREATED)
         return
     if getattr(instance, "_activity_finalized_creation", False):
         return
@@ -872,6 +875,51 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
 
     if card_changed:
         _schedule_card_refresh(task_id=instance.task_id)
+
+    _offer_automation(instance, original, status_label_change, update_fields)
+
+
+def _offer_automation(instance, original, status_label_change, update_fields) -> None:
+    """The changes of this save an automation rule may react to (MIP-2498). A column the save
+    did not write is not a change, however stale the instance."""
+
+    def wrote(*columns) -> bool:
+        return update_fields is None or bool(set(columns) & set(update_fields))
+
+    # The automatic Open/Blocked flip is nobody's change.
+    if (
+        wrote("status", "custom_status", "custom_status_id")
+        and not getattr(instance, "_derived_blocked_sync", False)
+        and (original.get("status") != instance.status or status_label_change is not None)
+    ):
+        automation_engine.offer(
+            instance,
+            AutomationTrigger.STATUS_CHANGED,
+            {
+                "status_to": instance.status,
+                "custom_status_to": instance.custom_status_id,
+            },
+        )
+    if wrote("tags"):
+        added = _tag_names(instance.tags) - _tag_names(original.get("tags"))
+        if added:
+            automation_engine.offer(
+                instance, AutomationTrigger.TAG_ADDED, {"tags_added": sorted(added)}
+            )
+    if wrote("assignee", "assignee_id") and _tracked_value(
+        "assignee_id", original.get("assignee_id")
+    ) != _tracked_value("assignee_id", instance.assignee_id):
+        automation_engine.offer(
+            instance,
+            AutomationTrigger.ASSIGNEE_CHANGED,
+            {"assignee_to": str(instance.assignee_id) if instance.assignee_id else None},
+        )
+
+
+def _tag_names(tags) -> set:
+    if not isinstance(tags, list):
+        return set()
+    return {str(t["tagName"]) for t in tags if isinstance(t, dict) and t.get("tagName")}
 
 
 def _schedule_card_refresh(*, task_id=None, milestone_id=None) -> None:
