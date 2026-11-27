@@ -18,7 +18,8 @@
   },
   "Fixes for specific problems": {
    "sha256": [
-    "717b4e63b641736b868bf20751d07ec4ce67cfd52d07a9263c993ed1f8902aad"
+    "717b4e63b641736b868bf20751d07ec4ce67cfd52d07a9263c993ed1f8902aad",
+    "8b329422caf4bc174aa00437ef62272a3f2a48c54692cbe3fc4fe346474be4c1"
    ]
   },
   "Genos AI: ask, act, and stay ahead": {
@@ -42,6 +43,7 @@
   },
   "Notes: personal, team, and shared": {
    "sha256": [
+    "7ce6b272b55f70bd67b601ef638960fbada0856b62d144b2843214441368211f",
     "ed9ddb73535b1c0f552d0cebc4c11bddd280b9560e8edc70128abd39a340336d"
    ]
   },
@@ -58,7 +60,8 @@
   "Plans, limits, and what happens when you hit one": {
    "sha256": [
     "290222ca60a6ab6367c44bef20aaa0c73ab1a24e573301aa9993cb56267e7227",
-    "2e1eede8dc50bd636c92cb19689752811abd7a487ebb91363b92dfe0385bc512"
+    "2e1eede8dc50bd636c92cb19689752811abd7a487ebb91363b92dfe0385bc512",
+    "da5e459d6bab6f7cb9f4a53287cab3473ffdc70849f335faff4f6b746c11f8b4"
    ]
   },
   "Playbooks: how different kinds of work fit Genos": {
@@ -144,6 +147,7 @@
   },
   "よくある困りごとの対処法": {
    "sha256": [
+    "09505dbdd8f58e757f221e2f1765f6d6e39c3113cc1c19e7c702b63e64d0514d",
     "7b8f72e7b7fe29fc9b07ab42122f6743c91b748dff81c8762fec3da90c7b88ab"
    ]
   },
@@ -175,12 +179,14 @@
   },
   "ノート: 個人用、チーム用、共有": {
    "sha256": [
-    "5c5c147ce98220d837f057271c2e1fe4f7264ca94c39fe4bea4c029dfe37f3a4"
+    "5c5c147ce98220d837f057271c2e1fe4f7264ca94c39fe4bea4c029dfe37f3a4",
+    "ce5b363620c4371d5d4229c5f87fd209fda8658c3261babde00295b7f7132725"
    ]
   },
   "プラン、上限、上限に達したときの動き": {
    "sha256": [
     "538dc5efa63515f324dd9e1dad98a67fad6dbffe20cac1ea792e94f0b3884219",
+    "65b722479fbedf3d679d3e2892086ffd1177e00f48c48ec76e5f65fce9af9341",
     "df8cd72a9418b623ce0e096c83438b30f6706f49d0696acbe87b7167e3575408"
    ]
   },

@@ -111,10 +111,10 @@ class WhoMayRead(HtmlNoteApi):
                     self.assertEqual(res.status_code, 200, res.content)
                     self.assertEqual(res.json()["rev"], 1)
 
-    def test_the_plan_count_covers_all_three_families(self):
+    def test_the_storage_used_covers_all_three_families(self):
         owned = sum(1 for note in self.notes.values() if note.owner_id == self.user.id)
         self.assertGreaterEqual(owned, 1)
-        self.assertEqual(html_note_limits.count_owned(self.user.id), owned)
+        self.assertEqual(html_note_limits.storage_used(self.user.id), owned * len(PAGE.encode()))
 
     def test_the_numbers_1_2_3_name_the_same_families(self):
         for number, code in (

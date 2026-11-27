@@ -231,16 +231,29 @@ class FeaturesKey(ImportBase):
         return res.json()
 
     def test_core_sees_the_plans_page_limit(self):
-        self.assertEqual(self.features()["html_notes"], {"max_bytes": CORE.max_bytes})
+        self.assertEqual(
+            self.features()["html_notes"],
+            {
+                "max_bytes": CORE.max_bytes,
+                "max_storage_bytes": CORE.max_storage_bytes,
+                "used_bytes": 0,
+            },
+        )
+        self.assertEqual(self.post().status_code, 201)
+        self.assertEqual(self.features()["html_notes"]["used_bytes"], len(GOOD.encode()))
 
     def test_pro_sees_a_larger_limit(self):
         self.tier.return_value = "pro"
         pro = html_note_limits.HTML_NOTE_LIMITS["pro"]
-        self.assertEqual(self.features()["html_notes"], {"max_bytes": pro.max_bytes})
+        self.assertEqual(self.features()["html_notes"]["max_bytes"], pro.max_bytes)
+        self.assertEqual(self.features()["html_notes"]["max_storage_bytes"], pro.max_storage_bytes)
 
     def test_free_sees_null_so_the_dialog_can_say_it_is_a_core_feature(self):
         self.tier.return_value = "free"
-        self.assertEqual(self.features()["html_notes"], {"max_bytes": None})
+        self.assertEqual(
+            self.features()["html_notes"],
+            {"max_bytes": None, "max_storage_bytes": None, "used_bytes": None},
+        )
 
     def test_the_key_does_not_exist_while_the_switch_is_off(self):
         with override_settings(HTML_NOTES=False):

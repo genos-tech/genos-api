@@ -27,13 +27,15 @@ from django.test import override_settings
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
 from origin.models.common.team_models import TeamMembers
 from origin.models.skills.skill_models import Skill
-from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
+from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext
+from origin.search_engine.agent.tools.base import wrap_workspace_content
 from origin.search_engine.models import AgentRun, AiRequestCost
 from origin.services.skills import run, service
 from origin.tests.skill_fence_helpers import strip_tag
 from origin.tests.test_mcp_endpoint import MCP, McpBase
 from origin.tests.test_skills_run import BODY, RunBase, fields
 from origin.views.public.mcp import surfaces, tools
+from origin.views.public.mcp.skills.list_my_skills import LIST_MY_SKILLS
 
 SKILL_TOOLS = ("list_my_skills", "get_skill", "run_skill")
 
@@ -181,6 +183,7 @@ class ListTests(McpSkillBase):
                 "owner",
                 "title",
                 "description",
+                "tags",
                 "argument_hint",
                 "tool_level",
                 "official",
@@ -198,6 +201,27 @@ class ListTests(McpSkillBase):
         gone = self.team_skill(self.user2, slug="gone")
         Skill.objects.filter(pk=gone.pk).update(status="taken_down")
         self.assertEqual(self.listed(), [])
+
+    def test_each_row_says_the_skills_tags_and_a_query_matches_one(self):
+        mine = self.skill(self.user, "private", slug="board", tags=["dashboard", "weekly"])
+        theirs = self.team_skill(self.user2, slug="pipeline", tags=["dashboard"])
+        self.skill(self.user, "private", slug="untagged", tags=[])
+        rows = {r["slug"]: r for r in self.listed()}
+        self.assertEqual(rows["board"]["tags"], ["dashboard", "weekly"])
+        self.assertEqual(rows["pipeline"]["tags"], ["dashboard"])
+        self.assertEqual(rows["untagged"]["tags"], [])
+        self.assertEqual(
+            sorted(r["id"] for r in self.listed(query="Dashboard")),
+            sorted([str(mine.pk), str(theirs.pk)]),
+        )
+
+    def test_a_teammates_tags_are_fenced_like_their_title(self):
+        self.team_skill(self.user2, slug="pipeline", tags=["dashboard"])
+        self.skill(self.user, "private", slug="board", tags=["dashboard"])
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+        rows = {r["slug"]: r for r in LIST_MY_SKILLS.run({}, ctx)["skills"]}
+        self.assertEqual(rows["pipeline"]["tags"], [wrap_workspace_content("dashboard")])
+        self.assertEqual(rows["board"]["tags"], ["dashboard"])
 
     def test_an_outside_authors_skill_is_listed_with_its_declared_level(self):
         # MIP-2044 replaced the blanket `read` hold on a stranger's skill with a tool allowlist

@@ -743,10 +743,10 @@ register_job(
             "often it runs. For a page made by one of the member's skills, give `source` `skill` and "
             "`skill_id` (a skill's `id` from `list_my_skills`), plus `input` if the skill needs words, "
             "and no `kind`, `milestone_id`, `project_id`, `period`, `focus` or `ai_sentences`; "
-            "skills made for this carry the `dashboard` tag in Genos (`list_my_skills` shows no "
-            "tags, so choose by description), but an untagged one is accepted too. Only the member "
-            "may read such a page (keep it where nobody else reads), and every run uses their AI "
-            "credits. The note is made by the server on the first run."
+            "prefer a skill whose `tags` in `list_my_skills` include `dashboard` (made for this), "
+            "but never require it: an untagged one is accepted too. Only the member may read such "
+            "a page (keep it where nobody else reads), and every run uses their AI credits. The "
+            "note is made by the server on the first run."
         ),
         run=run,
         share_project=_share_project,
