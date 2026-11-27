@@ -89,6 +89,11 @@ NOT_READ_BY_A_JOB = {
         BACKEND_BASE_URL GITHUB_CONNECT_REPO_SCOPE_REMOVED GITHUB_OAUTH_CLIENT_ID
         GITHUB_OAUTH_CLIENT_SECRET GITHUB_WEBHOOK_SECRET
     """),
+    "the GitHub App, off on the tick (2026-11-27): a scheduled skill's pull request tools use the "
+    "member's GitHub OAuth connection": _names("""
+        GITHUB_APP_CLIENT_ID GITHUB_APP_CLIENT_SECRET GITHUB_APP_ENABLED GITHUB_APP_ID
+        GITHUB_APP_PRIVATE_KEY GITHUB_APP_SLUG GITHUB_APP_WEBHOOK_SECRET
+    """),
     "indexing, team reindex and demo provisioning, done by other processes": _names("""
         DEMO_PROVISION_IN_BACKGROUND OPENSEARCH_REFRESH_INTERVAL OPENSEARCH_REPLICAS
         OPENSEARCH_SHARDS RAG_BULK_REFRESH SEARCH_BULK_BATCH_SIZE SEARCH_EMBEDDING_BATCH_SIZE
@@ -286,15 +291,9 @@ class ScheduleTickDeclaresWhatItsJobsReadTests(SimpleTestCase):
         """)
         self.assertEqual(sorted(needed - self.declared), [])
 
-    def test_a_switch_that_stops_the_boot_comes_with_its_values(self):
-        # `_validate_github_app` refuses to start any process with the App on and one missing.
-        self.assertLessEqual(
-            _names("""
-                GITHUB_APP_CLIENT_ID GITHUB_APP_CLIENT_SECRET GITHUB_APP_ENABLED GITHUB_APP_ID
-                GITHUB_APP_PRIVATE_KEY GITHUB_APP_SLUG GITHUB_APP_WEBHOOK_SECRET
-            """),
-            self.declared,
-        )
+    def test_the_github_app_is_not_declared(self):
+        # Decided, not forgotten: declaring it puts the App's private key on one more service.
+        self.assertEqual(sorted(n for n in self.declared if n.startswith("GITHUB_APP_")), [])
 
     def test_matches_backend_django_when_the_platform_checkout_is_next_to_this_one(self):
         platform = REPO.parent / "genos-platform" / ".railway" / "railway.ts"

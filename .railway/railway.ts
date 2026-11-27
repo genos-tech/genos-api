@@ -438,15 +438,8 @@ export default defineRailway(() => {
       COLLAB_INTERNAL_URL: preserve(),
       // The links a report posts into a chat.
       FRONTEND_BASE_URL: preserve(),
-      // A skill run's pull request tools use the owner's GitHub App connection. Set all or none: with
-      // GITHUB_APP_ENABLED on and any of the other six missing the service does not boot.
-      GITHUB_APP_CLIENT_ID: preserve(),
-      GITHUB_APP_CLIENT_SECRET: preserve(),
-      GITHUB_APP_ENABLED: preserve(),
-      GITHUB_APP_ID: preserve(),
-      GITHUB_APP_PRIVATE_KEY: preserve(),
-      GITHUB_APP_SLUG: preserve(),
-      GITHUB_APP_WEBHOOK_SECRET: preserve(),
+      // No GITHUB_APP_* here (MIP-2460, 2026-11-27): the App stays off on this service, so its private key is
+      // not copied to it. A scheduled skill's pull request tools use the owner's GitHub OAuth connection.
       // MIP-1333: "On your calendar" in a scheduled report refreshes the member's Google token with the OAuth client.
       GOOGLE_OAUTH_CLIENT_ID: preserve(),
       GOOGLE_OAUTH_CLIENT_SECRET: preserve(),
