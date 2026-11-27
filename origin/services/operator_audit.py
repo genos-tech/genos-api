@@ -166,9 +166,11 @@ def run_audited(command: BaseCommand, argv: list[str], run):
     """Run `run()` (the real `run_from_argv`) with the audit around it."""
     name = argv[1] if len(argv) > 1 else ""
     rest = list(argv[2:])
+    # Outside the `try`: its `except` runs the command, so a command that raised in here would
+    # be run a second time (MIP-2501).
+    if not name or not enabled():
+        return run()
     try:
-        if not enabled() or not name:
-            return run()
         heartbeat = _flag_value(rest, "--heartbeat")
         who = _operator()
         is_shell = name in SHELL_COMMANDS
