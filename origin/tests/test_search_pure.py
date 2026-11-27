@@ -572,12 +572,12 @@ class OpenAIUsageTests(SimpleTestCase):
     the offline cost report bills cached tokens at the full input rate."""
 
     @staticmethod
-    def _usage(prompt, cached, completion, reasoning=0, total=None):
+    def _usage(prompt, cached, completion, reasoning=0, total=None, cache_write=None):
         return MagicMock(
             prompt_tokens=prompt,
             completion_tokens=completion,
             total_tokens=total if total is not None else prompt + completion,
-            prompt_tokens_details=MagicMock(cached_tokens=cached),
+            prompt_tokens_details=MagicMock(cached_tokens=cached, cache_write_tokens=cache_write),
             completion_tokens_details=MagicMock(reasoning_tokens=reasoning),
         )
 
@@ -590,6 +590,16 @@ class OpenAIUsageTests(SimpleTestCase):
         self.assertEqual(sink.prompt_tokens, 200, "uncached remainder")
         self.assertEqual(sink.cached_tokens, 800)
         self.assertEqual(sink.provider, "openai")
+
+    def test_cache_writes_are_their_own_line_not_ordinary_input(self):
+        from origin.search_engine.llm.openai_client import _fill_usage_sink
+        from origin.search_engine.llm.types import CallUsage
+
+        sink = CallUsage()
+        _fill_usage_sink(sink, self._usage(12000, 4000, 200, cache_write=7000), "gpt-5.6-terra")
+        self.assertEqual(sink.prompt_tokens, 1000)
+        self.assertEqual(sink.cached_tokens, 4000)
+        self.assertEqual(sink.cache_write_tokens, 7000)
 
     def test_reasoning_tokens_are_not_added_to_output(self):
         from origin.search_engine.llm.openai_client import _fill_usage_sink

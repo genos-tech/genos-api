@@ -87,10 +87,10 @@
 #                  written deliberately.
 #
 #                  Use 0 for "this provider does not bill this line" —
-#                  OpenAI's automatic cache and Gemini's IMPLICIT cache
-#                  have no separate write charge (a call with no explicit
-#                  cache never reports cache_write_tokens, so the rate is
-#                  never applied to it). Gemini's EXPLICIT cache
+#                  Gemini's IMPLICIT cache has no separate write charge (a
+#                  call with no explicit cache never reports
+#                  cache_write_tokens, so the rate is never applied to
+#                  it). Gemini's EXPLICIT cache
 #                  (`gemini_cache`, GEMINI_EXPLICIT_CACHE) bills the tokens it
 #                  stores once, at creation, at the input rate, so a Gemini
 #                  model's `cache_write` equals its `input` (MIP-952): the
@@ -105,9 +105,12 @@
 #                      all: claude-sonnet-5-5 and claude-opus-5-5 read
 #                      the cache at 5% of input.
 #                    * Anthropic cache_write = 125% of input (5-min TTL).
+#                    * OpenAI GPT-5.6 cache_write = 125% of input (the
+#                      default 30-minute TTL), automatic caching included.
 #   long_prompt_price (opt) — a second rate card for models that bill a
 #                  request at higher rates once its PROMPT is long
-#                  (today: claude-haiku-5-5, over 100K tokens):
+#                  (today: claude-haiku-5-5, over 100K tokens; the three
+#                  GPT-5.6 models, over 272K):
 #                  {above_tokens, input, output, cached_input,
 #                  cache_write}, all required, never cheaper than
 #                  `price`. The provider counts cache reads and writes
@@ -135,7 +138,9 @@
 #                  API. Test a new model BOTH ways before listing it —
 #                  one request each, and it is the only proof.
 #
-#  Prices verified 2026-11-01. Re-check on every swap; they move.
+#  Prices verified 2026-11-01; the OpenAI rungs and
+#  text-embedding-3-small on 2026-11-27. Re-check on every swap; they
+#  move.
 # =====================================================================
 
 version: 1
@@ -166,7 +171,7 @@ version: 1
 #  reports in JPY (normalized).
 #
 rate_card:
-    label: "2026-11-01"
+    label: "2026-11-27"
 
     # USD is the BASE unit of the whole cost system — it is what every
     # provider actually invoices. `fx_jpy_per_usd` is stamped onto each
@@ -457,18 +462,35 @@ providers:
     # does not appear in the GCP cost console at all. See
     # genos-docs/operations/LLM_SPEND_MAP.md section 1.
     # -----------------------------------------------------------------
+    # Prices: OpenAI's Standard tier, short context (long_prompt_price is
+    # the long-context row), https://developers.openai.com/api/docs/pricing
+    # read 2026-11-27 (MIP-2372). Not in this card, because we do not use
+    # them: Batch, Flex and Fast tiers, 12-hour cache writes, and the 10%
+    # regional-processing uplift.
     openai:
         - model: gpt-5.6-luna
           class: light
           label: GPT-5.6 Luna
           note: Fast and economical.
-          price: { input: 1.00, output: 6.00, cached_input: 0.10, cache_write: 0 }
+          price: { input: 0.20, output: 1.20, cached_input: 0.02, cache_write: 0.25 }
+          long_prompt_price:
+              above_tokens: 272000
+              input: 0.40
+              output: 1.80
+              cached_input: 0.04
+              cache_write: 0.50
 
         - model: gpt-5.6-terra
           class: middle
           label: GPT-5.6 Terra
           note: Higher quality, slower.
-          price: { input: 2.50, output: 15.00, cached_input: 0.25, cache_write: 0 }
+          price: { input: 2.00, output: 12.00, cached_input: 0.20, cache_write: 2.50 }
+          long_prompt_price:
+              above_tokens: 272000
+              input: 4.00
+              output: 18.00
+              cached_input: 0.40
+              cache_write: 5.00
           caps:
               # Held at 0 on free so that gaining a third provider does
               # not silently inflate the free-tier subsidy: free's
@@ -480,7 +502,22 @@ providers:
           class: highend
           label: GPT-5.6 Sol
           note: Very slow, but best for very complex questions.
-          price: { input: 5.00, output: 30.00, cached_input: 0.50, cache_write: 0 }
+          # ⚠️ NOT what OpenAI charges today, on purpose (MIP-2372, Ken
+          # 2026-11-27). OpenAI lists a PROMOTIONAL $4/$20 and says it
+          # "is available until November 30, 2026", with no price for
+          # after. We keep the pre-promotion $5/$30 so we never charge
+          # less than OpenAI does once the promotion ends. The other
+          # rates sit at the same level, by OpenAI's own ratios: cached
+          # read 0.1x input, 30-minute write 1.25x input, and over 272K
+          # prompt tokens 2x input and cache rates, 1.5x output.
+          # RE-PRICE Sol when OpenAI publishes its new price.
+          price: { input: 5.00, output: 30.00, cached_input: 0.50, cache_write: 6.25 }
+          long_prompt_price:
+              above_tokens: 272000
+              input: 10.00
+              output: 45.00
+              cached_input: 1.00
+              cache_write: 12.50
           # The most expensive rung in the catalog, so it is the model
           # worst-case-at-cap is sized on — the `highend` caps below are
           # effectively "how much Sol per day".
@@ -503,14 +540,17 @@ providers:
 #  genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md section 12. The
 #  numbers survive the 2026-07-25 model refresh unchanged because the
 #  worst case per class did not move:
-#    light   gpt-5.6-luna   $1/$6   (unchanged)
-#    middle  claude-sonnet-5-5 $2/$10 (the 2026-07 sizing used $3/$15;
-#            Anthropic's real price is $2/$10, so the worst case at the
-#            middle cap is lower than these caps were sized for)
-#    highend gpt-5.6-sol    $5/$30  (unchanged)
+#    light   gemini-3.6-flash $1.50/$7.50 (the sizing used gpt-5.6-luna
+#            at $1/$6; luna is now $0.20/$1.20)
+#    middle  gpt-5.6-terra and gemini-3.1-pro-preview $2/$12 (the 2026-07
+#            sizing used $3/$15, so the worst case at the middle cap is
+#            lower than these caps were sized for)
+#    highend gpt-5.6-sol    $5/$30  (unchanged; OpenAI's promotional
+#            price is lower, see its entry)
 #  and the mid rung count is still 3, while premium DROPPED from 3 to 2
 #  (claude-opus-4-7 + 4-8 collapsed into one Opus rung; now 5.5 at $4/$20). Worst-case
-#  exposure therefore went down, not up.
+#  exposure therefore went down, not up. The caps were not re-sized with
+#  the 2026-11-27 OpenAI prices.
 #
 #  Every tier in SEARCH_ENGINE["TIER_QUOTAS"] must appear here; the
 #  loader refuses to boot if the two disagree, so a renamed tier can't
