@@ -376,7 +376,6 @@ def _signed_in_response(user_data: dict, access: str, refresh: str) -> dict:
         # The client mirrors these into localStorage and builds
         # `myself` from it, so without them your own profile card
         # comes back blank after every sign-out.
-        "phone_number": user_data["phone_number"],
         "current_location": user_data["current_location"],
         "about_me": user_data["about_me"],
         "custom_status": user_data["custom_status"],
@@ -609,7 +608,6 @@ class DemoSignInView(APIView):
             "ts_joined_at": user.ts_created_at.isoformat() if user.ts_created_at else "",
             "is_offline_forced": user.is_offline_forced,
             "role": user.role or "",
-            "phone_number": user.phone_number or "",
             "current_location": user.current_location or "",
             "about_me": user.about_me or "",
             "custom_status": user.custom_status or "",
