@@ -19,6 +19,7 @@ from origin.models.task.task_models import TaskDependency
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.get_my_task_summary import GET_MY_TASK_SUMMARY
 from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUMMARY
+from origin.search_engine.agent.tools.get_team_task_summary import GET_TEAM_TASK_SUMMARY
 from origin.search_engine.agent.tools.list_milestones import LIST_MILESTONES
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
@@ -93,6 +94,10 @@ class ProgressTests(RejectedBase):
         project = GET_PROJECT_SUMMARY.run({"project_id": self.project.project_id}, self.ctx)
         self.assertEqual(project["status_breakdown"]["Rejected"], 1)
         self.assertEqual(project["overdue_count"], 0)
+        self.assertEqual(project["total_tasks"], sum(project["status_breakdown"].values()) - 1)
+        team = GET_TEAM_TASK_SUMMARY.run({}, self.ctx)
+        self.assertEqual(team["status_breakdown"]["Rejected"], 1)
+        self.assertEqual(team["total_tasks"], sum(team["status_breakdown"].values()) - 1)
 
 
 class AncestorTests(RejectedBase):

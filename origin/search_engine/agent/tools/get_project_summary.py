@@ -84,6 +84,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         qs, sf = ancestor_rule.with_effective_status(qs, rule), "eff_status"
 
     status_breakdown = {s: qs.filter(**{sf: s}).count() for s in _STATUS_LABELS}
+    # Rejected (MIP-2494) has its own row and is no part of the total.
+    total -= status_breakdown["Rejected"]
 
     today = today_for_user_id(ctx.user_id)
     overdue_count = (
@@ -112,7 +114,7 @@ GET_PROJECT_SUMMARY = Tool(
     name="get_project_summary",
     description=(
         "Return task-count statistics for one project: total tasks, a "
-        "breakdown by status (Open / WIP / Pending / Closed / Rejected), and the "
+        "breakdown by status (Open / WIP / Pending / Closed, plus Rejected, which is not in the total), and the "
         "number of overdue tasks. Use for 'how is project X going?', "
         "'how many open tasks remain?', or sprint overview questions. "
         "Resolve the project name to a numeric id with `list_projects` "

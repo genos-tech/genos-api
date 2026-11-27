@@ -911,6 +911,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(
             f"`action` must be one of {list(ACTIONS_ON if on else ACTIONS)} (got {action!r})."
         )
+    if not custom_status.enabled():  # ignored while the flag is off, not refused
+        args = {k: v for k, v in args.items() if k != custom_status.ARG}
     _check_arguments(action, args)
     check_body_size(args.get("description_markdown"), "description_markdown")
     return (_HANDLERS_ON if on else _HANDLERS)[action](args, ctx)

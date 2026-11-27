@@ -200,7 +200,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # MIP-2494 (flag `AGENT_CUSTOM_STATUS`): a status named the project's way also sets `status`.
     # A move in the same call leaves the name behind, so it is not applied then.
     named = custom_status.requested(args)
-    if named is not None and args.get("project_id") not in (None, ""):
+    moves = args.get("project_id") not in (None, "") and str(args["project_id"]) != str(
+        task.project_id
+    )
+    if named is not None and moves:
         choice = custom_status.Choice(
             suggestion={
                 "kind": custom_status.ARG,

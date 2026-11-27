@@ -213,7 +213,10 @@ def _focus(params: dict[str, Any]) -> str:
 
 def _stand(summary: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     breakdown = [
-        {"label": s, "count": n} for s, n in (summary.get("status_breakdown") or {}).items() if n
+        {"label": s, "count": n}
+        for s, n in (summary.get("status_breakdown") or {}).items()
+        # Rejected is not in the total, and the page has no segment for it (MIP-2494).
+        if n and s != "Rejected"
     ]
     total = summary.get("total_tasks") or 0
     closed = (summary.get("status_breakdown") or {}).get("Closed", 0)

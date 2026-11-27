@@ -2,7 +2,7 @@
   "about": "sha256 pins on what the in-app agent's model is sent, one object per pin module. Do not edit by hand: re-record all of them with `python manage.py record_agent_goldens` (origin/services/agent_pins.py lists the modules).",
   "pins": {
     "test_agent_closed_ancestor_rule": {
-      "declarations": "148b4588293fbd9c520bce09067d8118a69d1a55d42330fed6dcfc2392584a6d",
+      "declarations": "513eeb926152d0bb49ea5a4b5773b4088ca31f12e0c5a25bfea5cc43d49f0d28",
       "tool/fetch_task": "ed42299a027f7691caddc6436558e294a1facd301fd221d195ba1abce30297bf",
       "tool/get_milestone_summary": "ca2a3b2683ce4faa2bca33fb310345ec9f3567721ea57b5b238e79f2b192b335",
       "tool/get_milestone_summary_closed": "059e73781be0b721a63ec94a8176cce072362c23d4086eac1d179ebd9969074c",
@@ -15,16 +15,16 @@
       "tool/list_tasks_overdue": "5514d527ce3f8604ce6f4b412586e7a286fa052a3987ca070bada3e776a6052c"
     },
     "test_agent_content_length_pins": {
-      "digest-like": "65b49b500ecabd8bd72d524caabf7d337d754230e3105dad88a5b9780deea130",
-      "effort-low-thinking/gemini": "f9aa93c5f426dd0ea94685aee2232e76629e6b1306b5a7fa624875b550c36870",
-      "effort-low/gemini": "6d60a3fd0a2bc8ac041f9690f43b919bd59294219de4e15e34f31060bd38c480",
-      "effort-medium/gemini": "9b9d5222d6146251eebcff86e4b6025858ced755c734fd6de1d2a4fe5ccd2b71",
-      "plain": "9b9d5222d6146251eebcff86e4b6025858ced755c734fd6de1d2a4fe5ccd2b71",
-      "plain-ja": "4ea84bc857e8770e1228de3835f1962cf0e5fb14d4b16e14819b94b37da10123",
-      "two-tier-write": "42f278a3cf1a1033e6c9718194336aa3f30b5536a3319fe776ddde96d523c993"
+      "digest-like": "2f7734daf345da7dbd79fa617aefe4d710215a57a8056034b35935b06e2c0529",
+      "effort-low-thinking/gemini": "eb96c24b4eb6cfb7518471b495b8439a6be71904cf21d891f82d5641e95eaffd",
+      "effort-low/gemini": "7c973638e8536b1e8fd5e416459d0eb33360ea7660dba6c760ad38ebce8c9f4a",
+      "effort-medium/gemini": "ee138763f3b8fb59a130e805ff09d42fd9140de9dc7da65c06bea34ad1d9c98f",
+      "plain": "ee138763f3b8fb59a130e805ff09d42fd9140de9dc7da65c06bea34ad1d9c98f",
+      "plain-ja": "5f236df374920647330d578819a9e9aafb140fea6328078521da49df9a62ebd1",
+      "two-tier-write": "6785b8daba2a5f4bc0a8b2eeef94455095cd5431395a0d3c58449eed8db95df6"
     },
     "test_agent_fetch_task_anchors": {
-      "declarations": "148b4588293fbd9c520bce09067d8118a69d1a55d42330fed6dcfc2392584a6d",
+      "declarations": "513eeb926152d0bb49ea5a4b5773b4088ca31f12e0c5a25bfea5cc43d49f0d28",
       "prompt/legacy": "5c584581f941d6eaf4464bb4e5dede88bb9a0fecc149641af789ba7d7b4d2ab2",
       "prompt/registry": "06561aa5442dd7d0c7ea7461edb8daf7172760b9a800cb10584182629bf1ecb6",
       "result/client": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
@@ -32,14 +32,14 @@
       "result/pm": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0"
     },
     "test_agent_inbox_report_label": {
-      "declarations": "148b4588293fbd9c520bce09067d8118a69d1a55d42330fed6dcfc2392584a6d",
+      "declarations": "513eeb926152d0bb49ea5a4b5773b4088ca31f12e0c5a25bfea5cc43d49f0d28",
       "inbox/activity": "d9e1938fa41cc6f8a4b2060bddff28612112845e0fcae08adf593b359e0fa769",
       "inbox/all": "3b8c6ad4cb42d1c9a5ce80f1116d9c572e4fe5ace60e4526d19a9c8539794e1d",
       "inbox/limit-1": "df5493ac8c0e0128c606a9a8a5144ec1a91316510075316309565c8660de0ed9",
       "inbox/requests": "ea7240167db1c3a878fcc951c7a2e5e8851bf5789a3fe000fe472821cb1e74ac"
     },
     "test_agent_note_threads_in_get_note": {
-      "declarations": "148b4588293fbd9c520bce09067d8118a69d1a55d42330fed6dcfc2392584a6d",
+      "declarations": "513eeb926152d0bb49ea5a4b5773b4088ca31f12e0c5a25bfea5cc43d49f0d28",
       "note/chat": "b0f5d9c91710855e966508fcb8c5aca955f595242f72149169a79f4b705002d0",
       "note/personal": "aa59ecc86ceeb706c4ac5a6d9db2215a4063e497269daceeebd848212c8926fd",
       "note/task": "ad6e3e528a723ff873c8697bff048df07118f7dc7429aef14333361b9528697f"
@@ -76,7 +76,7 @@
       "thread+mention": "35a4e6a3995cbb3e5ba314b3fbf04da3060dd9f25d844587cf6b35a552bb7ccf"
     },
     "test_agent_team_in_current_user": {
-      "declarations": "148b4588293fbd9c520bce09067d8118a69d1a55d42330fed6dcfc2392584a6d",
+      "declarations": "513eeb926152d0bb49ea5a4b5773b4088ca31f12e0c5a25bfea5cc43d49f0d28",
       "result/member": "1a691af10b63e1660567a3f26713d2c8c635701bf4e06ec58bdae4c2570daac0",
       "result/owner": "3417294ac02371656656cec58ee9633307781a651582b0e8c80d573074865f5a"
     },
@@ -86,16 +86,16 @@
       "undo/next-turn": "11e484359bd58a2f66792280330cda44b8764e7a7487d4571141f1dceff2e1f9"
     },
     "test_agent_truncation_pins": {
-      "digest-like": "65b49b500ecabd8bd72d524caabf7d337d754230e3105dad88a5b9780deea130",
-      "effort-low-thinking/gemini": "f9aa93c5f426dd0ea94685aee2232e76629e6b1306b5a7fa624875b550c36870",
-      "effort-low/gemini": "6d60a3fd0a2bc8ac041f9690f43b919bd59294219de4e15e34f31060bd38c480",
-      "effort-medium/gemini": "9b9d5222d6146251eebcff86e4b6025858ced755c734fd6de1d2a4fe5ccd2b71",
-      "plain": "9b9d5222d6146251eebcff86e4b6025858ced755c734fd6de1d2a4fe5ccd2b71",
-      "plain-ja": "4ea84bc857e8770e1228de3835f1962cf0e5fb14d4b16e14819b94b37da10123",
-      "two-tier-write": "42f278a3cf1a1033e6c9718194336aa3f30b5536a3319fe776ddde96d523c993"
+      "digest-like": "2f7734daf345da7dbd79fa617aefe4d710215a57a8056034b35935b06e2c0529",
+      "effort-low-thinking/gemini": "eb96c24b4eb6cfb7518471b495b8439a6be71904cf21d891f82d5641e95eaffd",
+      "effort-low/gemini": "7c973638e8536b1e8fd5e416459d0eb33360ea7660dba6c760ad38ebce8c9f4a",
+      "effort-medium/gemini": "ee138763f3b8fb59a130e805ff09d42fd9140de9dc7da65c06bea34ad1d9c98f",
+      "plain": "ee138763f3b8fb59a130e805ff09d42fd9140de9dc7da65c06bea34ad1d9c98f",
+      "plain-ja": "5f236df374920647330d578819a9e9aafb140fea6328078521da49df9a62ebd1",
+      "two-tier-write": "6785b8daba2a5f4bc0a8b2eeef94455095cd5431395a0d3c58449eed8db95df6"
     },
     "test_inapp_timeline_tool": {
-      "declarations": "23c136064767ef29bef4883d4765e7d9a63fe03098be3b1ff2038a199e50763d",
+      "declarations": "1253b6bfde6adb8ea0c95c30c412ad9599cea897e76410e60e37141512372418",
       "prompt/legacy": "5c584581f941d6eaf4464bb4e5dede88bb9a0fecc149641af789ba7d7b4d2ab2",
       "prompt/registry": "06561aa5442dd7d0c7ea7461edb8daf7172760b9a800cb10584182629bf1ecb6"
     },

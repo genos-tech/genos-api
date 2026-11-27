@@ -234,7 +234,7 @@ def status_line(total: int, breakdown: dict[str, int]) -> str:
     has not ("0 pending" is noise in a short report)."""
     parts = [
         f"{breakdown[s]} {s.lower()}"
-        for s in ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")
+        for s in ("Open", "WIP", "Blocked", "Pending", "Closed")
         if breakdown.get(s)
     ]
     return f"{counted(total, 'task')}: {', '.join(parts)}" if parts else counted(total, "task")
