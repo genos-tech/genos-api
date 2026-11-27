@@ -27,6 +27,7 @@ settings must have the same values on every service that runs AI (web and `sched
 from __future__ import annotations
 
 import logging
+import uuid
 
 from django.conf import settings
 from django.core.cache import cache
@@ -44,6 +45,17 @@ MONTHLY_LIMIT_MESSAGE = (
 
 _CACHE_SECONDS = 300
 _LOG_EVERY_SECONDS = 3600
+
+
+def canonical_team_id(team_id) -> str:
+    """The one spelling of a team id on the ledger (MIP-2450). Views take it from the request body
+    and the membership check accepts a UUID in any spelling, so the ledger is written and read
+    through this. Anything that is not a UUID is kept as it is; no id is ""."""
+    raw = str(team_id or "")
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError:
+        return raw
 
 
 def _month_events():
@@ -70,9 +82,10 @@ def month_spend_usd_micro(*, user_id: str = "", team_id: str = "") -> int:
     USD because the ceilings it feeds are COST ceilings and cost arrives in dollars. A ceiling
     denominated in yen would tighten or loosen itself every time the exchange rate moved.
     """
+    team_id = canonical_team_id(team_id)
     key_id = f"u:{user_id}" if user_id else f"t:{team_id}"
     qs = _month_events()
-    qs = qs.filter(user_id=str(user_id)) if user_id else qs.filter(team_id=str(team_id))
+    qs = qs.filter(user_id=str(user_id)) if user_id else qs.filter(team_id=team_id)
     return _cached_sum(f"ai_spend_month_usd:{key_id}:{timezone.now():%Y%m}", qs, "cost_usd_micro")
 
 
