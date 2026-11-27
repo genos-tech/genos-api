@@ -35,6 +35,8 @@ from origin.search_engine.agent.evals.group import (
     skill_dashboard_eval,
 )
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.search_engine.llm import spend
+from origin.search_engine.llm.types import CallUsage, FunctionCall
 from origin.search_engine.management.commands import agent_eval_dashboards
 from origin.search_engine.models import AiCreditEntry
 from origin.services.schedule_jobs import ai_dashboard, run_skill
@@ -536,3 +538,65 @@ class CommandTests(FixtureBase):
         fixture.TeamMaster.objects.filter(owner_id=fixture.FIXTURE_USER_ID).update(is_demo=False)
         with self.assertRaisesMessage(CommandError, "agent_eval_setup"):
             agent_eval_dashboards.fixture_info()
+
+
+class PageAdapter:
+    """A stub MODEL for the real agent loop: reads the task summary, then answers with a page; reports
+    usage as an adapter does, so the cost cap sees it."""
+
+    def __init__(self, prompt_tokens=800):
+        self.calls = 0
+        self.prompt_tokens = prompt_tokens
+
+    def generate_step(self, messages, tools, system_instruction, *, usage_sink=None, **kw):
+        self.calls += 1
+        n = self.calls
+        sink = usage_sink if usage_sink is not None else CallUsage()
+        sink.provider, sink.model = "gemini", "gemini-3.5-flash-lite"
+        sink.prompt_tokens, sink.cached_tokens, sink.output_tokens = self.prompt_tokens, 0, 50
+
+        def gen():
+            try:
+                if n % 2:
+                    yield None, FunctionCall(name="get_my_task_summary", args={})
+                else:
+                    yield PAGE, None
+            finally:
+                spend.record_llm_call(sink)
+
+        return gen()
+
+
+class SkillCommandTests(FixtureBase):
+    def run_skill_suite(self, adapter, *, cap):
+        out = StringIO()
+        with (
+            mock.patch("origin.services.report_ai.llm.configured", return_value=True),
+            mock.patch("origin.search_engine.llm._build_adapter", return_value=adapter),
+            mock.patch(f"{COMMAND}._anthropic_client") as client,
+        ):
+            call_command(
+                "agent_eval_dashboards",
+                "--suite",
+                "skill",
+                "--reps",
+                "2",
+                "--ken-approved",
+                "--cost-cap-usd",
+                cap,
+                stdout=out,
+            )
+        client.assert_not_called()
+        return out.getvalue()
+
+    def test_the_real_loop_with_a_stub_model_passes_and_counts_its_cost(self):
+        adapter = PageAdapter()
+        text = self.run_skill_suite(adapter, cap="5")
+        self.assertIn("2/2 repetitions passed", text)
+        self.assertEqual(adapter.calls, 4)
+
+    def test_the_cap_stops_the_agent_loop_before_the_next_call(self):
+        adapter = PageAdapter(prompt_tokens=100_000_000)
+        text = self.run_skill_suite(adapter, cap="1")
+        self.assertIn("cost cap reached", text)
+        self.assertEqual(adapter.calls, 1)
