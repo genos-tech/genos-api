@@ -18,6 +18,10 @@ class TaskActivityActionType(models.TextChoices):
     CREATED = "created", "Created"
     TITLE = "title_changed", "Title changed"
     STATUS = "status_changed", "Status changed"
+    # The project's own status changed while `status` (its category) did not (MIP-2492):
+    # old/new are status ids, the names in metadata. A change of category stays one STATUS
+    # row, with `metadata.customStatus`, so stats never count it twice.
+    CUSTOM_STATUS = "custom_status_changed", "Custom status changed"
     PRIORITY = "priority_changed", "Priority changed"
     EFFORT = "effort_changed", "Effort changed"
     ASSIGNEE = "assignee_changed", "Assignee changed"

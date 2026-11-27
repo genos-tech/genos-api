@@ -33,6 +33,11 @@ from origin.services.milestone_service import (
     parse_iso_date,
     sync_backing_task,
 )
+from origin.services.project_statuses import (
+    StatusError,
+    is_same_status_id,
+    pick_custom_status,
+)
 from origin.services.task_assignment_notice import notify_milestone_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card
@@ -216,6 +221,7 @@ def _serialize_milestone(
         "title": m.title,
         "description": m.description,
         "status": m.status,
+        "customStatusId": m.custom_status_id,
         "statusCode": m.status_code,
         "priority": m.priority,
         "priorityCode": m.priority_code,
@@ -385,6 +391,22 @@ class MilestoneView(AuthenticatedAPIView):
         if message := status_value_error(request.data.get("status") or "Open"):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
+        # MIP-2492: the project's own status, as a task's POST takes it.
+        initial_status = request.data.get("status") or "Open"
+        custom_status = None
+        if request.data.get("custom_status") not in (None, ""):
+            try:
+                custom_status, implied = pick_custom_status(
+                    project.project_id,
+                    request.data.get("custom_status"),
+                    current_id=None,
+                    current_status="Open",
+                    requested_status=request.data.get("status"),
+                )
+            except StatusError as exc:
+                return Response({"error": exc.message, "code": exc.code}, status=exc.status)
+            initial_status = implied or initial_status
+
         # After the membership gate (a stranger learns nothing), before anything
         # is written. Same rule as a task's links: a milestone's links are
         # rendered as `<a href>` too (MIP-821).
@@ -442,7 +464,8 @@ class MilestoneView(AuthenticatedAPIView):
                 reporter_id=request.data.get("reporter_id") or request.user.id,
                 title=data["title"],
                 description_blocks=request.data.get("description"),
-                status=request.data.get("status") or "Open",
+                status=initial_status,
+                custom_status=custom_status,
                 status_code=request.data.get("status_code"),
                 priority=request.data.get("priority"),
                 priority_code=request.data.get("priority_code"),
@@ -561,6 +584,28 @@ class MilestoneView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # MIP-2492: `custom_status`, with the task PUT's rules. A project move leaves it
+        # behind (statuses belong to one project), as it does the folder.
+        status_pick: dict = {}
+        if (
+            project_move is None
+            and "custom_status" in request.data
+            and not is_same_status_id(request.data.get("custom_status"), milestone.custom_status_id)
+        ):
+            try:
+                row, implied = pick_custom_status(
+                    milestone.project_id,
+                    request.data.get("custom_status"),
+                    current_id=milestone.custom_status_id,
+                    current_status=milestone.status,
+                    requested_status=request.data.get("status"),
+                )
+            except StatusError as exc:
+                return Response({"error": exc.message, "code": exc.code}, status=exc.status)
+            status_pick["custom_status"] = row
+            if implied:
+                status_pick["status"] = implied
+
         # Validate custom field values BEFORE the transaction below —
         # rejecting them mid-transaction (after milestone.save()) would
         # return a 400 for a patch that had already half-applied.
@@ -617,6 +662,7 @@ class MilestoneView(AuthenticatedAPIView):
             # A project move clears the milestone's sprint, folder and tags and carries its tasks
             # into the destination; `update_milestone` does all of it, LAST (`project_move`).
             fields = {f: request.data.get(f) for f in PATCHABLE_FIELDS if f in request.data}
+            fields.update(status_pick)
 
             def _backing_only_writes():
                 # Custom field values are stored on the backing task only —

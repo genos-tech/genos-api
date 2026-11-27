@@ -422,7 +422,10 @@ def _delete_locked(milestone: MilestoneMaster) -> None:
     # (MIP-936).
     if milestone.task_id is not None:
         TaskMaster.objects.filter(task_id=milestone.task_id).update(
-            is_deleted=True, status="Deleted", ts_updated_at=timezone.now()
+            is_deleted=True,
+            status="Deleted",
+            custom_status=None,
+            ts_updated_at=timezone.now(),
         )
         # No signal fires for a queryset update: say so on the chat card too (MIP-2483).
         schedule_refresh(milestone_id=milestone.milestone_id)

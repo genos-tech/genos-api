@@ -30,7 +30,7 @@ import uuid
 from typing import Any, Optional
 
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import F, QuerySet
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -39,7 +39,11 @@ from origin.middleware.current_user import get_current_source, get_current_user
 from origin.models.chat.unified_models import Message
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectCustomField, ProjectMaster
+from origin.models.project.prj_models import (
+    ProjectCustomField,
+    ProjectMaster,
+    ProjectStatus,
+)
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
@@ -355,6 +359,41 @@ def _custom_field_changes(task: TaskMaster, old_map: Any, new_map: Any) -> list[
     return rows
 
 
+def _custom_status_change(old_id: Optional[int], new_id: Optional[int]) -> Optional[dict]:
+    """The names and colours of a custom status change, snapshotted so the feed still reads
+    after a rename or delete; None when nothing changed."""
+    if old_id == new_id:
+        return None
+    rows = {
+        row["status_id"]: row
+        for row in ProjectStatus.objects.filter(
+            status_id__in=[i for i in (old_id, new_id) if i is not None]
+        ).values("status_id", "name", "color", "category")
+    }
+    old, new = rows.get(old_id) or {}, rows.get(new_id) or {}
+    return {
+        "oldId": old_id,
+        "newId": new_id,
+        "oldLabel": old.get("name"),
+        "newLabel": new.get("name"),
+        "oldColor": old.get("color"),
+        "newColor": new.get("color"),
+    }
+
+
+def _record_custom_status_row(task, change: dict, *, extra: Optional[dict] = None) -> None:
+    """The row for a custom status that changed while `status` did not. Ids as the values, as
+    the custom-field and relation rows do; the typed names stay in metadata."""
+    _record(
+        task=task,
+        action_type=TaskActivityActionType.CUSTOM_STATUS,
+        field_name="custom_status",
+        old_value=change["oldId"],
+        new_value=change["newId"],
+        metadata={**change, **(extra or {})},
+    )
+
+
 def _resolve_actor() -> Optional[Any]:
     """Return the user FK suitable for `TaskActivity.actor` or None.
 
@@ -531,10 +570,13 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
     # No cascade writes this column today (a project move leaves custom
     # values where they are), but one that did would otherwise be silent.
     track_custom = "custom_field_values" in columns
+    # A cascade that writes `custom_status`, or changes what it has to match (the status or
+    # the project), records it and clears the ones left behind, as `save()` does.
+    track_status = bool(columns & {"status", "project_id", "custom_status_id"})
     # `_record` would drop the rows anyway under suppression; returning
     # here also skips the snapshot and re-read, which a bulk teardown
     # running this per milestone would otherwise pay for nothing.
-    if not (tracked or track_custom) or activity_suppressed():
+    if not (tracked or track_custom or track_status) or activity_suppressed():
         return queryset.update(**fields)
     # Pin the id set first: the update may change the very column the
     # queryset filters on (`filter(milestone=m).update(milestone=None)`).
@@ -544,15 +586,29 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
     before = {
         row["pk"]: row
         for row in TaskMaster.objects.filter(pk__in=ids).values(
-            "pk", "is_init_task", *tracked, *(["custom_field_values"] if track_custom else [])
+            "pk",
+            "is_init_task",
+            *tracked,
+            *(["custom_field_values"] if track_custom else []),
+            *(["custom_status_id"] if track_status else []),
         )
     }
     count = TaskMaster.objects.filter(pk__in=ids).update(**fields)
+    if track_status:
+        TaskMaster.objects.filter(pk__in=ids, custom_status__isnull=False).exclude(
+            custom_status__category=F("status"), custom_status__project_id=F("project_id")
+        ).update(custom_status=None)
     labels: dict[tuple[str, str], Optional[dict]] = {}
     for task in TaskMaster.objects.filter(pk__in=ids).select_related("team", "project"):
         old_row = before.get(task.pk)
         if old_row is None or old_row["is_init_task"]:
             continue
+        status_label_change = None
+        if track_status:
+            key = ("custom_status_id", old_row["custom_status_id"], task.custom_status_id)
+            if key not in labels:
+                labels[key] = _custom_status_change(key[1], key[2])
+            status_label_change = labels[key]
         for field in tracked:
             old = _tracked_value(field, old_row[field])
             new = _tracked_value(field, getattr(task, field))
@@ -561,14 +617,23 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
             key = (field, json.dumps(_to_jsonable([old, new]), sort_keys=True))
             if key not in labels:
                 labels[key] = _metadata_for_change(field, old, new)
+            extra = (
+                {"customStatus": status_label_change}
+                if field == "status" and status_label_change is not None
+                else {}
+            )
             _record(
                 task=task,
                 action_type=_FIELD_TO_ACTION[field],
                 field_name=field,
                 old_value=old,
                 new_value=new,
-                metadata={**(labels[key] or {}), "cascade": cascade},
+                metadata={**(labels[key] or {}), **extra, "cascade": cascade},
             )
+        if status_label_change is not None and not (
+            "status" in tracked and old_row["status"] != task.status
+        ):
+            _record_custom_status_row(task, status_label_change, extra={"cascade": cascade})
         if track_custom:
             for change in _custom_field_changes(
                 task, old_row["custom_field_values"], task.custom_field_values
@@ -629,6 +694,7 @@ def task_capture_original(sender, instance: TaskMaster, **kwargs):
     snapshot["team_id"] = previous.team_id
     snapshot["content"] = previous.content
     snapshot["custom_field_values"] = previous.custom_field_values
+    snapshot["custom_status_id"] = previous.custom_status_id
     # Captured so post_save can recognise the init→real "finalize" save
     # (the moment CreateTaskForm's draft becomes a real task) and treat
     # it as a single creation event instead of a diff of every field.
@@ -726,6 +792,15 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             metadata={"previousBodyKept": True} if keep else None,
         )
 
+    # Only when this save wrote the column: a partial save of an instance loaded before
+    # someone else set a custom status must not report it as cleared.
+    update_fields = kwargs.get("update_fields")
+    status_label_change = (
+        _custom_status_change(original.get("custom_status_id"), instance.custom_status_id)
+        if update_fields is None or {"custom_status", "custom_status_id"} & set(update_fields)
+        else None
+    )
+
     card_changed = False
     for field in _TRACKED_TASK_FIELDS:
         old = _tracked_value(field, original.get(field))
@@ -755,6 +830,8 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             # it reads as that person setting the status by hand.
             if getattr(instance, "_derived_blocked_sync", False):
                 metadata = {**(metadata or {}), "derivedFromDependencies": True}
+            if status_label_change is not None:
+                metadata = {**(metadata or {}), "customStatus": status_label_change}
         row = _record(
             task=instance,
             action_type=action,
@@ -773,6 +850,8 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
         instance, original.get("custom_field_values"), instance.custom_field_values
     ):
         _record(task=instance, **change)
+    if status_label_change is not None and original.get("status") == instance.status:
+        _record_custom_status_row(instance, status_label_change)
 
     # ONE webhook per save, after the whole diff — a subscriber wants
     # "this task changed", not one delivery per column. Emitted here

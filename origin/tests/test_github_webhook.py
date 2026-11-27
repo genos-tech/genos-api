@@ -20,9 +20,10 @@ from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import GithubWebhookRegistration
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectStatus
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
+from origin.services.project_statuses import ensure_project_statuses
 
 User = get_user_model()
 
@@ -205,6 +206,17 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.data["updated"], 1)
         task.refresh_from_db()
         self.assertEqual(task.status, "Closed")
+
+    def test_merged_pr_closes_a_task_that_has_a_custom_status(self):
+        # MIP-2492: the close writes the category, and the project's own label is dropped.
+        ensure_project_statuses(self.project)
+        review = ProjectStatus.objects.get(project=self.project, builtin_key="In Review")
+        task = self._create_task(project_task_number=42)
+        task.custom_status = review
+        task.save(update_fields=["custom_status"])
+        self._post_webhook(_pr_payload(action="closed", merged=True, head_ref="feature/HK-42-x"))
+        task.refresh_from_db()
+        self.assertEqual((task.status, task.custom_status_id), ("Closed", None))
 
     def test_merged_pr_matches_at_string_start(self):
         task = self._create_task(project_task_number=42)

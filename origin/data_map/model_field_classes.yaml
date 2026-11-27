@@ -587,6 +587,7 @@ origin.MilestoneMaster:
   title: content
   description: content
   status: none
+  custom_status: none
   status_code: none
   priority: none
   priority_code: none
@@ -834,6 +835,20 @@ origin.ProjectSavedTaskFilter:
   project: none
   filter_name: content
   filters: none
+  created_by: none
+  ts_created_at: none
+  ts_updated_at: none
+origin.ProjectStatus:
+  status_id: none
+  team: none
+  project: none
+  name: none
+  category: none
+  builtin_key: none
+  color: none
+  sort_order: none
+  is_default: none
+  archived_at: none
   created_by: none
   ts_created_at: none
   ts_updated_at: none
@@ -1163,6 +1178,7 @@ origin.TaskMaster:
   priority: none
   effort_level: none
   status: none
+  custom_status: none
   priority_code: none
   effort_level_code: none
   status_code: none
