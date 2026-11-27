@@ -49,6 +49,7 @@ from origin.models.chat.unified_models import (
     ChannelKind,
     ChannelMember,
     Message,
+    MessageMovedAway,
 )
 from origin.models.common.notification_models import NotificationPreference
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -3066,6 +3067,8 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         # take care of MessageReaction, MessageMention, MessageAttachment,
         # Flag, ChannelMember, ChannelDirectPair, Pin, and ReadCursor.
         Message.objects.filter(channel__team=team_id).delete()
+        # No cascade reaches these (no constraint on `channel`).
+        MessageMovedAway.objects.filter(channel__team=team_id).delete()
         Channel.objects.filter(team=team_id).delete()
 
         # Per-user todo. ToDoGroup CASCADE removes its items; ToDoCategory

@@ -10,9 +10,11 @@ derived from the task and comment), and the old chat keeps nothing. The comments
 and the new project's members already read them on the task page. A stub left behind would tell the
 old members where the task went.
 
-What hangs off the moved messages follows them: reactions and attachments with the row, activities,
-flags, reminders, `@` rows and thread read cursors only for people in the new chat, the main read
-cursors of the old chat step back to what is still there, the cached thread summary and the thread's
+What hangs off the moved messages follows them: reactions and attachments with the row; the chat
+notes on the thread; pasted inline images, which become readable by the new chat's people
+(`moved_messages`, which also tells offline devices to drop their copy); activities, flags,
+reminders, `@` rows and thread read cursors only for people in the new chat. The main read cursors
+of the old chat step back to what is still there, and the cached thread summary and the thread's
 search chunks are dropped.
 
 When the new chat already holds a card of the task (it was moved before this change and a comment
@@ -27,7 +29,7 @@ from __future__ import annotations
 import logging
 
 from django.db import transaction
-from django.db.models import F, Max
+from django.db.models import F, Max, Q
 from django.utils import timezone
 
 from origin.models.chat.unified_models import (
@@ -40,9 +42,17 @@ from origin.models.chat.unified_models import (
     MessageReminder,
     ReadCursor,
 )
+from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.services import realtime_push, task_card_post, thread_summary_cleanup
+from origin.search_engine.acl_dirty import mark_channels_dirty
+from origin.services import (
+    moved_messages,
+    realtime_push,
+    task_card_post,
+    thread_summary_cleanup,
+)
+from origin.services.chat_note_access import rederive_on_move
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +105,9 @@ def _move(task_ids: set, project_id: int) -> None:
     )
 
     by_task: dict[int, list[Message]] = {}
-    for card in cards_elsewhere().select_related("channel").order_by("ts_sent_at", "seq"):
+    # Rows locked: what a body shows is recorded as it leaves, so no edit may slip in between.
+    cards = cards_elsewhere().select_for_update(of=("self",)).select_related("channel")
+    for card in cards.order_by("ts_sent_at", "seq"):
         by_task.setdefault(card.task_id, []).append(card)
 
     members = ProjectMembers.objects.filter(
@@ -132,11 +144,15 @@ def _move_one(task_id, cards, destination, members, next_seq, live_budget) -> tu
     arrived: list = []
     for card in cards:
         source = card.channel
-        replies = list(Message.objects.filter(thread_root_id=card.pk).order_by("seq"))
+        replies = list(
+            Message.objects.select_for_update().filter(thread_root_id=card.pk).order_by("seq")
+        )
         becomes_card = target is None
         moving = ([card] if becomes_card else []) + replies
         _step_back_read_cursors(source, [card, *replies])
         thread_summary_cleanup.forget_thread(channel_id=source.pk, thread_id=card.pk)
+        # The surplus card of a merge leaves too: it is deleted below.
+        moved_messages.record_moved_away(source.pk, [card, *replies])
         _purge_thread_chunks(source.pk, card.pk)
 
         for message in moving:
@@ -160,6 +176,7 @@ def _move_one(task_id, cards, destination, members, next_seq, live_budget) -> tu
                 reply_count=F("reply_count") + card.reply_count, ts_updated_at=timezone.now()
             )
             thread_summary_cleanup.forget_thread(channel_id=destination.pk, thread_id=target.pk)
+        _move_thread_notes(source, card.pk, destination, target.pk)
         # A task made from a message of this thread points at it (`thread_link`).
         TaskMaster.objects.filter(chat_id=str(source.pk), thread_id=str(card.pk)).update(
             chat_id=str(destination.pk), thread_id=str(target.pk), ts_updated_at=timezone.now()
@@ -179,6 +196,44 @@ def _move_one(task_id, cards, destination, members, next_seq, live_budget) -> tu
     # the old one and appear in the new one, never the other way round.
     transaction.on_commit(lambda: _announce(task_id, card_id, reply_ids), robust=True)
     return next_seq, len(reply_ids)
+
+
+def _move_thread_notes(source, old_root, destination, new_root) -> None:
+    """The chat notes written on the thread go with it, sub-notes included: the new chat's people
+    read them, and the roles the old chat's membership wrote end (as when a note is moved by hand,
+    `ChatNoteMoveView`)."""
+    on_source = ChatNoteMaster.objects.filter(channel=source)
+    notes = {n.note_id: n for n in on_source.filter(thread_root_id=old_root)}
+    frontier = set(notes)
+    while frontier:
+        # A sub-note filed on another thread stays with that thread.
+        children = on_source.filter(
+            Q(thread_root_id__isnull=True) | Q(thread_root_id=old_root),
+            parent_note_id__in=frontier,
+        ).exclude(note_id__in=notes)
+        found = {n.note_id: n for n in children}
+        notes.update(found)
+        frontier = set(found)
+    if not notes:
+        return
+    moves = [(n.note_id, source, n.owner_id) for n in notes.values()]
+    fields = {
+        "channel": destination,
+        "chat_type": destination.kind,
+        "team_id": destination.team_id,
+        # The stamp is what makes the reindex give the notes their new readers.
+        "ts_updated_at": timezone.now(),
+    }
+    moving = ChatNoteMaster.objects.filter(note_id__in=notes)
+    moving.filter(thread_root_id=old_root).update(thread_root_id=new_root, **fields)
+    moving.exclude(thread_root_id=new_root).update(**fields)
+    # No sub-note link may cross the two chats.
+    moving.exclude(parent_note_id__in=notes).update(parent_note_id=None)
+    ChatNoteMaster.objects.filter(channel=source, parent_note_id__in=notes).update(
+        parent_note_id=None
+    )
+    rederive_on_move(moves=moves, target=destination)
+    mark_channels_dirty([source.pk, destination.pk])
 
 
 def _step_back_read_cursors(source, leaving) -> None:
