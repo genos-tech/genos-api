@@ -417,13 +417,6 @@ class ProjectMasterView(AuthenticatedAPIView):
                         # (job title). The owner's row reads "viewer";
                         # the client overlays "owner" via ownerUserId.
                         "memberRole": attendee["member_role"],
-                        # No `phoneNumber` here, and it isn't an oversight.
-                        # A project roster spans teams — `team__team_id` is
-                        # per-row precisely because guests and shared-in
-                        # collaborators appear alongside colleagues — so
-                        # "the caller is a teammate of this person" is not
-                        # something membership of the project establishes.
-                        # The team roster is where a phone number belongs.
                         # Blanked for a member who turned off location sharing,
                         # except on their own card. See shown_location.
                         "currentLocation": shown_location(

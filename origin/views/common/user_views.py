@@ -55,7 +55,6 @@ PROFILE_EDITABLE_FIELDS = frozenset(
         "custom_status_expiry",
         "is_offline_forced",
         "role",
-        "phone_number",
         "current_location",
         "location_shared",
         "about_me",

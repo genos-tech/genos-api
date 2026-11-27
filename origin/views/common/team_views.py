@@ -1126,12 +1126,6 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 # reads "viewer" here by design; the client overlays
                 # "owner" using `teamOwnerId`. See services/member_roles.
                 memberRole=F("member_role"),
-                # Phone rides along for TEAMMATES only. The external-guest
-                # rows built by `_external_people_rows` deliberately omit
-                # it — someone from another team is in this roster because
-                # a share put you on the same object, which is not a reason
-                # to hand them a phone number.
-                phoneNumber=F("attendee__phone_number"),
                 # Both zones travel: `currentLocation` is what the user
                 # picked, `timezone` is what their browser reported. The
                 # client shows the first and falls back to the second, so
@@ -1158,7 +1152,6 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 "isOfflineForced",
                 "role",
                 "memberRole",
-                "phoneNumber",
                 "currentLocation",
                 "timezone",
                 "locationShared",
@@ -1188,9 +1181,9 @@ class GetMyTeamsView(AuthenticatedAPIView):
             # project AND an external participant in a chat in the same
             # host team, and each source discloses a different slice.
             visible = guest_visible_user_ids(gid, user_id) | external_visible_user_ids(gid, user_id)
-            members_by_team[gid] = _without_phone(
+            members_by_team[gid] = [
                 m for m in members_by_team.get(gid, []) if str(m["userId"]) in visible
-            )
+            ]
 
         my_teams = [
             {
@@ -1214,23 +1207,6 @@ class GetMyTeamsView(AuthenticatedAPIView):
 
         cache.set(cache_key, my_teams, timeout=60)
         return Response(my_teams, status=status.HTTP_200_OK)
-
-
-def _without_phone(rows) -> list:
-    """Roster rows with `phoneNumber` removed, for a caller outside the team.
-
-    Guests and cross-team participants both read team rosters — a guest
-    through the one project they were invited to, an external participant
-    through the one object shared with them — and both get there without
-    a `TeamMembers` row. Every other field on these rows is context the
-    share itself implies; a phone number is the one that assumes the
-    reader is a colleague.
-
-    Applied as a projection over the built rows rather than a second,
-    narrower query so that the rule lives in exactly one place and can't
-    drift between the two views that need it.
-    """
-    return [{key: value for key, value in row.items() if key != "phoneNumber"} for row in rows]
 
 
 def _external_people_rows(team_id, team_name, user_id) -> list:
@@ -1264,11 +1240,9 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
         ).values_list("team_id", "profile_image_file_name")
     }
     rows = []
-    # `phone_number` is deliberately absent from this projection. These
-    # rows describe people from ANOTHER team, surfaced here only because a
-    # cross-team share put them on an object with you. Their job title and
-    # status are the context that share needs; their phone number is not,
-    # and the only way to be sure it never ships is to never select it.
+    # These rows describe people from ANOTHER team, surfaced here only
+    # because a cross-team share put them on an object with you: select only
+    # the context that share needs.
     users = CustomUser.objects.filter(id__in=people.keys(), is_deleted=False).values(
         "id",
         "username",
@@ -1480,7 +1454,6 @@ class GetTeamMembersView(AuthenticatedAPIView):
             "attendee__profile_image_file_name",
             "attendee__is_offline_forced",
             "attendee__role",
-            "attendee__phone_number",
             "attendee__current_location",
             "attendee__timezone",
             "attendee__location_shared",
@@ -1527,9 +1500,6 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     # title). Owner's row reads "viewer"; the client
                     # overlays "owner" via teamOwnerId.
                     "memberRole": attendee["member_role"],
-                    # Teammates only. `_external_people_rows` builds the
-                    # guest rows for this same roster and omits this key.
-                    "phoneNumber": attendee["attendee__phone_number"] or "",
                     # Location rides to everyone unless the owner opted out;
                     # then it shows only on their own card. See shown_location.
                     "currentLocation": shown_location(
@@ -1570,7 +1540,6 @@ class GetTeamMembersView(AuthenticatedAPIView):
         else:
             # `guest_visible` is only set when the caller failed
             # `is_team_member`, so this branch IS the outside-caller case.
-            response_data = _without_phone(response_data)
             # An outside caller is told nothing about the team's history of people.
             if not has_more:
                 deleted_user_ids = []
@@ -1631,7 +1600,6 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__is_offline_forced",
                 "attendee__role",
                 "member_role",
-                "attendee__phone_number",
                 "attendee__current_location",
                 "attendee__timezone",
                 "attendee__location_shared",
@@ -1667,9 +1635,6 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "isOfflineForced": member_info.get("attendee__is_offline_forced", ""),
             "role": member_info.get("attendee__role", ""),
             "memberRole": member_info.get("member_role", "viewer"),
-            # This view is reachable only for a member of a team the caller
-            # is themselves in, so the teammates-only rule already holds.
-            "phoneNumber": member_info.get("attendee__phone_number") or "",
             "currentLocation": shown_location(
                 member_info.get("attendee__current_location"),
                 member_info.get("attendee__location_shared"),

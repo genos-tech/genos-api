@@ -361,35 +361,88 @@ export default defineRailway(() => {
     source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     replicas: { "asia-southeast1-eqsg3a": 1 },
+    // MIP-2460: this service runs the members' jobs, a skill run and a skill dashboard included, which
+    // use the same agent loop and search as the web service. So it declares every variable a job reads;
+    // each value is set on Railway as a reference to backend-django's (`${{backend-django.NAME}}`).
+    // `origin/tests/test_railway_schedule_tick_env.py` fails when the code reads one that is not here.
     env: {
-      // MIP-1293: the AI sentences of a scheduled report: the operator switch, the cost meter and the model
-      // credentials (the key file is written from GEMINI_SA_BASE64 by railway-schedule-tick-entrypoint.sh).
-      AI_COST_METER: preserve(),
+      // Every Django cron.
       ALLOWED_HOSTS: preserve(),
       BLIND_INDEX_KEYS: preserve(),
-      // MIP-2355: a dashboard schedule saves its note from this service (`html_notes.save_page` pushes the page to
-      // genos-collab). Without these two the note is saved to the database but an open note does not refresh.
-      // The secret is the same value as on genos-collab and backend-django, and differs from JWT_SECRET_KEY.
-      COLLAB_INTERNAL_SECRET: preserve(),
-      COLLAB_INTERNAL_URL: preserve(),
       DATABASE_URL: preserve(),
       DJANGO_DEBUG: preserve(),
       DJANGO_SECRET_KEY: preserve(),
       FIELD_ENCRYPTION_KEYS: preserve(),
+      JWT_SECRET_KEY: preserve(),
+      LOG_FORMAT: preserve(),
+      // The model: AI sentences (MIP-1293), AI dashboards and skill runs. The Vertex key file is written from
+      // GEMINI_SA_BASE64 by railway-schedule-tick-entrypoint.sh. The CLAUDE_* and OPENAI_API_KEY values matter
+      // only when LLM_PROVIDER says so.
+      LLM_PROVIDER: preserve(),
       GEMINI_LOCATION: preserve(),
       GEMINI_MODEL: preserve(),
       GEMINI_PROJECT: preserve(),
       GEMINI_SA_BASE64: preserve(),
       GEMINI_SERVICE_ACCOUNT_FILE: preserve(),
       GEMINI_USE_VERTEX: preserve(),
+      GEMINI_EXPLICIT_CACHE: preserve(),
+      CLAUDE_API_KEY: preserve(),
+      CLAUDE_MAX_TOKENS: preserve(),
+      CLAUDE_MODEL: preserve(),
+      OPENAI_API_KEY: preserve(),
+      // The cost meter and the credit rule: the same as the web service, or a scheduled run is not charged
+      // and not stopped at zero credits.
+      AI_COST_METER: preserve(),
+      AI_CREDITS_AUTHORITATIVE: preserve(),
+      AI_CREDITS_SHADOW: preserve(),
+      // The operator switches. Skills: off ("not set") fails every skill schedule (MIP-2045). AI sentences
+      // (MIP-1210) and the AI summary of a dashboard page (MIP-2355) are off unless "true".
+      GENOS_SKILLS: preserve(),
+      GENOS_SKILLS_PUBLIC: preserve(),
+      HTML_NOTES: preserve(),
+      REPORT_AI_DASHBOARDS: preserve(),
+      REPORT_AI_SENTENCES: preserve(),
+      // The spend controls a run checks before it calls a model: the emergency stop and the monthly limits
+      // (RAILWAY_DEPLOY.md: set the same values here as on backend-django). Unset today means no limit.
+      AI_AGENT_KILL_SWITCH: preserve(),
+      AI_MONTHLY_BUDGET_JPY: preserve(),
+      AI_TEAM_MONTHLY_CEILING_USD: preserve(),
+      // The agent loop of a skill run: the same step budget, models and result sizes as in Spotlight.
+      AGENT_EFFORT_LEVELS: preserve(),
+      AGENT_TWO_TIER_LOOP: preserve(),
+      LLM_LOG_USAGE_METADATA: preserve(),
+      MCP_RESULT_LIMITS: preserve(),
+      // A skill run's search: the index, and the embedder that turns the query into a vector.
+      EMBEDDING_PROVIDER: preserve(),
+      OPENAI_EMBEDDING_DIMENSIONS: preserve(),
+      OPENAI_EMBEDDING_MODEL: preserve(),
+      OPENSEARCH_CA_CERT: preserve(),
+      OPENSEARCH_HOST: preserve(),
+      OPENSEARCH_INDEX: preserve(),
+      OPENSEARCH_PASSWORD: preserve(),
+      OPENSEARCH_PORT: preserve(),
+      OPENSEARCH_USERNAME: preserve(),
+      OPENSEARCH_USE_SSL: preserve(),
+      VERTEX_EMBEDDING_DIMENSIONS: preserve(),
+      VERTEX_EMBEDDING_MODEL: preserve(),
+      // The shared cache (presence for web push, demo AI limits, spend limits).
+      REDIS_URL: preserve(),
+      // The live update of a chat report and of the Inbox. Set both or neither: with the URL and no secret
+      // the service does not boot (`_validate_transport`).
+      SOCKETS_INTERNAL_SECRET: preserve(),
+      SOCKETS_INTERNAL_URL: preserve(),
+      // MIP-2355: a dashboard schedule saves its note from this service (`html_notes.save_page` pushes the page to
+      // genos-collab). Without these two the note is saved to the database but an open note does not refresh.
+      // The secret is the same value as on genos-collab and backend-django, and differs from JWT_SECRET_KEY.
+      COLLAB_INTERNAL_SECRET: preserve(),
+      COLLAB_INTERNAL_URL: preserve(),
+      // The links a report posts into a chat.
+      FRONTEND_BASE_URL: preserve(),
+      // No GITHUB_APP_* here (MIP-2460, 2026-11-27): the App stays off on this service, so its private key is
+      // not copied to it. A scheduled skill's pull request tools use the owner's GitHub OAuth connection.
       // MIP-1333: "On your calendar" in a scheduled report refreshes the member's Google token with the OAuth client.
       GOOGLE_OAUTH_CLIENT_ID: preserve(),
       GOOGLE_OAUTH_CLIENT_SECRET: preserve(),
-      JWT_SECRET_KEY: preserve(),
-      LOG_FORMAT: preserve(),
-      // MIP-2355: the operator switch for the AI summary of a dashboard page (off unless "true"), on top of REPORT_AI_SENTENCES.
-      REPORT_AI_DASHBOARDS: preserve(),
-      REPORT_AI_SENTENCES: preserve(),
       // MIP-1374: a scheduled report's web push is sent from this service, and it is silently skipped without the VAPID keys
       // (`vapid_configured()` is false): the 17:00 recap of 2026-11-14 ran "ok" and no push arrived.
       WEBPUSH_MEDIA_BASE_URL: preserve(),

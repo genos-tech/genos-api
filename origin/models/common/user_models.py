@@ -117,7 +117,6 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     # NULL only on a row the previous release wrote mid-deploy;
     # `rotate_field_keys` fills it in.
     email_hash = models.CharField(max_length=64, unique=True, null=True, editable=False)
-    phone_number = crypto.EncryptedCharField(max_length=20, blank=True, null=True)
     profile_image_url = models.FileField(upload_to=user_profile_image_path)
     # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
     profile_image_size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)

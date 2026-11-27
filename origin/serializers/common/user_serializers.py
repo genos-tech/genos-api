@@ -25,7 +25,6 @@ class UserSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "email",
-            "phone_number",
             "profile_image_url",
             "profile_image_file_name",
             "is_offline_forced",

@@ -81,5 +81,5 @@ class DataMapClassificationTests(SimpleTestCase):
 
     def test_removed_unused_profile_column_stays_removed(self):
         self.assertNotIn("base_country", self.live["origin.CustomUser"])
-        # phone_number is edited in the profile modal, so it stays and is pii.
-        self.assertEqual(self.declared["origin.CustomUser"]["phone_number"], "pii")
+        # Removed in MIP-2464 (migration 0297).
+        self.assertNotIn("phone_number", self.live["origin.CustomUser"])
