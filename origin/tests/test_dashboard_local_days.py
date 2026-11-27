@@ -11,6 +11,7 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 from origin.search_engine.agent.tools.get_my_throughput import GET_MY_THROUGHPUT
+from origin.search_engine.agent.tools.get_task_throughput_stats import GET_TASK_THROUGHPUT_STATS
 from origin.services.schedule_jobs import ai_dashboard
 from origin.tests.test_schedule_jobs import JobBase
 
@@ -49,7 +50,9 @@ class LocalDayTests(JobBase):
             tool = GET_MY_THROUGHPUT.run({"days": 7, "bucket": "day"}, self.ctx)
             # A page that others read counts "mine" with its own query.
             shared = ai_dashboard._mine(self.ctx, 7, "day", {str(self.user.id), str(self.user2.id)})
-        for out in (tool, shared):
+            # The team-wide count uses the asking member's day too (MIP-2451).
+            stats = GET_TASK_THROUGHPUT_STATS.run({"days": 7, "bucket": "day"}, self.ctx)
+        for out in (tool, shared, stats):
             self.assertEqual(
                 self.closed_days(out["buckets"], "bucket_start"), [(DAY.isoformat(), 1)]
             )
@@ -59,6 +62,15 @@ class LocalDayTests(JobBase):
 
     def test_an_evening_close_west_of_utc(self):
         self.check("America/Los_Angeles", 20)
+
+    def test_a_week_bucket_of_the_team_count_starts_on_the_callers_monday(self):
+        monday = date(2026, 6, 15)
+        self.close_at("Asia/Tokyo", monday, 8)  # still Sunday the 14th in UTC
+        with self.at_now():
+            stats = GET_TASK_THROUGHPUT_STATS.run({"days": 30, "bucket": "week"}, self.ctx)
+        self.assertEqual(
+            self.closed_days(stats["buckets"], "bucket_start"), [(monday.isoformat(), 1)]
+        )
 
     def test_a_week_starts_on_the_members_monday(self):
         monday = date(2026, 6, 15)
