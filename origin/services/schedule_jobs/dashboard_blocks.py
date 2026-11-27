@@ -314,8 +314,8 @@ def pace(series: list[Any], period: str, today: date, days: int) -> dict[str, An
             at = _bucket(date.fromisoformat(str(point["label"])), unit)
         except ValueError:
             continue
-        # The queries bucket by UTC days and `today` is the owner's: what falls just outside
-        # either end belongs to the end it is next to.
+        # The window is a rolling N x 24 hours, so it starts partway through the day before the
+        # first column: what falls just outside either end belongs to the end it is next to.
         at = min(max(at, min(totals)), max(totals))
         totals[at][0] += point["closed"]
         totals[at][1] += point["created"]
