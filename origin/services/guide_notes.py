@@ -279,7 +279,7 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                         _B,
                         "Task Weight (1–25) combines priority and time "
                         'pressure so "what should I do next" has an '
-                        "answer; team capacity and velocity views build on "
+                        "answer; team capacity and pace views build on "
                         "it.",
                     ),
                     (
@@ -1769,7 +1769,7 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                     ),
                     (
                         _B,
-                        'Task Weight, capacity and velocity views answer "is '
+                        'Task Weight, capacity and pace views answer "is '
                         'this plan real?"; a proactive digest on the higher '
                         "plans surfaces overdue and stale work before a "
                         "standup does.",
@@ -2332,7 +2332,7 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                     ),
                     (
                         _B,
-                        "「タスクの重み（1～25）」は、優先度と時間的プレッシャーを組み合わせたもので、「次に何をすべきか」という問いに対する答えとなるものです。チームのキャパシティやベロシティの把握は、これを基盤としています。",
+                        "「タスクの重み（1～25）」は、優先度と時間的プレッシャーを組み合わせたもので、「次に何をすべきか」という問いに対する答えとなるものです。チームのキャパシティやペースの把握は、これを基盤としています。",
                     ),
                     (
                         _B,
@@ -3357,7 +3357,7 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                     ),
                     (
                         _B,
-                        "「タスクの重み」「キャパシティ」「ベロシティ」の各ビューは、「この計画は現実的か？」という疑問に答えます。また、上位プランのプロアクティブダイジェストにより、スタンドアップミーティングが行われる前に、期限切れや滞っている作業が明らかになります。",
+                        "「タスクの重み」「キャパシティ」「ペース」の各ビューは、「この計画は現実的か？」という疑問に答えます。また、上位プランのプロアクティブダイジェストにより、スタンドアップミーティングが行われる前に、期限切れや滞っている作業が明らかになります。",
                     ),
                     (
                         _B,
