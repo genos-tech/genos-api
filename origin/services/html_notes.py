@@ -10,8 +10,8 @@ eval list, and the placeholder is how they see an HTML note). The note's ACL is 
 THE SCAN IS ADVICE, NOT A BOUNDARY. The page is untrusted content. What keeps it harmless is the
 viewer's sandboxed frame and CSP (a later phase), never this file: it only tells the author, in
 words a model can act on, which parts will be blocked and what to do about each. A save is therefore
-never refused for a fixable reason. The hard limits are the member's plan limits (size, count of
-HTML notes, saves per hour: `html_note_limits.HTML_NOTE_LIMITS`, the one table, MIP-2216), and each
+never refused for a fixable reason. The hard limits are the member's plan limits (page size, storage for
+kept revisions, saves per hour: `html_note_limits.HTML_NOTE_LIMITS`, the one table, MIP-2216), and each
 message says the numbers and what to do instead of just saying no.
 
 Everything is stdlib (`html.parser`); the regexes run over script and style text only and are
@@ -31,6 +31,7 @@ from typing import Any
 
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 from apis.request_id import log_failure
@@ -59,8 +60,8 @@ BODY_FORMAT_BLOCKNOTE = "blocknote"
 BODY_FORMAT_HTML = "html"
 
 #: The largest page any plan may save, in UTF-8 bytes. Derived from the plan table
-#: (`html_note_limits.HTML_NOTE_LIMITS`, MIP-2216), which holds the per-plan size, count and hourly
-#: rate: the numbers live there and nowhere else. 200 KB is a better target for any page.
+#: (`html_note_limits.HTML_NOTE_LIMITS`, MIP-2216), which holds the per-plan size, storage quota and
+#: hourly rate: the numbers live there and nowhere else. 200 KB is a better target for any page.
 MAX_HTML_BYTES = MAX_PAGE_BYTES
 #: Revisions kept per note; older ones are dropped on each save.
 KEEP_REVISIONS = 20
@@ -555,7 +556,7 @@ def check_rate(user_id: str, per_hour: int) -> None:
     if not isinstance(used, int):
         # The default cache has IGNORE_EXCEPTIONS: with Redis unreachable (the schedule-tick
         # service has no REDIS_URL) `incr` returns None instead of raising. The rate is unknown,
-        # so the save goes through; the note-count and size limits still apply.
+        # so the save goes through; the storage and size limits still apply.
         log.warning("html_notes_rate_check_unavailable")
         return
     if used > per_hour:
@@ -675,6 +676,17 @@ def _next_rev(note_type: int, note_id: int) -> int:
         .first()
     )
     return (latest or 0) + 1
+
+
+def _dropped_by_next_save(note_type: int, note_id: int) -> int:
+    """Bytes of the revisions `append_revision` will drop when the note gets one more page."""
+    keep_from = _next_rev(note_type, note_id) - KEEP_REVISIONS
+    if keep_from <= 0:
+        return 0
+    dropped = NoteHtmlRevision.objects.filter(
+        note_type=note_type, note_id=note_id, rev__lte=keep_from
+    ).aggregate(total=Sum("size"))
+    return dropped["total"] or 0
 
 
 def append_revision(
@@ -877,8 +889,8 @@ def save_page(
     args: dict[str, Any], ctx: ToolContext, *, server_rendered: bool = False
 ) -> dict[str, Any]:
     """The plan first (a Free member gets a suggestion and nothing is stored, a lookup that fails
-    reads as Core), then the cheap checks, the scan last: the plan's size, then access, the count
-    of notes and the rate limit, and only then the (linear but not free) scan of up to the plan's
+    reads as Core), then the cheap checks, the scan last: the plan's size, then access, the storage
+    quota and the rate limit, and only then the (linear but not free) scan of up to the plan's
     size, so a caller with no access, or past a limit, makes the server do no work on the page.
 
     `server_rendered` marks a page the SERVER drew (a dashboard, MIP-2417): its in-app links work
@@ -926,7 +938,27 @@ def _replace_page(
         )
     if why := archived_note_refusal(ref.family, ref.note_id):
         raise ToolError(f"{why} Nothing was changed.")
-    _count_save(ctx, limits)
+    # The new version counts against the note OWNER's storage (nobody's, for a note whose owner's
+    # account is gone). For someone else's note the save is counted BEFORE the check: a refusal
+    # tells an editor that the owner is nearly full, so asking must not be free.
+    owner_id = getattr(note, "owner_id", None)
+    others = owner_id is not None and str(owner_id) != str(ctx.user_id)
+    if others:
+        _count_save(ctx, limits)
+    if owner_id is not None:
+        try:
+            html_note_limits.check_storage(
+                ctx.user_id,
+                limits,
+                new_bytes=byte_size(args["html"]),
+                freed_bytes=_dropped_by_next_save(ref.code, ref.note_id),
+                owner_id=owner_id,
+                replacing=True,
+            )
+        except html_note_limits.HtmlNoteLimitReached as reached:
+            raise ToolError(str(reached)) from None
+    if not others:
+        _count_save(ctx, limits)
     prepared = _prepare_page(args, limits)
 
     from origin.models.common.user_models import CustomUser  # noqa: PLC0415
@@ -980,7 +1012,7 @@ def _create_page(
             f"You've created all {note_limit} notes for this month. Upgrade your plan to keep going."
         )
     try:
-        html_note_limits.check_room_for_new_note(ctx.user_id, limits)
+        html_note_limits.check_storage(ctx.user_id, limits, new_bytes=byte_size(args["html"]))
     except html_note_limits.HtmlNoteLimitReached as reached:
         raise ToolError(str(reached)) from None
     _count_save(ctx, limits)

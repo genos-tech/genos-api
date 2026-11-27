@@ -250,7 +250,7 @@ class HtmlNoteImportView(AuthenticatedAPIView):
 
     The web client's twin of the MCP tool `save_html_note`: it CALLS that tool's own function, so the
     plan gate (Free: nothing is stored and the answer is a suggestion, never an error status), the
-    page size, the count of HTML notes, the monthly note quota, the saves per hour, the scan, the
+    page size, the HTML storage quota, the monthly note quota, the saves per hour, the scan, the
     target rules (`folder_id` for a team note, `project_id` and `task_id` for a task note, `chat_id`
     for a chat note) and the access checks are the MCP's, with no second copy to drift.
 

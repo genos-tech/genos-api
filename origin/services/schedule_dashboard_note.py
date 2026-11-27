@@ -2,7 +2,7 @@
 
 Runs between a dashboard job and the normal delivery (`schedule_delivery.deliver`). It renders
 the job's `dashboard` into a page (`dashboard_page`) and saves it through the SAME service as the
-`save_html_note` tool (`html_notes.save_page`), so the plan limits (note count, saves per hour),
+`save_html_note` tool (`html_notes.save_page`), so the plan limits (storage, saves per hour),
 the size limit and the page scan are the ones every HTML note has: no second set of rules.
 
 * The first run creates a personal HTML note for the schedule's owner; every later run REPLACES
@@ -114,7 +114,7 @@ def deliver_note(
                 # The page is ours, so a click on one of its links may reach the viewer.
                 saved = html_notes.save_page(args, ctx, server_rendered=True)
             except (ToolError, ToolForbidden) as exc:
-                # The service's sentences say which limit (plan, count, rate, size) and name no content.
+                # The service's sentences say which limit (plan, storage, rate, size) and name no content.
                 raise ScheduleRunError(str(exc)[:200]) from None
             if not saved.get("note_id"):
                 # Not on the plan: the service answers with a suggestion, not an error.

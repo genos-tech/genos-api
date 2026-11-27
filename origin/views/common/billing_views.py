@@ -347,14 +347,17 @@ class BillingPlansView(AuthenticatedAPIView):
             )
             # HTML pages (MIP-2362): read off `html_note_limits.HTML_NOTE_LIMITS`, the one table the
             # save path enforces, so the comparison can never show a number the server does not apply.
-            # `None` = the plan has no HTML pages (Free); the count, page size (bytes) and saves per
-            # hour are never "unlimited".
+            # `None` = the plan has no HTML pages (Free). The number of pages is not limited, so
+            # there is no count; the storage quota and page size (bytes) and the saves per hour are
+            # never "unlimited". The key is `html_pages`, not the older `html_notes` (MIP-2453):
+            # a web client built for the old shape reads `max_notes` and would break on its
+            # absence, while a missing `html_notes` only leaves its rows out.
             html_row = html_note_limits.limits_for_tier(tier)
-            limits["html_notes"] = (
+            limits["html_pages"] = (
                 None
                 if html_row is None
                 else {
-                    "max_notes": html_row.max_notes,
+                    "max_storage_bytes": html_row.max_storage_bytes,
                     "max_bytes": html_row.max_bytes,
                     "saves_per_hour": html_row.saves_per_hour,
                 }

@@ -106,7 +106,7 @@
       "declaration:edit_note_block:on": "52892fbabb1b3cd155fea0499ac9d5919811e3afdd541c1648901d4822556b67",
       "declaration:get_note:off": "bb840cc407d9e9a46a894ae26e05b7c920342ea9ef61ead832107b8fb82ec6fe",
       "declaration:get_note:on": "a05a8247ce03f4847a14e1fc4256d89225e7ff46efc43d252a55dae0213cb8d5",
-      "declaration:save_html_note": "ac868954b8528cf306f7c4bf942a29e4e8baf2528e3905344a99853a85052ba3",
+      "declaration:save_html_note": "5dd188064b5e80cc876c165e7403a3d5d4fa19d833e87bb6c0be7e6076e5f678",
       "declaration:update_note:off": "4714770ee5a3835cfc6d7687bf868d4f598879af719d85a38af8de868d4434e3",
       "declaration:update_note:on": "4714770ee5a3835cfc6d7687bf868d4f598879af719d85a38af8de868d4434e3",
       "guard:html_text_edit": "62391efd547d7c9c3a2f50d65152311b218151bc04181679de23d1fc8e1a98d0",
