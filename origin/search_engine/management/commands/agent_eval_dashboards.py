@@ -21,6 +21,7 @@ and answer: Claude judges it.
 from __future__ import annotations
 
 import json
+import traceback
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
@@ -207,6 +208,11 @@ class Command(BaseCommand):
                     self._run_skill(rows, skill_cases, reps, info, guard)
         except harness.CostCapReached:
             self.stdout.write("cost cap reached: stopping.")
+        except Exception as exc:
+            # Outside production, `operator_audit.run_audited` runs a command AGAIN when it raises:
+            # that would bill the whole run twice. A CommandError exits instead.
+            self.stderr.write(traceback.format_exc())
+            raise CommandError(f"the run stopped: {exc!r}") from exc
         finally:
             out = Path(json_path) if json_path else None
             self._finish(rows, out, self._client_usd + guard.spent)

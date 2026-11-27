@@ -543,6 +543,11 @@ class CommandTests(FixtureBase):
         self.assertIn("cost cap reached", text)
         self.assertEqual(len(client.requests), 1)
 
+    def test_a_crash_exits_as_a_command_error_so_nothing_runs_the_bill_again(self):
+        with mock.patch.object(mcp_dashboards, "run_case", side_effect=RuntimeError("boom")):
+            with self.assertRaisesMessage(CommandError, "the run stopped"):
+                self.run_command("--suite", "mcp", "--ken-approved", "--cost-cap-usd", "20")
+
     def test_without_the_fixture_it_refuses_instead_of_building_it(self):
         fixture.TeamMaster.objects.filter(owner_id=fixture.FIXTURE_USER_ID).update(is_demo=False)
         with self.assertRaisesMessage(CommandError, "agent_eval_setup"):
