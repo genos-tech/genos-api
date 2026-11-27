@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from unittest import mock
 
+from django.core.management import get_commands
 from django.core.management.base import BaseCommand, CommandError
 from django.test import TestCase
 
@@ -26,6 +27,7 @@ class _Cmd(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("pos", nargs="*")
+        parser.add_argument("--apply", action="store_true")
         parser.add_argument("--email", default="")
         parser.add_argument("--reason", default="")
         parser.add_argument("--heartbeat", default="")
@@ -33,6 +35,11 @@ class _Cmd(BaseCommand):
 
     def handle(self, *args, **options):
         type(self).body()
+
+
+def _accept_real_flags(self, parser):
+    parser.add_argument("--recreate", action="store_true")
+    parser.add_argument("--list", action="store_true")
 
 
 def _run(name, *args, body=lambda: None, env=PROD):
@@ -103,6 +110,44 @@ class OperatorAuditTests(TestCase):
         alert = OpsAlert.objects.get()
         self.assertIn("repair_everything", alert.summary)
         self.assertEqual(alert.kind, "security")
+
+    def test_planned_runbook_commands_do_not_alert(self):
+        runs = [
+            ("operator_cutoff",),
+            ("sync_official_skills",),
+            ("sync_official_skills", "--apply"),
+            ("sync_official_skills", "--reason", "x"),
+            ("throttle_denials", "--reason", "x"),
+            ("media_check",),
+            ("opensearch_setup",),
+        ]
+        for argv in runs:
+            with self.subTest(argv=argv):
+                seen = len(_rows())  # append-only: only the rows of this run
+                _run(*argv)
+                new = [r.action for r in _rows()[seen:]]
+                self.assertEqual(new, [SecurityAction.OPS_COMMAND] * 2)
+        self.assertFalse(OpsAlert.objects.exists())
+
+    def test_command_allowed_only_bare_alerts_with_any_argument(self):
+        runs = [
+            ("opensearch_setup", "--recreate"),
+            ("opensearch_setup", "--recr"),  # argparse accepts the abbreviation
+            ("media_check", "--list"),
+        ]
+        for argv in runs:
+            with self.subTest(argv=argv):
+                seen = len(_rows(SecurityAction.ALERT_OPS_COMMAND_UNLISTED))
+                # `_Cmd` does not take these flags; the audit runs before parsing anyway.
+                with mock.patch.object(_Cmd, "add_arguments", _accept_real_flags):
+                    _run(*argv)
+                self.assertEqual(len(_rows(SecurityAction.ALERT_OPS_COMMAND_UNLISTED)), seen + 1)
+
+    def test_every_allowed_name_is_a_real_command(self):
+        """A typo or a renamed command would silently start alerting again."""
+        listed = operator_audit.ALLOWED_INTERACTIVE | operator_audit.ALLOWED_WITHOUT_ARGS
+        # `help` and `version` are handled by `ManagementUtility`, not by a command module.
+        self.assertEqual(listed - set(get_commands()) - {"help", "version"}, set())
 
     def test_failed_command_is_recorded_failed_and_still_raises(self):
         def boom():

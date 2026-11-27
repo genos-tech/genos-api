@@ -12,9 +12,10 @@ Only when `RAILWAY_ENVIRONMENT=production`. What is written:
 - **A person at a shell** (no `--heartbeat`): two `ops.command` rows, one at the
   start (`phase=started`) and one at the end (`phase=finished` or `failed`, with
   the duration and the exit status). Source `operator`, actor label
-  `os:<user>`. A command that is not in `ALLOWED_INTERACTIVE` also writes an
-  `alert.ops_command_unlisted` row, which opens an `OpsAlert` that
-  `ops_alert_tick` mails (the alert states the command name and nothing else).
+  `os:<user>`. A command that is neither in `ALLOWED_INTERACTIVE` nor in
+  `ALLOWED_WITHOUT_ARGS` and run bare also writes an `alert.ops_command_unlisted` row, which
+  opens an `OpsAlert` that `ops_alert_tick` mails (the alert states the command name and nothing
+  else).
 - **`shell`** writes `ops.shell_opened` and `ops.shell_closed` and is never on
   the allowlist, so it alerts too. What is typed inside it is NOT captured:
   the row says that a shell was open, not what ran in it. The arguments of
@@ -49,7 +50,9 @@ from origin.services.security_events import record_security_event
 
 logger = logging.getLogger(__name__)
 
-# Commands an operator may run by hand without raising an alert: deploy steps and read-only checks.
+# Commands an operator may run by hand without raising an alert: deploy steps, read-only checks and
+# planned runbook steps. A name here is quiet with ANY arguments, so a command belongs only if none
+# of its flags can grant access, move data out or destroy data.
 # `operator_cutoff` is here because it writes its own, richer rows.
 ALLOWED_INTERACTIVE = frozenset(
     {
@@ -59,7 +62,20 @@ ALLOWED_INTERACTIVE = frozenset(
         "migrate",
         "operator_cutoff",
         "showmigrations",
+        "sync_official_skills",  # publishes the catalog shipped in the image; prints slugs only
+        "throttle_denials",  # RAILWAY_DEPLOY: 429 counts per scope
         "version",
+    }
+)
+
+# Quiet only when run with NO argument at all; any flag alerts (argparse takes abbreviations, so
+# naming the bad flags would not be enough).
+ALLOWED_WITHOUT_ARGS = frozenset(
+    {
+        "media_check",  # BACKUP_RESTORE: counts per field; `--list` prints file paths
+        # Not typed by a person: the backend-django pre-deploy step and the reindexer cron's
+        # entrypoint run it bare, without `--heartbeat`. `--recreate` destroys the index.
+        "opensearch_setup",
     }
 )
 
@@ -130,6 +146,10 @@ def _flag_value(argv: list[str], flag: str) -> str:
     return ""
 
 
+def _is_allowed(name: str, rest: list[str]) -> bool:
+    return name in ALLOWED_INTERACTIVE or (name in ALLOWED_WITHOUT_ARGS and not rest)
+
+
 def _write(action: str, command: str, who: str, metadata: dict) -> None:
     record_security_event(
         action,
@@ -168,7 +188,7 @@ def run_audited(command: BaseCommand, argv: list[str], run):
             _write(SecurityAction.OPS_SHELL_OPENED, name, who, {**meta, "content_captured": False})
         else:
             _write(SecurityAction.OPS_COMMAND, name, who, {**meta, "phase": "started"})
-        if is_shell or name not in ALLOWED_INTERACTIVE:
+        if is_shell or not _is_allowed(name, rest):
             _write(SecurityAction.ALERT_OPS_COMMAND_UNLISTED, name, who, meta)
     except Exception:  # noqa: BLE001
         logger.exception("operator audit start failed command=%s", name)
