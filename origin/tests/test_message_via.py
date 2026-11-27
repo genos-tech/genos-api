@@ -179,13 +179,15 @@ class TheMirroredCommentIsStamped(_Base):
             self.assertEqual(set(mirror.metadata), {"taskCommentId"})
 
     def test_the_lazily_made_card_header_is_not_the_apps_card(self):
-        """A comment on a task with no card makes a bare header; the app wrote the comment, not
-        the card, so the header is unstamped."""
+        """A comment on a task with no card makes its card; the app wrote the comment, not the
+        card, so the card is unstamped."""
         task = TaskMaster.objects.create(
             team=self.team, project=self.project, reporter=self.user, title="No card", status="Open"
         )
         self.comment(task, CLAUDE)
-        self.assertEqual(self.card_of(task).metadata, {"taskId": task.task_id})
+        metadata = self.card_of(task).metadata
+        self.assertEqual(metadata["taskId"], task.task_id)
+        self.assertNotIn("via", metadata)
 
 
 class TheCardIsStamped(_Base):
@@ -327,10 +329,14 @@ class AClientCannotPlantOne(_Base):
             self.assertNotIn("via", res.data["metadata"], planted)
 
     def test_rest_post_keeps_the_task_id_the_card_needs(self):
-        res = self._post({"taskId": self.task.task_id, "via": CLAUDE})
+        # A task with no card yet: one that has a card is answered with it (MIP-2483).
+        task = TaskMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title="No card", status="Open"
+        )
+        res = self._post({"taskId": task.task_id, "via": CLAUDE})
         row = Message.objects.get(pk=res.data["id"])
-        self.assertEqual(row.metadata, {"taskId": self.task.task_id})
-        self.assertEqual(row.task_id, self.task.task_id)
+        self.assertEqual(row.metadata, {"taskId": task.task_id})
+        self.assertEqual(row.task_id, task.task_id)
 
     def test_a_thread_reply_post_drops_it(self):
         res = self._post({"via": CLAUDE}, parent_id=str(self.card.id))
@@ -348,7 +354,8 @@ class AClientCannotPlantOne(_Base):
         self.assertEqual(first.data["id"], again.data["id"])
         self.assertNotIn("via", Message.objects.get(pk=first.data["id"]).metadata)
 
-    def test_the_card_patch_drops_it(self):
+    def test_the_card_patch_cannot_plant_one(self):
+        """The PATCH rebuilds the card from the row (MIP-2483): nothing the client sends is stored."""
         url = reverse("v3_task_card_message", args=[self.task.task_id])
         for planted in PLANTS:
             res = self.client.patch(
@@ -356,41 +363,23 @@ class AClientCannotPlantOne(_Base):
                 {
                     "body": BODY,
                     "body_text": "x",
-                    "metadata": {"taskId": self.task.task_id, "via": planted},
+                    "metadata": {"taskId": self.task.task_id, "via": planted, "keep": "no"},
                 },
                 format="json",
             )
             self.assertEqual(res.status_code, 200, res.content)
-            self.assertEqual(
-                Message.objects.get(pk=self.card.pk).metadata, {"taskId": self.task.task_id}
-            )
+            row = Message.objects.get(pk=self.card.pk)
+            self.assertNotIn("via", row.metadata)
+            self.assertNotIn("keep", row.metadata)
             self.assertNotIn("via", res.data["metadata"])
 
-    def test_the_card_patch_with_no_metadata_does_not_keep_an_old_stamp(self):
+    def test_the_card_patch_keeps_the_creations_stamp(self):
+        """A card the server rebuilds is still the one made through that app."""
         stamped = self.card_of(self.make_task(CLAUDE))
         url = reverse("v3_task_card_message", args=[stamped.task_id])
         res = self.client.patch(url, {"body": BODY, "body_text": "edited"}, format="json")
         self.assertEqual(res.status_code, 200, res.content)
-        self.assertNotIn("via", Message.objects.get(pk=stamped.pk).metadata)
-        self.assertNotIn("via", res.data["metadata"])
-
-    def test_a_person_rewriting_a_stamped_card_with_metadata_drops_the_stamp(self):
-        stamped = self.card_of(self.make_task(CLAUDE))
-        url = reverse("v3_task_card_message", args=[stamped.task_id])
-        res = self.client.patch(
-            url,
-            {"body": BODY, "body_text": "e", "metadata": {"taskId": stamped.task_id}},
-            format="json",
-        )
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertNotIn("via", Message.objects.get(pk=stamped.pk).metadata)
-
-    def test_the_card_patch_leaves_a_card_with_no_stamp_and_no_metadata_untouched(self):
-        before = Message.objects.get(pk=self.card.pk).metadata
-        url = reverse("v3_task_card_message", args=[self.task.task_id])
-        res = self.client.patch(url, {"body": BODY, "body_text": "x"}, format="json")
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(Message.objects.get(pk=self.card.pk).metadata, before)
+        self.assertEqual(Message.objects.get(pk=stamped.pk).metadata["via"], REDUCED_CLAUDE)
 
     def test_rewrite_card_message_strips_unless_the_server_built_the_metadata(self):
         from origin.views.chat.message_views import rewrite_card_message

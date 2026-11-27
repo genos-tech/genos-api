@@ -35,6 +35,7 @@ from origin.services.milestone_service import (
 )
 from origin.services.task_assignment_notice import notify_milestone_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_card_post import post_milestone_created_card
 from origin.services.task_collaborators import (
     may_name_person,
     refuse_new_milestone_people,
@@ -482,6 +483,8 @@ class MilestoneView(AuthenticatedAPIView):
         # Creating a milestone always writes a backing TaskMaster row,
         # which the project task table renders alongside regular tasks.
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+        # The project-chat card, posted here so it does not depend on the browser (MIP-2483).
+        post_milestone_created_card(milestone, actor_id=request.user.id, self_assign=True)
         return Response(
             {"milestone": _serialize_milestone(milestone)},
             status=status.HTTP_201_CREATED,

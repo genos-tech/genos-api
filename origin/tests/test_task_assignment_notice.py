@@ -223,10 +223,10 @@ class AppSaveNoticeTests(AssignmentNoticeBase):
 
         self.assertFalse(Activity.objects.exists())
 
-    def test_the_create_forms_finalising_save_is_left_to_the_browsers_own_card(self):
+    def test_the_create_forms_finalising_save_posts_the_card_and_tells_once(self):
         """The create form POSTs a scaffold row, then PUTs the real content over it (assignee
-        none -> chosen) and the browser posts the card itself. Telling them here too would ping
-        them twice and post a second card."""
+        none -> chosen). That save is the create, so the server posts the card (MIP-2483), whose
+        `@` tells the assignee; no assignment notice on top."""
         scaffold = TaskMaster.objects.create(
             team=self.team,
             project=self.project,
@@ -235,13 +235,19 @@ class AppSaveNoticeTests(AssignmentNoticeBase):
             status="Open",
             is_init_task=True,
         )
-        before = Message.objects.count()
 
         self._put(scaffold, title="Real", assignee=str(self.user2.id), is_init_task=False)
 
-        self.assertEqual(TaskMaster.objects.get(pk=scaffold.pk).assignee_id, self.user2.id)
-        self.assertFalse(Activity.objects.exists())
-        self.assertEqual(Message.objects.count(), before)
+        (card,) = Message.objects.filter(task_id=scaffold.task_id, is_thread_reply=False)
+        self.assertEqual(card.body_text, "Real")
+        (activity,) = self._told(self.user2)
+        self.assertEqual((activity.message_id, activity.meta.get("taskAssign")), (card.id, None))
+
+        # Saving it again is an ordinary edit: still one card.
+        self._put(scaffold, title="Real two", assignee=str(self.user2.id))
+        self.assertEqual(
+            Message.objects.filter(task_id=scaffold.task_id, is_thread_reply=False).count(), 1
+        )
 
 
 class AssignActivityTests(AssignmentNoticeBase):

@@ -53,14 +53,11 @@ class ConversionRefused(Exception):
 def _refresh_card(*, task_id=None, milestone_id=None) -> None:
     """The row's card in the project chat now shows what it was: rewrite it as what it is (MIP-1583).
 
-    The browser rewrites a card after an edit it makes (`PATCH card-message`) but never calls it
-    after a conversion, so the card of the app's own conversion stayed the task's (or the
-    milestone's) while the agent's, a write with no browser, was refreshed by the server. The
-    conversion is the server's whoever asked (`derived`), so both paths refresh. Nothing is
-    written when the card already says it, and none is made when there is none."""
+    The browser never sends a card rewrite after a conversion, so this does it, whoever asked.
+    Nothing is written when the card already says it, and none is made when there is none."""
     from origin.services.task_card_post import schedule_refresh  # noqa: PLC0415
 
-    schedule_refresh(task_id=task_id, milestone_id=milestone_id, derived=True)
+    schedule_refresh(task_id=task_id, milestone_id=milestone_id)
 
 
 def convert_task_to_milestone(task_id: int) -> MilestoneMaster:
