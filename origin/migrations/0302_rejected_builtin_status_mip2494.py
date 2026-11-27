@@ -46,7 +46,7 @@ def remove_rejected(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0300_message_moved_away_mip2516"),
+        ("origin", "0301_automation_rules_mip2498"),
     ]
 
     operations = [migrations.RunPython(add_rejected, remove_rejected)]

@@ -31,7 +31,7 @@ from origin.services.task_status_scope import parse_statuses
 from origin.services.task_status_values import status_value_error
 from origin.tests.test_project_statuses import StatusTestBase
 
-backfill = import_module("origin.migrations.0301_rejected_builtin_status_mip2494")
+backfill = import_module("origin.migrations.0302_rejected_builtin_status_mip2494")
 
 
 class RejectedBase(StatusTestBase):
