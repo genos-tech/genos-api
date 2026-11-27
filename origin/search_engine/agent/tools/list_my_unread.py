@@ -28,6 +28,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         kinds=args.get("kinds"),
         chat_id=args.get("chat_id"),
         task_id=args.get("task_id"),
+        offset=args.get("offset"),
     )
 
 
@@ -69,6 +70,7 @@ LIST_MY_UNREAD = Tool(
                 "description": "Only this chat's unread (a chat id from an earlier result).",
             },
             "task_id": {"type": "INTEGER", "description": "Only this task's unread."},
+            "offset": {"type": "INTEGER", "description": "The `next_offset` of the last call."},
         },
     },
     run=_run,

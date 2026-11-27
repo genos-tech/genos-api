@@ -64,7 +64,8 @@ class TestTheSurfaceLists(McpBase):
         # MIP-1594 design: about 20; MIP-2049 (D1, approved 2026-11-23) grew it to 34 with the tools
         # the shipped general skills call; MIP-2327 made it 35 (get_genos_help, user-guide milestone MIP-2304);
         # MIP-2343 made it 36 (save_html_note, Ken 2026-11-24; still gated by HTML_NOTES).
-        self.assertLessEqual(len(surfaces.CORE_TOOLS), 36)
+        # 36 + the two reads of `unread-summary` and `comments-waiting-on-me` (MIP-2485).
+        self.assertLessEqual(len(surfaces.CORE_TOOLS), 38)
 
     def test_the_tools_the_general_skills_call_are_on_core(self):
         for name in (
@@ -80,12 +81,14 @@ class TestTheSurfaceLists(McpBase):
             "list_calendar_events",
             "get_stale_tasks",
             "update_task_dependencies",
+            "list_my_unread",
+            "list_my_waiting_comments",
         ):
             self.assertIn(name, surfaces.CORE_TOOLS)
 
     def test_the_genos_workflow_tools_the_core_is_for_are_on_it(self):
-        # The genos-workflow skill's core calls (genos-docs skills/genos-workflow). Four it names are
-        # deliberately NOT on core (list_my_unread, get_note_history, restore_task_body,
+        # The genos-workflow skill's core calls (genos-docs skills/genos-workflow). Three it names are
+        # deliberately NOT on core (get_note_history, restore_task_body,
         # restore_note_version): they are on their domain endpoints, and the design says so.
         for name in (
             "get_my_briefing",

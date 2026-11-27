@@ -22,6 +22,8 @@ out = {
         for n, t in base.REGISTRY.items()
     },
     "mcp_only": sorted(base.MCP_ONLY_REGISTRY),
+    # In the app only while their flag is on (MIP-2485): a runbook may name one.
+    "flagged": sorted(base.FLAGGED_REGISTRY),
     "catalog": {t.name: t.registry_name for t in mcp.CATALOG},
 }
 with open("tools.json", "w") as f:

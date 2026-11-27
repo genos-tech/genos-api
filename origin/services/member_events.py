@@ -206,6 +206,8 @@ NO_SINGLE_ITEM = frozenset(
         # What the member has not read (MIP-1375): a read of their own unread rows, which names no
         # single item, so it may not leave a "changed in your AI app" marker on one.
         "list_my_unread",
+        # The comments waiting on the member (MIP-2485): the same, a read across many tasks.
+        "list_my_waiting_comments",
         # What matters to the member (MIP-1087): the first reads their own rollups, the other
         # two keep a mark or a weight of their own. None changes anything on a task, so none
         # may leave a "changed in your AI app" marker on one.

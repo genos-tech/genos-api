@@ -1,0 +1,23 @@
+# MIP-2485: one behaviour case for each of the two catch-up skills' reads, asked in the person's words.
+# The second needs the arm that turns AGENT_INAPP_WAITING_COMMENTS_TOOL on (there is none yet: add
+# `arms/t2485.yaml` in the PR that measures and flips the flag).
+# WRITTEN, NOT RUN (no paid eval for this change).
+
+- id: t2485-unread-summary
+  lang: en
+  tags: [eval-group, t2485]
+  query: "I was off for two weeks. Summarize my unread messages by chat and tell me what to read first."
+  fixture: true
+  expect:
+    tools_used_contains: ["list_my_unread"]
+    no_errors: true
+
+- id: t2485-comments-waiting
+  lang: en
+  tags: [eval-group, t2485]
+  query: "Which task comments are waiting for my answer?"
+  fixture: true
+  requires_arm: t2485
+  expect:
+    tools_used_contains: ["list_my_waiting_comments"]
+    no_errors: true

@@ -96,4 +96,4 @@ into one paragraph. Write a bold first line, then one list item per label
 - **Checked / not checked:** <evidence>; <what was not run>.
 ```
 
-Source: [Genos skills v0.7.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.7.0/plugins/genos/skills/handoff/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.8.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.8.0/plugins/genos/skills/handoff/SKILL.md), the runbook this skill was made from.

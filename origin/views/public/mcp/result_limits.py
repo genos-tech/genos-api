@@ -385,6 +385,7 @@ HINTS: dict[str, str] = {
     "get_item_line": "Pass a smaller `limit`, or a narrower since/until.",
     "get_timeline": "Pass a smaller `limit`, a narrower since/until, or `kinds`; page with `cursor`.",
     "list_my_unread": "Pass a smaller `limit`, or narrow with chat_id, task_id, kinds or since.",
+    "list_my_waiting_comments": "Pass a smaller `limit` or `days`, or one `task_id`; page with `offset`.",
     "get_my_importance": "Pass a smaller `limit`, or narrow with project_id.",
     "get_calendar_event": "Nothing narrower exists; one event's description is cut at the end.",
     "get_my_memory": "Nothing narrower exists; this answer is small.",
