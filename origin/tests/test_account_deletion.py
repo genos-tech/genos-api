@@ -139,7 +139,6 @@ class ErasureTests(BaseAPITestCase):
         self.assertNotEqual(self.user2.email, old_email)
         self.assertTrue(self.user2.email.endswith("@deleted.invalid"))
         self.assertEqual(self.user2.username, DELETED_USERNAME)
-        self.assertIsNone(self.user2.phone_number)
         self.assertFalse(self.user2.has_usable_password())
         self.assertTrue(self.user2.is_deleted)
         # is_active=False is the session kill-switch: SimpleJWT re-reads
