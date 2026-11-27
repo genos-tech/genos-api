@@ -184,9 +184,9 @@ class AppMilestoneNoticeTests(MilestoneNoticeBase):
         )
         self.assertEqual(self._told(self.user3).count(), 1)
 
-    def test_creating_a_milestone_in_the_app_tells_nobody_from_the_server(self):
-        """The browser posts the creation card, whose mentions tell the assignees; the server
-        adding a notice on top would ping them twice."""
+    def test_creating_a_milestone_in_the_app_tells_each_assignee_once(self):
+        """The server posts the creation card (MIP-2483), whose mentions tell the assignees; an
+        assignment notice on top would ping them twice."""
         self.authenticate()
         res = self.client.post(
             MILESTONE_URL,
@@ -199,7 +199,9 @@ class AppMilestoneNoticeTests(MilestoneNoticeBase):
         )
         self.assertEqual(res.status_code, 201, res.data)
 
-        self.assertFalse(Activity.objects.exists())
+        for user in (self.user2, self.user3):
+            (activity,) = self._told(user)
+            self.assertIsNone((activity.meta or {}).get("taskAssign"))
 
 
 class SyncMilestoneAssigneesTests(MilestoneNoticeBase):

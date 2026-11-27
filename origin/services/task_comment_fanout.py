@@ -158,6 +158,7 @@ def fan_out_task_comment(
     # produce no comment-mention activity.
     try:
         mirror = unified_writer.write_task_comment_as_thread_reply(
+            announce_header=True,
             task_id=task_id,
             comment_id=comment.comment_id,
             sender_id=sender_id,
