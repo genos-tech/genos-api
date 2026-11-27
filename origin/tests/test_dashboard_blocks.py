@@ -15,6 +15,7 @@ What is pinned, each by a test that fails when its guard is removed:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import date, timedelta
 from unittest import mock
@@ -100,6 +101,24 @@ class LayoutTests(JobBase):
         self.assertIn("25%", html)
         self.assertIn("1 of 4 done", html)
         self.assertEqual(html_notes.scan_html(html).warnings, [])
+
+    def test_a_late_task_keeps_its_status_colour_and_says_it_is_late(self):
+        rows = [
+            {
+                "text": f"Late {status}",
+                "status": status,
+                "due": (TODAY - timedelta(days=3)).isoformat(),
+            }
+            for status in ("Open", "WIP", "Blocked", "Pending")
+        ]
+        html = draw([{"type": "timeline", "rows": rows}])
+        drawn = html.split("<template data-gd-tools>")[-1].split('<ul class="timeline"', 1)[1]
+        drawn = drawn.split("</ul>", 1)[0]
+        self.assertEqual(
+            re.findall(r'class="dot (s-[a-z]+)"', drawn),
+            ["s-open", "s-wip", "s-blocked", "s-pending"],
+        )
+        self.assertEqual(drawn.count('<span class="when bad">3 days late</span>'), 4)
 
     def test_an_empty_milestone_says_so_and_draws_nothing_else(self):
         dash = self.dash("milestone", milestone_id=self.milestone().milestone_id)
