@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0299_task_number_alias_mip2497"),
+        ("origin", "0300_message_moved_away_mip2516"),
     ]
 
     operations = [
