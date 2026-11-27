@@ -500,6 +500,7 @@ class ServedPageTests(PageBase):
         self.assertFalse(grant["links"])
         self.assertEqual(res["Content-Security-Policy"], EXPECTED_CSP)
         self.assertNotIn(html_note_pages.OPEN_KEY, res.content.decode())
+        self.assertNotIn(html_note_pages.DASHBOARD_UI, res.content.decode())
 
     def test_a_server_drawn_page_runs_only_the_script_with_this_loads_nonce(self):
         self.mark()
@@ -517,9 +518,11 @@ class ServedPageTests(PageBase):
         )
         self.assertIn("sandbox allow-scripts;", policy)
         body = res.content.decode()
-        self.assertEqual(body.count(f'<script nonce="{script_nonce}">'), 1)
+        # Ours, twice: the sentinel and the page's interactive parts (MIP-2452).
+        self.assertEqual(body.count(f'<script nonce="{script_nonce}">'), 2)
         # The page's own script (this test page has one) carries no nonce, so the policy stops it.
-        self.assertNotIn("nonce=", body[body.index("</script>") :])
+        ours = body.index(html_note_pages.DASHBOARD_UI) + len(html_note_pages.DASHBOARD_UI)
+        self.assertNotIn("nonce=", body[ours:])
         self.assertIn(html_note_pages.OPEN_KEY, body)
         self.assertIn("if(!e.isTrusted)return", body)
         self.assertIn('h.indexOf("/workspace/")!==0', body)
