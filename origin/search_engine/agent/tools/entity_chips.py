@@ -89,11 +89,8 @@ def resolve_chip(token: str, *, team_id: str, user_id: str) -> dict[str, Any] | 
         return _task_chip({"task_id": int(m.group(1))}, team_id, user_id)
     m = _DISPLAY_RE.match(token)
     if m:
-        return _task_chip(
-            {"project__code__iexact": m.group(1), "project_task_number": int(m.group(2))},
-            team_id,
-            user_id,
-        )
+        task_id = _task_named(m.group(1), int(m.group(2)), team_id)
+        return _task_chip({"task_id": task_id}, team_id, user_id) if task_id else None
     m = _MILESTONE_RE.match(token)
     if m:
         return _milestone_chip(int(m.group(1)), team_id, user_id)
@@ -145,6 +142,15 @@ def _group_chip(group_id: int, team_id: str) -> dict[str, Any] | None:
         groupName=group.group_name,
         memberCount=MentionGroupMembers.objects.filter(group_id=group.group_id).count(),
     )
+
+
+def _task_named(code: str, number: int, team_id: str) -> int | None:
+    """The team's task a display id names, now or before a move (MIP-2497)."""
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+    from origin.services.task_number_alias import with_display_id  # noqa: PLC0415
+
+    tasks = TaskMaster.objects.filter(team_id=team_id, is_deleted=False)
+    return with_display_id(tasks, code, number).values_list("task_id", flat=True).first()
 
 
 def _task_chip(lookup: dict[str, Any], team_id: str, user_id: str) -> dict[str, Any] | None:

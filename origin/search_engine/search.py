@@ -694,6 +694,7 @@ def search(
             index=index,
             base_filter=base_filter,
             for_agent=for_agent,
+            team_id=team_id,
         )
 
     # --- Note containers (MIP-839): the path, for those who may see it. ---
@@ -1909,6 +1910,17 @@ def _display_id_number(entity: dict) -> int:
     return int(tail) if tail.isdigit() else 0
 
 
+def _former_task_ids(typed: str, team_id: str | None) -> set[str]:
+    """The ids (as indexed) of the team's tasks that were `typed` before a move. Who may see them
+    is still the index filters' call."""
+    code, _, number = typed.rpartition("-")
+    if not team_id or not number or len(number) > 9:
+        return set()
+    from origin.services.task_number_alias import former_task_ids  # noqa: PLC0415
+
+    return {str(task_id) for task_id in former_task_ids(code, int(number), team_id)}
+
+
 def _pin_display_id_matches(
     grouped: list[dict],
     query: str,
@@ -1917,6 +1929,7 @@ def _pin_display_id_matches(
     index: str,
     base_filter: list[dict],
     for_agent: bool,
+    team_id: str | None = None,
 ) -> list[dict]:
     """Put the tasks (and milestones) whose display id the query is, or
     starts with, ahead of everything else: the exact id first, then the
@@ -1945,6 +1958,28 @@ def _pin_display_id_matches(
     except Exception:  # noqa: BLE001 — the ranked results stand on their own
         log.warning("Display-id lookup failed; skipping it", exc_info=True)
         return grouped
+    exact = typed.lower()
+    former: set[str] = set()
+    if not any((h["_source"].get("task_display_id") or "").lower() == exact for h in hits):
+        # The id may be one a task had before it moved (MIP-2497). The chunks
+        # carry only the current id, so ask the database who held it and fetch
+        # those tasks under the SAME team and access filters.
+        try:
+            former = _former_task_ids(typed, team_id)
+            if former:
+                body["query"] = {
+                    "bool": {
+                        "filter": [
+                            *base_filter,
+                            {"terms": {"chunk_type": list(_DISPLAY_ID_CHUNK_TYPES)}},
+                            {"terms": {"task_id": sorted(former)}},
+                        ]
+                    }
+                }
+                moved = client.search(index=index, body=body).get("hits", {}).get("hits", [])
+                hits = moved + [h for h in hits if h["_id"] not in {m["_id"] for m in moved}]
+        except Exception:  # noqa: BLE001 — the prefix matches still stand
+            log.warning("Former display-id lookup failed; skipping it", exc_info=True)
     if not hits:
         return grouped
 
@@ -1971,10 +2006,16 @@ def _pin_display_id_matches(
         e["task_display_id"] = src.get("task_display_id")
         e["display_id_match"] = True
     pins = resolve_milestone_mirrors(pins)
-    exact = typed.lower()
+    former_keys = {
+        (h["_source"].get("entity_type"), h["_source"].get("entity_id"))
+        for h in hits
+        if h["_source"].get("task_id") in former
+    }
+    # The task that has the id now, then the one that had it, then the rest.
     pins.sort(
         key=lambda e: (
             (e.get("task_display_id") or "").lower() != exact,
+            (e.get("entity_type"), e.get("entity_id")) not in former_keys,
             _display_id_number(e),
         )
     )

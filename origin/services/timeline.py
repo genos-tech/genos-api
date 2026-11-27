@@ -91,6 +91,7 @@ from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
 from origin.services import briefing, item_lines, member_events, note_scope, plain_text
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
+from origin.services.task_number_alias import with_display_id
 
 # --------------------------------------------------------------------------- #
 # The contract's constants                                                     #
@@ -312,13 +313,8 @@ def _task_id_from(ref: Any, team_id: str) -> int | None:
     display = _DISPLAY_ID.match(text)
     if display:
         return (
-            TaskMaster.objects.filter(
-                live_tasks_q(),
-                team_id=team_id,
-                project__code__iexact=display.group("code"),
-                project_task_number=int(display.group("number")),
-                is_deleted=False,
-            )
+            with_display_id(TaskMaster.objects, display.group("code"), int(display.group("number")))
+            .filter(live_tasks_q(), team_id=team_id, is_deleted=False)
             .values_list("task_id", flat=True)
             .first()
         )

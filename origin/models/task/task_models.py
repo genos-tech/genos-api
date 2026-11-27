@@ -259,18 +259,64 @@ def set_root_task_id(sender, instance, created, **kwargs):
     instance.save(update_fields=["root_task_id"])
 
 
+class TaskNumberAlias(models.Model):
+    """A number a task held in a project it has since left (MIP-2497).
+
+    A move re-claims the number in the destination, so "MIP-123" becomes "WEB-7"; this row keeps
+    "MIP-123" opening the same task (`origin.services.task_number_alias`). Keyed by project and
+    number, not by the code string, so a renamed code carries its aliases as it carries its live
+    ids. The number stays RESERVED: `claim_project_task_number` counts these rows, or the next
+    task of the old project would take it and every old link would open the wrong task. That is
+    also why a deleted task leaves its rows behind (SET_NULL).
+    """
+
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        related_name="task_number_aliases",
+        to_field="project_id",
+    )
+    number = models.IntegerField()
+    task = models.ForeignKey(
+        TaskMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="number_aliases",
+        to_field="task_id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "number"], name="task_number_alias_unique_per_project"
+            ),
+        ]
+
+
 def _next_project_task_number(project_id, exclude_pk):
     """MAX(project_task_number)+1 within a project, treating an empty
-    project (all-NULL) as 0 so the first task gets 1."""
-    return (
+    project (all-NULL) as 0 so the first task gets 1. Numbers tasks held
+    before moving away count too (`TaskNumberAlias`).
+
+    Tasks are read first and aliases second: a move that commits between
+    the two writes its alias in the same transaction that frees the
+    number, so one of the reads always sees it.
+    """
+    held = (
         TaskMaster.objects.filter(project_id=project_id)
         .exclude(pk=exclude_pk)
         .aggregate(m=Max("project_task_number"))["m"]
         or 0
-    ) + 1
+    )
+    left = (
+        TaskNumberAlias.objects.filter(project_id=project_id).aggregate(m=Max("number"))["m"] or 0
+    )
+    return max(held, left) + 1
 
 
-def claim_project_task_number(instance):
+def claim_project_task_number(instance, *, may_return=True):
     """Claim the next free sequential number for `instance` within its
     current project, and persist it.
 
@@ -286,21 +332,40 @@ def claim_project_task_number(instance):
     the next free number. Without this loop the IntegrityError bubbled all
     the way out of the request as an unhandled 500.
 
+    A task moving BACK to a project takes the number it had there, and that
+    alias row goes (MIP-2497). `may_return=False` skips the lookup for a
+    task just created, which has no past.
+
     The `save()` here re-fires post_save with `created=False`, which every
     receiver guards on, so this doesn't recurse.
     """
     for _ in range(_PROJECT_NUMBER_MAX_RETRIES):
         try:
             with transaction.atomic():
-                instance.project_task_number = _next_project_task_number(
-                    instance.project_id, instance.pk
-                )
+                former = None
+                if may_return:
+                    former = (
+                        TaskNumberAlias.objects.filter(
+                            project_id=instance.project_id, task_id=instance.pk
+                        )
+                        .order_by("-pk")
+                        .first()
+                    )
+                if former is not None:
+                    instance.project_task_number = former.number
+                    former.delete()
+                else:
+                    instance.project_task_number = _next_project_task_number(
+                        instance.project_id, instance.pk
+                    )
                 instance.save(update_fields=["project_task_number"])
             return
         except IntegrityError:
             # Another claim took this number first; drop our guess so the
-            # next iteration recomputes cleanly, then retry.
+            # next iteration recomputes cleanly, then retry. A former number
+            # that turns out to be taken is given up for a new one.
             instance.project_task_number = None
+            may_return = False
     # Exhausted retries under sustained contention. Leave the number unset
     # — `display_id` falls back to "#<task_id>" — rather than 500 the
     # request. Logged so the (very unlikely) exhaustion is visible.
@@ -321,7 +386,7 @@ def assign_project_task_number(sender, instance, created, **kwargs):
         return
     if instance.project_task_number is not None:
         return
-    claim_project_task_number(instance)
+    claim_project_task_number(instance, may_return=False)
 
 
 def task_attachment_path(instance, filename):

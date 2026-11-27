@@ -18,12 +18,14 @@ are moving.
 
 import logging
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster, claim_project_task_number
 from origin.services import change_feed, member_events
+from origin.services.task_number_alias import remember_numbers
 from origin.views.utils.foreign_team_scope import forget_object_team
 from origin.views.utils.note_role import NOTE_TYPE_TASK
 
@@ -294,14 +296,21 @@ def relocate_tasks(
         fields["tags"] = None
     from origin.signals.task_signals import update_tasks_recorded
 
-    update_tasks_recorded(
-        TaskMaster.objects.filter(task_id__in=task_ids), cascade="project_move", **fields
-    )
+    with transaction.atomic():
+        # Their old display ids keep opening them (MIP-2497).
+        remember_numbers(
+            TaskMaster.objects.filter(task_id__in=task_ids, is_init_task=False).values_list(
+                "project_id", "project_task_number", "task_id"
+            )
+        )
+        update_tasks_recorded(
+            TaskMaster.objects.filter(task_id__in=task_ids), cascade="project_move", **fields
+        )
 
-    # Re-fetch AFTER the bulk update so each instance carries the new
-    # project — `claim_project_task_number` counts within `project_id`.
-    for task in TaskMaster.objects.filter(task_id__in=task_ids):
-        claim_project_task_number(task)
+        # Re-fetch AFTER the bulk update so each instance carries the new
+        # project — `claim_project_task_number` counts within `project_id`.
+        for task in TaskMaster.objects.filter(task_id__in=task_ids):
+            claim_project_task_number(task)
 
     return relocate_task_satellites(task_ids, project_id=project_id, team_id=team_id)
 
