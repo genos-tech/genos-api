@@ -177,6 +177,41 @@ class LayoutTests(JobBase):
             ai_dashboard.data_fingerprint(dash), ai_dashboard.data_fingerprint(changed)
         )
 
+    def test_a_day_on_which_nothing_happens_moves_no_fingerprint(self):
+        milestone = self.work()[0]
+        for kind, params in (
+            ("milestone", {"milestone_id": milestone.milestone_id}),
+            ("project", {"project_id": self.project.project_id}),
+            ("mine", {}),
+        ):
+            first = self.dash(kind, **params)
+            self.now += timedelta(days=1)
+            second = self.dash(kind, **params)
+            self.now -= timedelta(days=1)
+            self.assertEqual(
+                ai_dashboard.data_fingerprint(first),
+                ai_dashboard.data_fingerprint(second),
+                kind,
+            )
+
+    def test_finished_milestones_do_not_use_up_the_room_of_the_running_ones(self):
+        for n in range(3):
+            done = self.milestone(f"Old {n}")
+            done.status, done.due_date = "Closed", self.local_today() - timedelta(days=400)
+            done.save(update_fields=["status", "due_date"])
+        running = self.milestone("Running")
+        self.make_task("Left", milestone=running)
+        with mock.patch.object(dashboard_blocks, "MAX_MILESTONES", 2):
+            blocks = self.dash("project", project_id=self.project.project_id)["blocks"]
+        rows = next(b for b in blocks if b["type"] == "meters")["rows"]
+        self.assertIn("Running", [r["text"] for r in rows])
+
+    def test_a_close_just_past_the_last_day_is_not_lost_from_the_pace(self):
+        trend = dashboard_blocks.pace(
+            [{"label": "2026-11-28", "closed": 2, "created": 0}], "week", TODAY, 7
+        )
+        self.assertEqual(trend["points"][-1]["closed"], 2)
+
     def test_the_chat_notice_and_the_inbox_rows_are_made_from_the_same_data_as_before(self):
         milestone = self.work()[0]
         report = self.run_job("ai_dashboard", kind="milestone", milestone_id=milestone.milestone_id)

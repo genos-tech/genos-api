@@ -380,11 +380,18 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
 
     window = {"now": now, "since": since, "today": today, "days": days}
     if kind == "milestone":
-        blocks = dashboard_blocks.milestone_layout(
-            ctx, summary, milestone, readers, closed_rows=closed_rows, someone=someone, **window
+        blocks, hidden = dashboard_blocks.milestone_layout(
+            ctx,
+            summary,
+            milestone,
+            readers,
+            series=series,
+            closed_rows=closed_rows,
+            someone=someone,
+            **window,
         )
     elif kind == "project":
-        blocks = dashboard_blocks.project_layout(
+        blocks, hidden = dashboard_blocks.project_layout(
             ctx,
             summary,
             work,
@@ -402,7 +409,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
             else schedule_audience.common_project_ids(readers, ctx.team_id)
         )
         del window["now"]
-        blocks = dashboard_blocks.mine_layout(
+        blocks, hidden = dashboard_blocks.mine_layout(
             ctx,
             summary,
             projects,
@@ -412,6 +419,10 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
             closed_rows=closed_rows,
             **window,
         )
+
+    if hidden and not note:
+        note_key = "note_hidden"
+        note = "Some tasks are not named here because not everyone can open them."
 
     subtitle = f"Last {days} days, as of {today.isoformat()}"
     dashboard: Dashboard = {
@@ -472,14 +483,21 @@ def report_of(dashboard: Dashboard) -> Report:
     }
 
 
+# Left out of the fingerprint. References and links are not what a reader sees. The others move
+# with the calendar alone while nothing happens: a block's columns are labelled by the window's
+# days (the `series` already holds what was closed and created), and the two counts are of windows
+# that roll forward. With them every AI dashboard would pay for a new summary each day.
+_NOT_FINGERPRINTED = ("ref", "href", "points", "previous", "closed_recently")
+
+
 def _words_only(value: Any) -> Any:
-    """The page's data without references and links: what a reader sees. A row that had one is
-    the plain string it was, so adding links (MIP-2417) moved no stored fingerprint."""
+    """The page's data as the fingerprint reads it. A list row that had only a reference besides
+    its words is the plain string it was, so adding links (MIP-2417) moved no list's hash."""
     if isinstance(value, list):
         return [_words_only(v) for v in value]
     if not isinstance(value, dict):
         return value
-    kept = {k: _words_only(v) for k, v in value.items() if k not in ("ref", "href")}
+    kept = {k: _words_only(v) for k, v in value.items() if k not in _NOT_FINGERPRINTED}
     return kept["text"] if list(kept) == ["text"] else kept
 
 

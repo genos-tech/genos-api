@@ -4,9 +4,11 @@ show, as the blocks `services/dashboard_page` draws.
 Each answers its own question. A milestone: will it be done, and what is in the way. A project:
 which part is stuck, and is the work moving. My progress: what did I finish, and what is next.
 
-The audience rule is `ai_dashboard`'s (MIP-2354): every task named OR counted in these blocks
-passed `visible_tasks`, so no number or name is on the page that a reader of the note may not see.
-A person is named only while they are on the team.
+The audience rule is `ai_dashboard`'s (MIP-2354): every task NAMED here, and every task in the
+open work's counts (workload, timeline, the attention cards), passed `visible_tasks` for every
+reader. The totals (progress, status, closes) are the summary tools' own, as in the headline
+numbers: a milestone or project page is refused when a reader is not on the project. A person is
+named only while they are on the team.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ from collections import Counter
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
+
+from django.db.models import Case, IntegerField, Value, When
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
@@ -47,14 +51,17 @@ def row_of(display_id: Any, title: Any, task_id: Any, **extra: Any) -> dict[str,
     }
 
 
-def statuses_of(tasks, project_ids: Iterable[int], team_id: Any) -> dict[int, str]:
+def rule_of(project_ids: Iterable[int], team_id: Any):
+    """The ancestor rule of these projects (None while its flag is off). It reads every task of
+    them, so a page asks once and passes it on."""
+    if not ancestor_rule.enabled():
+        return None
+    return ancestor_rule.rule_for_projects(set(project_ids), team_id)
+
+
+def statuses_of(tasks, rule) -> dict[int, str]:
     """`{task_id: status}` of the queryset's tasks, each read as the summary tools read it (a task
     under a closed or deleted parent counts as that)."""
-    rule = (
-        ancestor_rule.rule_for_projects(set(project_ids), team_id)
-        if ancestor_rule.enabled()
-        else None
-    )
     qs, field = ancestor_rule.read_by_rule(tasks.distinct(), rule)
     return dict(qs.values_list("task_id", field))
 
@@ -73,6 +80,8 @@ class Open:
                 .values_list("task_id", flat=True)[:MAX_OPEN]
             )
         self.tasks = visible_tasks(ctx, ids, readers)
+        # True when an open task is left out because a reader may not open it.
+        self.hidden = len(self.tasks) < len(ids)
         self.status = {i: statuses[i] for i in self.tasks}
         # blocked task -> the open tasks it waits for, those every reader may open
         deps = list(
@@ -209,13 +218,24 @@ def closed_tasks(task_ids, since: datetime, until: datetime | None = None) -> in
     return rows.values("task_id").distinct().count()
 
 
-def meters(ctx: ToolContext, project_id: int, readers: set[str], now: datetime, since: datetime):
+def meters(
+    ctx: ToolContext, project_id: int, readers: set[str], now: datetime, since: datetime, rule
+):
     """One progress bar per milestone of the project that still has work, had a close in the
     window, or is waiting for its first task."""
+    # The unfinished ones first: a long-lived project's old milestones must not use up the room.
     milestones = list(
         MilestoneMaster.objects.filter(
             team_id=ctx.team_id, project_id=project_id, is_deleted=False
-        ).order_by("due_date", "milestone_id")[:MAX_MILESTONES]
+        ).order_by(
+            Case(
+                When(status__in=("Closed", "Deleted"), then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+            "due_date",
+            "milestone_id",
+        )[:MAX_MILESTONES]
     )
     readable = dashboard_links.paths_for(
         ctx,
@@ -228,7 +248,7 @@ def meters(ctx: ToolContext, project_id: int, readers: set[str], now: datetime, 
         if ref not in readable:
             continue
         work = TaskMaster.objects.filter(milestone_work_q(milestone), project_id=project_id)
-        counts = Counter(statuses_of(work, [project_id], ctx.team_id).values())
+        counts = Counter(statuses_of(work, rule).values())
         total = sum(n for status, n in counts.items() if status != "Deleted")
         ids = work.values("task_id")
         finished = total and counts["Closed"] == total
@@ -273,9 +293,11 @@ def pace(series: list[Any], period: str, today: date, days: int) -> dict[str, An
             at = _bucket(date.fromisoformat(str(point["label"])), unit)
         except ValueError:
             continue
-        if at in totals:
-            totals[at][0] += point["closed"]
-            totals[at][1] += point["created"]
+        # The queries bucket by UTC days and `today` is the owner's: what falls just outside
+        # either end belongs to the end it is next to.
+        at = min(max(at, min(totals)), max(totals))
+        totals[at][0] += point["closed"]
+        totals[at][1] += point["created"]
     return {
         "type": "trend",
         "unit": unit,
@@ -284,6 +306,12 @@ def pace(series: list[Any], period: str, today: date, days: int) -> dict[str, An
             for at, (closed, created) in sorted(totals.items())
         ],
     }
+
+
+def _done(series: list[Any], closed_rows: list[Any], days: int) -> dict[str, Any]:
+    """The latest closes under the same count the headline numbers and the chat notice give."""
+    count = sum(p["closed"] for p in series) if closed_rows else 0
+    return {"type": "done", "count": count, "days": days, "rows": closed_rows}
 
 
 def milestone_layout(
@@ -296,9 +324,11 @@ def milestone_layout(
     since: datetime,
     today: date,
     days: int,
+    series: list[Any],
     closed_rows: list[Any],
     someone: str,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool]:
+    """The blocks, and whether an open task is left out of them."""
     work_q = TaskMaster.objects.filter(milestone_work_q(milestone))
     ids = work_q.values("task_id")
     counts = dict(summary.get("status_breakdown") or {})
@@ -312,9 +342,9 @@ def milestone_layout(
         "closed_recently": closed_tasks(ids, now - timedelta(days=PACE_DAYS)),
     }
     if not hero["total"]:
-        return [hero]
-    projects = set(work_q.values_list("project_id", flat=True))
-    work = Open(ctx, statuses_of(work_q, projects, ctx.team_id), readers)
+        return [hero], False
+    rule = rule_of(set(work_q.values_list("project_id", flat=True)), ctx.team_id)
+    work = Open(ctx, statuses_of(work_q, rule), readers)
     blocks: list[dict[str, Any]] = [hero, {"type": "status", "heading": "", "counts": counts}]
     if work.tasks:
         # The summary also knows a task that waits through its parent.
@@ -322,15 +352,8 @@ def milestone_layout(
         blocks.append(attention(work, today, blocked=work.blocked_ids() | waiting))
         blocks.append(timeline(work, goal=milestone.due_date))
         blocks.append(workload(work, ctx.team_id, someone))
-    blocks.append(
-        {
-            "type": "done",
-            "count": closed_tasks(ids, since) if closed_rows else 0,
-            "days": days,
-            "rows": closed_rows,
-        }
-    )
-    return blocks
+    blocks.append(_done(series, closed_rows, days))
+    return blocks, work.hidden
 
 
 def project_layout(
@@ -347,10 +370,11 @@ def project_layout(
     series: list[Any],
     closed_rows: list[Any],
     someone: str,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool]:
     project_id = summary["project_id"]
     tasks = TaskMaster.objects.filter(task_id__in=work_ids)
-    work = Open(ctx, statuses_of(tasks, [project_id], ctx.team_id), readers)
+    rule = rule_of([project_id], ctx.team_id)
+    work = Open(ctx, statuses_of(tasks, rule), readers)
     counts = dict(summary.get("status_breakdown") or {})
     overdue = summary.get("overdue_count") or 0
     blocked = len(work.blocked_ids())
@@ -365,16 +389,15 @@ def project_layout(
     }
     blocks: list[dict[str, Any]] = [
         numbers,
-        meters(ctx, project_id, readers, now, since),
+        meters(ctx, project_id, readers, now, since, rule),
         {"type": "status", "counts": counts, "wide": True},
         pace(series, period, today, days),
     ]
     if work.tasks:
         blocks.append(workload(work, ctx.team_id, someone))
         blocks.append(attention(work, today))
-    done = closed_tasks(work_ids, since) if closed_rows else 0
-    blocks.append({"type": "done", "count": done, "days": days, "rows": closed_rows})
-    return blocks
+    blocks.append(_done(series, closed_rows, days))
+    return blocks, work.hidden
 
 
 def mine_layout(
@@ -389,7 +412,7 @@ def mine_layout(
     period: str,
     series: list[Any],
     closed_rows: list[Any],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool]:
     """`projects` are the ones this page counts: mine, or those every reader is on."""
     projects = set(projects)
     closes = TaskActivity.objects.filter(
@@ -420,14 +443,14 @@ def mine_layout(
         is_init_task=False,
         is_milestone=False,
     )
-    work = Open(ctx, statuses_of(mine, projects, ctx.team_id), readers)
+    work = Open(ctx, statuses_of(mine, rule_of(projects, ctx.team_id)), readers)
     blocks: list[dict[str, Any]] = [headline]
     if work.tasks:
         blocks.append(attention(work, today, mine=True))
         blocks.append(timeline(work, mine=True))
     # The headline above says how many; this names only the latest.
     blocks.append({"type": "done", "count": len(closed_rows[:5]), "rows": closed_rows[:5]})
-    return blocks
+    return blocks, work.hidden
 
 
 def member_projects(ctx: ToolContext) -> set[int]:

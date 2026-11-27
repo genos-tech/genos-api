@@ -489,7 +489,8 @@ def _workload(page: _Page, block: dict[str, Any]) -> str:
     out = []
     for row, load in zip(rows, loads):
         name = str(row.get("name") or "")
-        face = _t(name[:1].upper(), 1) if name else "–"
+        # `upper` can make two letters of one ("ß"): the avatar holds the first.
+        face = _t(name[:1].upper()[:1], 1) if name else "–"
         label = _t(name, 60) if name else page.say("unassigned")
         out.append(
             f'<li><span class="who" title="{label}"><span class="face">{face}</span>'
@@ -522,10 +523,7 @@ def _timeline(page: _Page, block: dict[str, Any]) -> str:
     if not shown:
         if not undated:
             return ""
-        return (
-            f'<section>{head}<p class="meta">{page.say("nothing_dated")} '
-            f"{page.say('undated', n=undated)}</p></section>"
-        )
+        return f'<section>{head}<p class="meta">{page.say("all_undated", n=undated)}</p></section>'
     goal = _date(block.get("goal"))
     start = page.today - timedelta(days=2)
     end = max([page.today + timedelta(days=7), shown[-1][1], *([goal] if goal else [])])
