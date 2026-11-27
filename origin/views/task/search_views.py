@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from origin.models.project.prj_models import *
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import *
+from origin.services.task_number_alias import with_display_id
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_project_member, reachable_project_ids
 
@@ -205,10 +206,9 @@ class GetTaskByDisplayIdView(AuthenticatedAPIView):
             )
         code, number = match.group(1).upper(), int(match.group(2))
         task = (
-            TaskMaster.objects.filter(
+            with_display_id(TaskMaster.objects, code, number)
+            .filter(
                 project__in=reachable_project_ids(request.user.id, team_id),
-                project__code=code,
-                project_task_number=number,
                 is_init_task=False,
                 is_deleted=False,
             )

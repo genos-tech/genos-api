@@ -47,6 +47,7 @@ from origin.services.task_delivery import (
     delivery_as_dict,
     parse_repo,
 )
+from origin.services.task_number_alias import with_display_id
 
 # A display id inside a branch name: a project code (a letter, then 1–5
 # letters/digits — `project_code.py`'s rule) and a number, each bounded
@@ -126,13 +127,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         for m in _DISPLAY_ID_IN_BRANCH.finditer(branch):
             code, number = m.group(1), int(m.group(2))
             task = (
-                TaskMaster.objects.select_related("project")
-                .filter(
-                    team_id=ctx.team_id,
-                    project__code__iexact=code,
-                    project_task_number=number,
-                    is_deleted=False,
-                )
+                with_display_id(TaskMaster.objects.select_related("project"), code, number)
+                .filter(team_id=ctx.team_id, is_deleted=False)
                 .first()
             )
             if task is None or task.task_id in seen or not _readable(task, ctx):

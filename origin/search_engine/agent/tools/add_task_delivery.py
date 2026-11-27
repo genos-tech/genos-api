@@ -58,6 +58,7 @@ from origin.services.task_delivery import (
     pr_state,
     record_delivery,
 )
+from origin.services.task_number_alias import display_ids
 
 logger = logging.getLogger(__name__)
 
@@ -223,8 +224,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # returned it). Not an error: a branch can legitimately carry no id,
     # that being what this tool is for. Said only when there is a branch
     # or title to judge by; a bare url that couldn't be read says nothing.
-    if (row.branch or row.pr_title) and not mentions_display_id(
-        task.display_id, row.branch, row.pr_title
+    if (row.branch or row.pr_title) and not any(
+        mentions_display_id(display_id, row.branch, row.pr_title)
+        for display_id in display_ids(task)
     ):
         out["display_id_warning"] = (
             f"Neither this link's branch ({row.branch or 'unknown'!r}) nor its PR title "
