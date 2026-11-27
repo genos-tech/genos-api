@@ -319,6 +319,16 @@ class TaskCustomStatusTests(StatusTestBase):
         self.assertEqual(self.put(task, custom_status=review.status_id, title="x").status_code, 200)
         self.assertEqual(self.fresh(task).custom_status_id, review.status_id)
 
+    def test_a_refusal_says_nothing_about_a_project_you_are_not_on(self):
+        review = self.builtin("In Review")
+        task = self.task()
+        theirs = ProjectMaster.objects.create(
+            team=self.team, project_name="Theirs", owner=self.user2, project_system_user=self.user2
+        )
+        for project_id in (theirs.project_id, 999999):
+            response = self.put(task, project=project_id, custom_status=review.status_id)
+            self.assertEqual(response.status_code, 404, response.data)
+
     def test_moving_to_another_project_clears_it(self):
         review = self.builtin("In Review")
         task = self.task("Open", review)
@@ -546,6 +556,20 @@ class MilestoneCustomStatusTests(StatusTestBase):
             format="json",
         )
         self.assertEqual(response.data["code"], "milestone_status")
+
+    def test_a_full_save_of_the_backing_task_may_echo_a_null(self):
+        review = self.builtin("In Review")
+        milestone = create_milestone(
+            self.project, reporter_id=self.user.id, title="M", custom_status=review
+        )
+        response = self.client.put(
+            reverse("task_create"),
+            {"task_id": milestone.task_id, "custom_status": None, "title": "N"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        backing = TaskMaster.objects.get(pk=milestone.task_id)
+        self.assertEqual(backing.custom_status_id, review.status_id)
 
     def test_deleting_a_milestone_clears_the_backing_task(self):
         review = self.builtin("In Review")

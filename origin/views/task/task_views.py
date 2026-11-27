@@ -853,30 +853,6 @@ class TaskMasterView(AuthenticatedAPIView):
         if message := refuse_new_people(task, people_project, request.data):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
-        update_data.pop("custom_status", None)
-        if custom_status_picked:
-            if task.is_milestone:
-                return Response(
-                    {
-                        "error": "Set a milestone's status on the milestone.",
-                        "code": "milestone_status",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            try:
-                row, implied = pick_custom_status(
-                    people_project.project_id if people_project else None,
-                    request.data.get("custom_status"),
-                    current_id=task.custom_status_id,
-                    current_status=task.status,
-                    requested_status=request.data.get("status"),
-                )
-            except StatusError as exc:
-                return _status_refusal(exc)
-            update_data["custom_status"] = row.status_id if row else None
-            if implied:
-                update_data["status"] = implied
-
         if project_changed:
             try:
                 dest_project = ProjectMaster.objects.get(
@@ -947,6 +923,35 @@ class TaskMasterView(AuthenticatedAPIView):
             # a move into (or out of) a shared project look like it did
             # nothing at all.
             update_data["team"] = dest_project.team_id
+
+        # After the destination's own answers, so a refusal here says nothing about a project
+        # the writer is not on.
+        update_data.pop("custom_status", None)
+        if custom_status_picked:
+            if task.is_milestone:
+                # A null is a full save echoing a row it holds no label for: dropped, not refused.
+                if request.data.get("custom_status") not in (None, ""):
+                    return Response(
+                        {
+                            "error": "Set a milestone's status on the milestone.",
+                            "code": "milestone_status",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                try:
+                    row, implied = pick_custom_status(
+                        people_project.project_id if people_project else None,
+                        request.data.get("custom_status"),
+                        current_id=task.custom_status_id,
+                        current_status=task.status,
+                        requested_status=request.data.get("status"),
+                    )
+                except StatusError as exc:
+                    return _status_refusal(exc)
+                update_data["custom_status"] = row.status_id if row else None
+                if implied:
+                    update_data["status"] = implied
 
         # `project_task_number` is only unique WITHIN a project, so it can't
         # ride along on a move: re-sending the source project's number with
@@ -1709,7 +1714,12 @@ class ChildTaskView(AuthenticatedAPIView):
                 # Within a category, the project's own order (MIP-2492). A task with no
                 # custom status stands where the category's default does.
                 _label_rank=Coalesce(
-                    "custom_status__sort_order",
+                    Case(
+                        When(
+                            custom_status__category=F("status"),
+                            then="custom_status__sort_order",
+                        )
+                    ),
                     Subquery(
                         ProjectStatus.objects.filter(
                             project_id=project_id,

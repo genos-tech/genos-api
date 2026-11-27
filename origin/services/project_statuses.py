@@ -86,11 +86,11 @@ def serialize_status(row: ProjectStatus) -> dict:
 
 def custom_status_ref(obj) -> dict | None:
     """`{id, name, category}` of a task's or milestone's custom status, or None. A row whose
-    category no longer matches (a write that skipped `save()`) is not reported."""
+    category or project no longer matches (a write that skipped `save()`) is not reported."""
     if obj.custom_status_id is None:
         return None
     row = obj.custom_status
-    if row is None or row.category != obj.status:
+    if row is None or row.category != obj.status or row.project_id != obj.project_id:
         return None
     return {"id": row.status_id, "name": row.name, "category": row.category}
 

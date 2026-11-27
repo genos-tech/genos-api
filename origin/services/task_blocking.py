@@ -119,7 +119,16 @@ def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
         try:
             task = (
                 TaskMaster.objects.filter(task_id=task_id)
-                .only("task_id", "status", "is_deleted", "is_init_task", "is_milestone", "team_id")
+                .only(
+                    "task_id",
+                    "status",
+                    "custom_status",
+                    "project",
+                    "is_deleted",
+                    "is_init_task",
+                    "is_milestone",
+                    "team_id",
+                )
                 .first()
             )
             if task is None or task.is_deleted or task.is_init_task:
@@ -135,7 +144,7 @@ def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
                 # no-op — recursion still terminates.
                 milestone = (
                     MilestoneMaster.objects.filter(task_id=task_id, is_deleted=False)
-                    .only("milestone_id", "status")
+                    .only("milestone_id", "status", "custom_status", "project")
                     .first()
                 )
                 if milestone is None:
