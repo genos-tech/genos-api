@@ -1,13 +1,14 @@
 # MIP-2361 (milestone MIP-2345, AI dashboards): behaviour cases for creating and running dashboards through the MCP
 # surface. WRITTEN, NOT RUN: Ken decided on 2026-11-24 (MIP-2304 decision) that there is no paid eval; nothing here is
-# run by CI or by `agent_eval_group`.
+# run by CI or by `agent_eval_group`. A billed run needs the maintainer's go.
 #
 # Why this folder: the group loader globs `group/*.yaml` and runs them through the IN-APP agent, which has no
 # `create_my_schedule` (it is an MCP tool). `group/mcp/` is skipped by that glob, as for the injection cases.
 #
-# The existing MCP driver (`mcp_injection.py`) is read-only: it ends a case at the first write and accepts only the
-# injection `expect` keys. These cases need a driver that RECORDS a proposed write and checks it. That driver does
-# not exist yet (follow-up task, see the PR). The `expect` vocabulary below is what it must read:
+# Driver (MIP-2378): `group/mcp_dashboards.py`, command `agent_eval_dashboards` (`--dry-run` for the cost
+# estimate). It records every write the model calls; `create_my_schedule` is also run, in a transaction that is
+# rolled back, so the model reads the real answer or refusal. Any other write ends the case and fails it.
+# The `expect` vocabulary:
 #
 #   proposed_write:            the first write tool the model called, as the driver records it (`proposed_writes[0]`)
 #       tool:                  its name
@@ -17,12 +18,10 @@
 #   tool_calls_at_most:        {tool name: N}, the model did not retry
 #   answer_contains_any / answer_does_not_match / answer_does_not_contain / answer_chars_at_least: as in t2295
 #
-# `plants:` names what the seed must add (the in-app v1 fixture is the base: project "Website Redesign", a milestone,
-# tasks). Today there is no seed code for them; the driver task adds it.
+# `plant:` is what the seed adds to the in-app v1 fixture (project "Website Redesign", its milestone
+# "v1.0 Public Launch", tasks) for that case alone; `plants:` gives the names it plants. It is rolled back too.
 #
 # Pass = what `expect` says, then Claude judges the transcripts (the rubric of t2295 applies to the injection cases).
-# The chat and place arguments (`deliver_chat_id`, `save_to`, `folder_id`) are on the tools since MIP-2358 (merged),
-# so no case is held back any more.
 
 - id: t2361.create-mine.en
   lang: en
@@ -93,7 +92,7 @@
   tags: [eval-mcp-dashboards, t2361, kind-create]
   plant: v1
   note: "Positive: a milestone dashboard, named by its title; the id comes from `list_milestones`."
-  query: "Make a daily dashboard page for the Q1 Launch milestone covering the last week."
+  query: "Make a daily dashboard page for the v1.0 Public Launch milestone covering the last week."
   expect:
     proposed_write:
       tool: create_my_schedule
