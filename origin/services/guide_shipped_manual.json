@@ -28,7 +28,8 @@
     "0e2b0ae60fde2609374802d5bc4c8d7bb449aa238f58ea4110142dc38c3b04c7",
     "3e0b5a60145a04a30184b7326cdc48e9ea92c1afd437dda6203dd2d69a898eb2",
     "557a4a6b09f6bd0986d0a40901d2fc3a1dfff258dab991d710dc43b368dad6eb",
-    "6b9d7a72fee845c8f3d3d2519d9b5bbfe52162cb927bbfc1bec287a8314659c2"
+    "6b9d7a72fee845c8f3d3d2519d9b5bbfe52162cb927bbfc1bec287a8314659c2",
+    "e92799a243990e3050f53fd7ecf147be9a87794491d572a30106887abc28871c"
    ]
   },
   "Genos basics: layout and navigation": {
@@ -38,7 +39,8 @@
   },
   "Keyboard shortcuts, in full": {
    "sha256": [
-    "80311fd6672eae2f206e78713f60505a60e00b7008550f63bc00c42171a0924a"
+    "80311fd6672eae2f206e78713f60505a60e00b7008550f63bc00c42171a0924a",
+    "8e32df5a65fbeab43a40b1f383f0619aa09eef16e0445e120f03abeadb9628d9"
    ]
   },
   "Notes: personal, team, and shared": {
@@ -67,7 +69,8 @@
   "Playbooks: how different kinds of work fit Genos": {
    "sha256": [
     "542d35b924ef0429c468cba43cbb831291ee7decba83cbec3c21ed52390d57fb",
-    "720cd66d2431bc777d0a5502e22d748ce21a84ba032365ffc2a580a235a9a50e"
+    "720cd66d2431bc777d0a5502e22d748ce21a84ba032365ffc2a580a235a9a50e",
+    "a3f71414cc85d35b9fc9fc86b6e157d23b7e33d758428dfc860aa18eb544d09c"
    ]
   },
   "Searching and asking: how to get better answers": {
@@ -87,6 +90,7 @@
   },
   "Settings A-Z": {
    "sha256": [
+    "4fd344ad5c8e551c0cdebe0ee22516e72f03f221361c9bd69240ed2b5568817d",
     "ad165fa3939e273180fdeee91b5347d0edc940f00dc50f591812a6efb3ce9b7b",
     "c5308c3d512bc4d18c5754d591a6cc78fd53958bda233df61e30ecc8a253e18e",
     "d1ddf265cae42cb53676124bb91377ecbe6444101bfa0ab7fe90eccf02cfd54e"
@@ -94,12 +98,14 @@
   },
   "Settings: every option, and where to find it": {
    "sha256": [
-    "2595290008e12582c6968ecb7c26d67d94adb4d02bf5395597326bc81502f6a1"
+    "2595290008e12582c6968ecb7c26d67d94adb4d02bf5395597326bc81502f6a1",
+    "ccf2c6026d5f57003d4b5544abf0498615078648f00581fb9f7b62f408d3cf7f"
    ]
   },
   "Tasks and projects": {
    "sha256": [
     "3cd469cc59994ebcad9efdcf106ad3c2b7cb943b0a628c3bd3968720e0def9fd",
+    "8b4be98257be5e166a9d8e3671660cffebcf6a1295a432398a19d54c76eb98be",
     "acb8ddd710176895f74d0ded0c32bb19ef6b2ab7e9b39d47858d69915a1c9448"
    ]
   },
@@ -110,6 +116,7 @@
   },
   "Tips, shortcuts, and getting unstuck": {
    "sha256": [
+    "195537ad1fedd02a3c462c26db8f4e412b4fc8e1ea9d1e3f1a86d9fd1e86977a",
     "e4d85f5c37b1305adce65d56ad372e9428a7fa1a03bc9976c1b34cbb62bc7a4a"
    ]
   },
@@ -132,6 +139,7 @@
     "5e92db579c26f801c761c00a9376904724f26a0dc811b77c154e9079551cf803",
     "6062c7f86790f155bd140163af9759b6dd6ba6151fc05769ed83a6af9a416b85",
     "a70de21e0db5e3b2dfe67c535e1cddcb7117c9d3d730b022b8c857b7d59a8aa3",
+    "aaf69889ddb78eaf661c0927d208eb04c0e8f1812a8a84ce8cbcbf15d70e96b5",
     "ac06f01f0366d1bff75b4e065ce468b001a56a2c5715a19086456ad1c233c664"
    ]
   },
@@ -153,6 +161,7 @@
   },
   "キーボードショートカット一覧": {
    "sha256": [
+    "6f03f486b2bb103bf1e0aae5b10604ef82fbfb6f49640a0c40737b2963e26570",
     "e86cb8b272c13daacc49296098749624ec5788c8619d10ba1a6f4e057bdd4bad"
    ]
   },
@@ -164,7 +173,8 @@
   "タスクとプロジェクト": {
    "sha256": [
     "664901f7253916831ca93297989f3e702e7b64d71d63e6df1ca53638c9f9fa92",
-    "7650d4c0f9084cebe35d9f90b2178ee2bf3c1963fed5fb081d6bedbe834d8cea"
+    "7650d4c0f9084cebe35d9f90b2178ee2bf3c1963fed5fb081d6bedbe834d8cea",
+    "fb68e0902a2d995abab01213d81329c58e1c045eb08a498c9f6fb29c50012600"
    ]
   },
   "チャット: メッセージ、スレッド、メンション": {
@@ -192,6 +202,7 @@
   },
   "プレイブック: 仕事の種類ごとの Genos の使い方": {
    "sha256": [
+    "407276b984505179b1dd8686230806d9b35a9289eb16606e4a576044187e334b",
     "b4fef23fd38e21c70d26acb5bf738fc878baaafaaa632f8c6e7d05f2cafc6456",
     "db9daa6a9a49cefcf28e79aec48410e1b0c9304a2a8867e9e9081dc810daef50"
    ]
@@ -209,7 +220,8 @@
   },
   "便利な使い方、ショートカット、困ったときは": {
    "sha256": [
-    "96f2c536a21f33fceb4a5b7343ffb798ad9d0c4d6182dae58ee986c42c9ee20c"
+    "96f2c536a21f33fceb4a5b7343ffb798ad9d0c4d6182dae58ee986c42c9ee20c",
+    "9f83b047425b75383fc9336e421a5ca95e7736bc65c3c4adcdda565241b98541"
    ]
   },
   "大きなワークスペースの整え方: 1 つのチームに多くの部署": {
@@ -224,11 +236,13 @@
   },
   "設定: すべてのオプションと、その場所": {
    "sha256": [
-    "2c99ef6f8039b302fee42b3a467b8909671cacebcf5a83f0e469f74bbfde7c67"
+    "2c99ef6f8039b302fee42b3a467b8909671cacebcf5a83f0e469f74bbfde7c67",
+    "38ed9a2e050d8859ed738de25e1be6d0fbc32d203040d82e85eb85b1bfcb8ca8"
    ]
   },
   "設定一覧(A〜Z)": {
    "sha256": [
+    "651c39e7f958d9051cc4a11903ec67d08204aab595feac7877c0416d1f9a020d",
     "85688c15b9c3d29be37f32e48b0d066ddf761da43740fd4d8c8ec1a53a53c9c6",
     "8ad58a8543f9491bab8ae22ac389185a8f77fdf86c16f07c4b58c2a56670e33c",
     "fb7f97208bb0841d66239bc5d87af4def6b2053c184f8da88b6b0a5257486fc8"

@@ -21595,6 +21595,674 @@
     "commit": "abce9aad",
     "date": "2026-11-18",
     "sha256": "64df2181484de8507e8c8c08d8604fc7f634fbcca8cc4899c4402d300397a45b"
+   },
+   {
+    "body": [
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "このページの読み方",
+        "type": "text"
+       }
+      ],
+      "id": "dd2e8bcd-005b-4bfe-bcef-24845c921ad5",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Genosは、ユーザーがソフトウェア開発者であることを前提としていません。以下に、業務の種類ごとに1つの基本レイアウトを示します。最も近いものを選び、残りは無視してください。これらはすべて、同じ3つの要素（チャット、タスク、ノート）を異なる配置で組み合わせたものなので、ここに示されているものには、すでに持っていない設定は必要ありません。",
+        "type": "text"
+       }
+      ],
+      "id": "4de36aeb-e328-4706-8682-a9eab6620850",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "38a475d1-db13-4509-82d8-142d50ec4518",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "エンジニア",
+        "type": "text"
+       }
+      ],
+      "id": "b0f9843d-c648-40ad-b523-688d984284f5",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "サービスまたはリポジトリごとに1つのプロジェクトを作成します。GitHubを連携させてプルリクエストをタスクに紐付け、プルリクエストがマージされた際にタスクを完了するように設定すれば、ボードは自動的に最新の状態に保たれます。",
+        "type": "text"
+       }
+      ],
+      "id": "6c15763f-c7d1-4e16-8235-fe4d7d5f52bb",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "真のブロック要因には依存関係を活用しましょう。BがAによってブロックされているとマークすると、Genosが自動的にBの「ブロック中」ステータスを設定・解除します。グラフビューでは、実際にリリースを妨げている要因が確認できます。",
+        "type": "text"
+       }
+      ],
+      "id": "aa04c5ef-5f70-4951-ac6d-b36ae0a9cc06",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "設計ドキュメントをタスクノートとして保存し、計画が作業に反映されるようにするとともに、チャンネル全体を読む代わりに、Genosに「今週、#APIでは何が変更されましたか？」といった質問を投げかけましょう。",
+        "type": "text"
+       }
+      ],
+      "id": "299ba72b-554b-436b-b4fe-9eab8f64497f",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "1ef0b8f0-12ab-48be-95af-3c176ec6497b",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "プロダクト／プロジェクトマネージャー",
+        "type": "text"
+       }
+      ],
+      "id": "2304d8bf-41ac-49ba-90ea-3f50b7594bba",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "期限付きの成果物には「マイルストーン」、ペース管理には「スプリント」、スプレッドシート形式での表示が必要な場合は「タスクテーブル」を活用しましょう。繰り返し設定しているフィルターは、名前付きフィルターセットとして保存し、プロジェクト内で共有しましょう。",
+        "type": "text"
+       }
+      ],
+      "id": "e128e94c-29e0-42c5-aec3-144ffb72f1a9",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "プロセスに必要なカスタムフィールドを定義し、それらを必須項目として設定してください。そうすることで、タスクが不完全な状態で登録されるのを防ぐことができます。",
+        "type": "text"
+       }
+      ],
+      "id": "adce6431-09c4-4c29-aaf2-f7a7818c850b",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「タスクの重み」「キャパシティ」「ベロシティ」の各ビューは、「この計画は現実的か？」という疑問に答えます。また、上位プランのプロアクティブダイジェストにより、スタンドアップミーティングが行われる前に、期限切れや滞っている作業が明らかになります。",
+        "type": "text"
+       }
+      ],
+      "id": "5021d292-2174-404a-8b9a-100d842dfc92",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "自分で情報を集めて進捗をまとめる代わりに、Genosへ状況を質問しましょう。「金曜日までにリスクとなる要素は何か？」「前回のスプリントで何を完了させたか？」",
+        "type": "text"
+       }
+      ],
+      "id": "29943a52-29ff-4b94-a5aa-8731bd8ab899",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "8d5bb732-3b6b-43ce-a939-d0a7fdda48d0",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "マーケティング",
+        "type": "text"
+       }
+      ],
+      "id": "93852995-d690-49c4-8b43-634de76c299d",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "キャンペーンまたはチャネルごとに1つのプロジェクトを作成し、公開日ごとにマイルストーンを設定します。媒体（ブログ、メール、SNS、有料広告）ごとにタグを付け、それらを1つずつ絞り込んでいきます。",
+        "type": "text"
+       }
+      ],
+      "id": "7e75920f-1caa-44a7-9102-ffeb8e733df9",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "ノートに下書きを作成し、複数の人が同じドキュメントに同時に書き込めるようにし、下書きの上にはタスクノートとして概要を記載しておいてください。",
+        "type": "text"
+       }
+      ],
+      "id": "dece8cd4-ba28-4f6c-9006-4f66b4cb8557",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "キャンペーンのチャンネルでは、作業に対する承認情報を常に紐付けておきます。最終承認済みのアセットをチャンネルにピン留めしておけば、先週のバージョンが誤って出荷されるのを防げます。",
+        "type": "text"
+       }
+      ],
+      "id": "750073ed-ab1b-452f-a9d5-c57855e407cf",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "0277cabe-c73d-4a75-aed3-97f1cc1df6cd",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "調査と分析",
+        "type": "text"
+       }
+      ],
+      "id": "d44b98be-163a-41da-be44-07accf8b496d",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "情報源やインタビューごとに1つのノートを作成し、研究ごとに1つのフォルダーにまとめ、未解決の質問ごとに1つのタスクを設定します。ノートは収集した資料であり、タスクは未解決の課題です。",
+        "type": "text"
+       }
+      ],
+      "id": "6055f8f1-4a8b-44c1-b75a-391d654179e1",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Genosは出典を明記しているため、インタビューの資料一式を調べてみれば、確認可能な答えが得られます。引用する前に、出典となったノートをクリックして内容を確認してください。",
+        "type": "text"
+       }
+      ],
+      "id": "655f8832-1029-4f44-8809-df5c7586d50d",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "1つの長い文書に対して、そのノートの「質問」ボタンから質問を投げかけ、その回答を新しいノートとして保存することで、生の資料の上に要約の層を構築することができます。",
+        "type": "text"
+       }
+      ],
+      "id": "663bd2ca-74f0-4056-a2e6-12d5f22beef1",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "7bd83c88-2ed1-460e-a7ee-e8369bed18bf",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "学生",
+        "type": "text"
+       }
+      ],
+      "id": "7c4fffbd-cfc7-403a-96df-0dd920f54dd9",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "科目ごとに1つのプロジェクト、試験や締め切りごとに1つのマイルストーン、そして科目ごとのフォルダーに講義ノート。提出期限を設定することで、すべての科目を1つのカレンダーにまとめられます。",
+        "type": "text"
+       }
+      ],
+      "id": "37fb0fa6-937b-4e5c-ade7-59974c65f3aa",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "チャットの横にある「毎日のToDo」パネルは、勉強の時間にぴったりです。これは、実際の課題とは別の、1日ごとのチェックリストです。",
+        "type": "text"
+       }
+      ],
+      "id": "4f5532ce-7dc7-4d83-adcd-07c368a07097",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "試験の前に、自分のノートに質問を投げかけてみましょう――「弾力性について書いた内容を説明してください」といった具合に――、また、グループチャットを活用して勉強会を開きましょう。",
+        "type": "text"
+       }
+      ],
+      "id": "aed12f31-d052-4674-80b6-44ab1ba7464e",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "f4fb86e3-7ba3-45b0-9aec-070c51dbde4e",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "運用、バックオフィス、サポート",
+        "type": "text"
+       }
+      ],
+      "id": "95e9d014-4abe-4335-913a-5134f70d8a1b",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "繰り返し行う手順は、チェックリストとしてノートにまとめ、実行ごとに1つのタスクとして記載します。タスク本文のテンプレートを再利用することで、各実行は誰かの記憶に頼るのではなく、同じ手順から開始できるようになります。",
+        "type": "text"
+       }
+      ],
+      "id": "933787d8-3d47-48d3-b9ae-2a5e9affc418",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "プロセスごとに1つのプロジェクト（オンボーディング、請求書発行、ベンダー評価など）を設定し、絶対に欠けてはならない詳細情報については必須項目として指定します。",
+        "type": "text"
+       }
+      ],
+      "id": "01263fd7-9cd7-4d42-ba10-c027a66371cf",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "メッセージにフラグを立てて、チャットで届いたリクエストを個人的なフォローアップ事項に変え、追跡が必要なものはタスクとして登録し、誰かの頭の中だけで終わらないようにしましょう。",
+        "type": "text"
+       }
+      ],
+      "id": "1513c370-7203-4250-ac13-ca1bc4fbf40a",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "すべてのタスクには、誰が、何を、いつ変更したかというアクティビティ履歴が記録されており、これは通常、監査で求められる情報そのものです。",
+        "type": "text"
+       }
+      ],
+      "id": "f5ccbdf6-7bd4-4f71-97c1-b79a6aa3d74b",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "67a36891-a1f3-47ce-8aa6-e4049c64bdb2",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "どんな仕事でも",
+        "type": "text"
+       }
+      ],
+      "id": "4bbb9ceb-0681-4fe4-8539-37314ee1b35a",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "これらすべてに共通する仕組みとは、チャットでの議論、タスクとしてのコミットメント、ノートにまとめられた永続的な知識――そして、これら3つすべてをGenosが読み取ることで、自分で探し回る必要がなく、質問するだけで済むようにすることです。完璧な構造を目指すよりも、まずは実際のプロジェクトを1つ始めてみましょう。構造は後で簡単に変更できますし、空っぽのワークスペースからは何も学べないからです。",
+        "type": "text"
+       }
+      ],
+      "id": "020359de-b6a3-4e06-8c90-8c661a432c84",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "a9536010-ee26-4d55-9a88-5af8321bb05c",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "会社全体で使う",
+        "type": "text"
+       }
+      ],
+      "id": "18dd3aca-7071-4bd0-ac8c-294fb376a8c7",
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "たくさんの部署がある会社でGenosを使い始めるときは、このフォルダの最後の2つのノート「大きなワークスペースの整え方: 1 つのチームに多くの部署」と「会社で Genos を始める: オーナー向けチェックリスト」を読んでください。",
+        "type": "text"
+       }
+      ],
+      "id": "792dcc86-c385-4fb2-ac31-5bccd339e895",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "id": "00812fff-f068-4c8b-993c-1a84cd5a12a7",
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     }
+    ],
+    "commit": "b1db4c51",
+    "date": "2026-11-24",
+    "sha256": "87d2d200ff7a2fa17015fa16cbbc4fac4f271bf6d24dca33f03d4b81f58ac300"
    }
   ],
   "他の会社との連携：チーム間共有": [
