@@ -623,12 +623,12 @@ class CheckEditsRuleTests(BaseAPITestCase):
 
     def test_update_task_status_offers_everything_but_delete(self):
         args = {"task_id": 1, "status": "Open"}
-        for value in ("Open", "WIP", "Blocked", "Pending", "Closed"):
+        for value in ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected"):
             self.assertEqual(self.check("update_task", args, {"status": value}), {}, value)
         for value in ("Deleted", "closed", "Done", ""):
             self.assertEqual(
                 self.check("update_task", args, {"status": value}),
-                {"status": "Status: choose one of Open, WIP, Blocked, Pending, Closed."},
+                {"status": "Status: choose one of Open, WIP, Blocked, Pending, Closed, Rejected."},
                 value,
             )
 

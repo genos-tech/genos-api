@@ -13,7 +13,7 @@ from origin.search_engine.agent.tools.list_milestones import LIST_MILESTONES
 
 from .test_base import BaseAPITestCase
 
-_STATUSES = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
+_STATUSES = ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"]
 
 
 class ListMilestonesStatusFilterTests(BaseAPITestCase):

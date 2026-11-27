@@ -36,9 +36,8 @@ FLAG = "AGENT_CUSTOM_STATUS"
 ARG = "custom_status"
 
 _WRITE_DESCRIPTION = (
-    "Optional status NAME from the project's list (list_project_tags `statuses`), e.g. 'In "
-    "Review'. It also sets `status` to that name's category, so omit `status` or pass the "
-    "category. '' removes the name."
+    "Status name from list_project_tags `statuses`, e.g. 'In Review'. Also sets `status`, so "
+    "omit that. '' removes it."
 )
 #: What the flag adds to a write tool's schema (`tool_flag_params`).
 PROPERTIES: dict[str, dict[str, Any]] = {

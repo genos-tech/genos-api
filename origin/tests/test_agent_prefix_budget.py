@@ -121,7 +121,10 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # measures and flips; the arm `t2328` (MIP-2329) puts the flag into the all-on union: `ALL_ON_BUDGET_CHARS` goes to 143,500.
 # MIP-2485 (`AGENT_INAPP_WAITING_COMMENTS_TOOL`, default OFF): `list_my_waiting_comments`. Production with the flag off is as
 # before; with every flag on 142,435, so the constant goes up to 143,000. NOT measured (no paid eval).
-BUDGET_CHARS = 143_000
+# MIP-2494: the unflagged system status "Rejected" (enums and the sentences about it) and `AGENT_CUSTOM_STATUS`
+# (default OFF, arm `t2494`: `custom_status` on five writes and a sentence on three reads). Production with the flag off
+# stays under 143,000; with every flag on 144,391, so the constant goes up to 144,500. NOT measured by a paid eval.
+BUDGET_CHARS = 144_500
 
 
 def _declared_chars() -> int:
