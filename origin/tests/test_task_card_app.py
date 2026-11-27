@@ -165,7 +165,9 @@ class CommentOnATaskWithNoCardTests(AppBase):
         self.assertIn("Priority: Low", text)
         self.assertEqual(card.metadata["displayId"], task.display_id)
         self.assertEqual(card.metadata["taskStatus"], "WIP")
-        self.assertEqual(Message.objects.filter(parent=card).count(), 1)
+        # The reply carries the COMMENT's words, not the card's.
+        (reply,) = Message.objects.filter(parent=card)
+        self.assertEqual((reply.body, reply.body_text), (BLOCKS, "hi"))
         # Silent: the header tells nobody by itself, and open chats see it now.
         self.assertFalse(MessageMention.objects.filter(message=card).exists())
         self.assertIn(realtime_push.CREATED, [c.args[1] for c in pushed.call_args_list])

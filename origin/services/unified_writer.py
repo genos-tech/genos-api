@@ -534,7 +534,10 @@ def write_task_comment_as_thread_reply(
                 )
                 return None
             header_sender = task_row.reporter_id or task_row.assignee_id or sender_id
-            body, body_text, metadata = _header_content(task_id, header_sender, task_row.title)
+            # Not `body`: that is the COMMENT's, which the reply below carries.
+            card_body, card_text, card_metadata = _header_content(
+                task_id, header_sender, task_row.title
+            )
             with transaction.atomic():
                 # Lock the channel + re-check under it: the task's own card may
                 # land between the lookup above and here, so we must not insert
@@ -558,11 +561,11 @@ def write_task_comment_as_thread_reply(
                         channel=channel,
                         seq=header_seq,
                         sender_id=header_sender,
-                        body=body,
-                        body_text=body_text,
+                        body=card_body,
+                        body_text=card_text,
                         task_id=task_id,
                         is_thread_reply=False,
-                        metadata=metadata,
+                        metadata=card_metadata,
                         reply_count=0,
                     )
                     # Chats that are open see the new card now, not at their next sync.
