@@ -113,7 +113,6 @@ TOOL_CATEGORY: dict[str, str] = {
     "list_my_mentions": "me",
     "list_my_chats": "me",
     "list_my_unread": "me",
-    "list_my_waiting_comments": "me",
     # --- pr ---
     "fetch_pr": "pr",
     "list_pr_comments": "pr",

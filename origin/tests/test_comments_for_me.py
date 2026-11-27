@@ -26,6 +26,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     get_app_tool,
 )
+from origin.search_engine.agent.tools.list_my_unread import LIST_MY_UNREAD
 from origin.services import comments_for_me
 from origin.tests.test_unread_digest import UnreadBase
 
@@ -350,6 +351,8 @@ class UnreadNamesAndLinksTests(UnreadBase):
         app = self.unread(limit=300)
         self.assertEqual(len(app["items"]), 14)
         self.assertNotIn("next_offset", app)
+        # The in-app model's declaration is as it was: paging by offset is MCP's.
+        self.assertNotIn("offset", LIST_MY_UNREAD.parameters_schema["properties"])
         with self.assertRaises(ToolError):
             self.unread(offset="x")
 

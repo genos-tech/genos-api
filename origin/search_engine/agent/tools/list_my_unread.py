@@ -70,7 +70,6 @@ LIST_MY_UNREAD = Tool(
                 "description": "Only this chat's unread (a chat id from an earlier result).",
             },
             "task_id": {"type": "INTEGER", "description": "Only this task's unread."},
-            "offset": {"type": "INTEGER", "description": "The `next_offset` of the last call."},
         },
     },
     run=_run,

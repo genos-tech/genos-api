@@ -588,6 +588,12 @@
     "switch": ""
   },
   {
+    "name": "list_my_waiting_comments",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
     "name": "get_my_importance",
     "write": false,
     "destructive": false,

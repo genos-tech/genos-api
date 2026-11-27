@@ -1,0 +1,6 @@
+# MIP-2485: publish list_my_waiting_comments to the in-app agent (declared + runnable), for the official skill
+# `comments-waiting-on-me`. Measured by t2485. WRITTEN, NOT RUN.
+arm: t2485
+overrides:
+    AGENT_INAPP_WAITING_COMMENTS_TOOL: true
+requires: []

@@ -2416,6 +2416,10 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+        # MCP only (MIP-2485): the answer is size-bounded here, and the in-app declaration stays.
+        surface_args={
+            "offset": {"type": "integer", "description": "The `next_offset` of the last call."}
+        },
     ),
     McpTool(
         name="list_my_waiting_comments",
@@ -2430,7 +2434,7 @@ CATALOG: tuple[McpTool, ...] = (
             "have not reacted to. It does NOT judge whether a comment asks for anything: read "
             "the text and say so yourself, and leave out thanks and notices. Each of `tasks` "
             "(newest first) has `your_roles`, `your_last_comment`, `your_ai_app_comment` (posted "
-            "as them by an AI app or API key: NOT counted as their reply, so judge whether it "
+            "as them by an AI app: NOT counted as their reply, so judge whether it "
             "answered), its `url`, and `comments` "
             "oldest to newest with `by`, `at`, `text`, `mentions_you`, `unread` and `url`; "
             "link with those urls. `stats` counts everything waiting in the window; pass "

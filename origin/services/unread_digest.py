@@ -537,9 +537,10 @@ def build_unread(
             "items": max(0, len(left) - len(out_items)),
             "events": max(0, events_available - events_returned),
         },
+        # Only MCP takes `offset` (the in-app declaration has none).
         **(
             {"next_offset": skip + len(out_items)}
-            if out_items and len(left) > len(out_items)
+            if mcp and out_items and len(left) > len(out_items)
             else {}
         ),
         **({"filter": flt.echo()} if flt.echo() else {}),

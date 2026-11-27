@@ -119,7 +119,9 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # 143 in the two "how do I" prompt lines). Production with the flag off is 140,920 (80 left); with it on 141,507. The constant goes
 # up to 142,000 (493 left with the flag on). The routing numbers are NOT measured here (no paid eval, Ken 2026-11-24): MIP-2329
 # measures and flips; the arm `t2328` (MIP-2329) puts the flag into the all-on union: `ALL_ON_BUDGET_CHARS` goes to 143,500.
-BUDGET_CHARS = 142_000
+# MIP-2485 (`AGENT_INAPP_WAITING_COMMENTS_TOOL`, default OFF): `list_my_waiting_comments`. Production with the flag off is as
+# before; with every flag on 142,435, so the constant goes up to 143,000. NOT measured (no paid eval).
+BUDGET_CHARS = 143_000
 
 
 def _declared_chars() -> int:
