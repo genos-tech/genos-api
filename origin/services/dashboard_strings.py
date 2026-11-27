@@ -87,6 +87,17 @@ _EN = {
     "status_Blocked": "Blocked",
     "status_Pending": "Pending",
     "status_Closed": "Closed",
+    "show_fewer": "Show fewer",
+    "more_elsewhere": "{n} more not listed here",
+    "more_elsewhere_one": "1 more not listed here",
+    "sort_by": "Sort by",
+    "sort_due": "Due date",
+    "sort_status": "Status",
+    "sort_owner": "Owner",
+    "filter_status": "Filter by status",
+    "filter_person": "Filter by person",
+    "clear_filters": "Clear filters",
+    "nothing_matches": "No tasks match.",
 }
 
 _JA = {
@@ -157,6 +168,16 @@ _JA = {
     "status_Blocked": "Blocked",
     "status_Pending": "Pending",
     "status_Closed": "Closed",
+    "show_fewer": "折りたたむ",
+    "more_elsewhere": "ほか{n}件はここに表示していません",
+    "sort_by": "並べ替え",
+    "sort_due": "期日",
+    "sort_status": "ステータス",
+    "sort_owner": "担当者",
+    "filter_status": "ステータスで絞り込み",
+    "filter_person": "担当者で絞り込み",
+    "clear_filters": "絞り込みを解除",
+    "nothing_matches": "該当するタスクはありません。",
 }
 
 _ZH = {
@@ -227,6 +248,16 @@ _ZH = {
     "status_Blocked": "已阻塞",
     "status_Pending": "搁置",
     "status_Closed": "已完成",
+    "show_fewer": "收起",
+    "more_elsewhere": "另有 {n} 项未在此列出",
+    "sort_by": "排序方式",
+    "sort_due": "截止日期",
+    "sort_status": "状态",
+    "sort_owner": "负责人",
+    "filter_status": "按状态筛选",
+    "filter_person": "按负责人筛选",
+    "clear_filters": "清除筛选",
+    "nothing_matches": "没有符合条件的任务。",
 }
 
 _ES = {
@@ -300,6 +331,17 @@ _ES = {
     "status_Blocked": "Bloqueada",
     "status_Pending": "Pendiente",
     "status_Closed": "Completada",
+    "show_fewer": "Mostrar menos",
+    "more_elsewhere": "{n} más que no se muestran aquí",
+    "more_elsewhere_one": "1 más que no se muestra aquí",
+    "sort_by": "Ordenar por",
+    "sort_due": "Fecha límite",
+    "sort_status": "Estado",
+    "sort_owner": "Responsable",
+    "filter_status": "Filtrar por estado",
+    "filter_person": "Filtrar por persona",
+    "clear_filters": "Quitar filtros",
+    "nothing_matches": "Ninguna tarea coincide.",
 }
 
 _FR = {
@@ -373,6 +415,17 @@ _FR = {
     "status_Blocked": "Bloqué",
     "status_Pending": "En attente",
     "status_Closed": "Terminé",
+    "show_fewer": "Afficher moins",
+    "more_elsewhere": "{n} autres non listées ici",
+    "more_elsewhere_one": "1 autre non listée ici",
+    "sort_by": "Trier par",
+    "sort_due": "Échéance",
+    "sort_status": "Statut",
+    "sort_owner": "Responsable",
+    "filter_status": "Filtrer par statut",
+    "filter_person": "Filtrer par personne",
+    "clear_filters": "Effacer les filtres",
+    "nothing_matches": "Aucune tâche ne correspond.",
 }
 
 _AR = {
@@ -443,6 +496,16 @@ _AR = {
     "status_Blocked": "محظورة",
     "status_Pending": "معلّقة",
     "status_Closed": "مكتملة",
+    "show_fewer": "عرض أقل",
+    "more_elsewhere": "{n} أخرى غير معروضة هنا",
+    "sort_by": "ترتيب حسب",
+    "sort_due": "تاريخ الاستحقاق",
+    "sort_status": "الحالة",
+    "sort_owner": "المسؤول",
+    "filter_status": "تصفية حسب الحالة",
+    "filter_person": "تصفية حسب الشخص",
+    "clear_filters": "مسح عوامل التصفية",
+    "nothing_matches": "لا توجد مهام مطابقة.",
 }
 
 _HI = {
@@ -513,6 +576,17 @@ _HI = {
     "status_Blocked": "अवरुद्ध",
     "status_Pending": "लंबित",
     "status_Closed": "पूरा",
+    "show_fewer": "कम दिखाएँ",
+    "more_elsewhere": "{n} और यहाँ सूचीबद्ध नहीं हैं",
+    "more_elsewhere_one": "1 और यहाँ सूचीबद्ध नहीं है",
+    "sort_by": "क्रम",
+    "sort_due": "समय-सीमा",
+    "sort_status": "स्थिति",
+    "sort_owner": "ज़िम्मेदार",
+    "filter_status": "स्थिति से फ़िल्टर करें",
+    "filter_person": "व्यक्ति से फ़िल्टर करें",
+    "clear_filters": "फ़िल्टर हटाएँ",
+    "nothing_matches": "कोई टास्क मेल नहीं खाता।",
 }
 
 STRINGS = {"en": _EN, "ja": _JA, "zh": _ZH, "es": _ES, "fr": _FR, "ar": _AR, "hi": _HI}

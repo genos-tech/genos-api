@@ -37,6 +37,11 @@ again and opens it in the app. Nothing is added to the sandbox (no popups, no to
 such a page's policy is stricter than the others': only a script carrying this load's CSP nonce
 runs, so even a flaw in the page's own escaping could not add one. Every other page is served
 exactly as before, and the viewer takes no link from it.
+
+INTERACTIVE PARTS (MIP-2452). The same pages, and only they, get a second script of ours with the
+same CSP nonce: `dashboard_ui.js`, the same bytes on every page (`DASHBOARD_UI`), which shows and
+hides markup the renderer wrote. It is an element of its own so the sentinel's secret stays in the
+sentinel's closure. Nothing is added to the policy or the sandbox.
 """
 
 from __future__ import annotations
@@ -46,6 +51,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -66,6 +72,12 @@ _SCRIPT_SALT = "origin.html_note_page.script"
 LOADED_KEY = "genosHtmlNoteLoaded"
 #: The key a server-drawn page's click posts with: the in-app path the member chose.
 OPEN_KEY = "genosHtmlNoteOpen"
+
+#: The script of a server-drawn page's interactive parts: one fixed text, never built from data.
+DASHBOARD_UI = (Path(__file__).with_name("dashboard_ui.js")).read_text(encoding="utf-8")
+# Written straight into a <script> element, so nothing in the file may end or reopen it.
+if "</" in DASHBOARD_UI or "<!--" in DASHBOARD_UI or "<script" in DASHBOARD_UI.lower():
+    raise RuntimeError("dashboard_ui.js cannot be put in a script element as it is")
 
 #: Where the route lives, relative to the API host. The app's own `frame-src` names this prefix.
 PAGE_PATH_PREFIX = "/h/"
@@ -252,7 +264,9 @@ def _sentinel(nonce: str, script_nonce: str = "") -> str:
 def document(html: str, nonce: str, script_nonce: str = "") -> str:
     """The page as served: our doctype and sentinel first, then the author's page without its own
     doctype (ours keeps it in standards mode). The header policy is in force before byte one, so
-    unlike the old `<meta>` policy no author markup can run ahead of it."""
+    unlike the old `<meta>` policy no author markup can run ahead of it. A server-drawn page (it
+    has a `script_nonce`) also gets the interactive parts' script, after the sentinel."""
     without_bom = html[1:] if html[:1] == "﻿" else html
     sentinel = _sentinel(nonce, script_nonce)
-    return "<!doctype html>" + sentinel + strip_leading_doctype(without_bom)
+    ui = f'<script nonce="{script_nonce}">{DASHBOARD_UI}</script>' if script_nonce else ""
+    return "<!doctype html>" + sentinel + ui + strip_leading_doctype(without_bom)

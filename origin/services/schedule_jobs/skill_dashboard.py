@@ -289,6 +289,8 @@ def _attention(block: dict[str, Any]) -> dict[str, Any] | None:
                     "reason": tone if tone in ("overdue", "blocked", "unowned") else "",
                     "count": len(rows),
                     "rows": rows[:MAX_ATTENTION_ROWS],
+                    # The rest, shown when the reader asks (MIP-2452).
+                    "more_rows": rows[MAX_ATTENTION_ROWS:],
                 }
             )
     return {"groups": groups} if groups else None

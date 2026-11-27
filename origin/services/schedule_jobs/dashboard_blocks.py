@@ -30,7 +30,12 @@ from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q
 from origin.services import dashboard_links
-from origin.services.dashboard_page import PACE_DAYS
+from origin.services.dashboard_page import (
+    MAX_ATTENTION_ROWS,
+    MAX_EXTRA_ATTENTION,
+    MAX_EXTRA_TIMELINE,
+    PACE_DAYS,
+)
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.schedule_jobs.report_kit import plain
 
@@ -69,7 +74,11 @@ def statuses_of(tasks, rule) -> dict[int, str]:
 class Open:
     """The open tasks of one page, already limited to what every reader may open."""
 
-    def __init__(self, ctx: ToolContext, statuses: dict[int, str], readers: set[str]) -> None:
+    def __init__(
+        self, ctx: ToolContext, statuses: dict[int, str], readers: set[str], someone: str = ""
+    ) -> None:
+        """With `someone` (the page's word for a person who left the team) each row says who has
+        the task, for the page's person filter; a personal page passes none."""
         from origin.services.schedule_jobs.ai_dashboard import visible_tasks  # noqa: PLC0415
 
         ids = [i for i, status in statuses.items() if status in OPEN_STATUSES]
@@ -83,6 +92,10 @@ class Open:
         # True when an open task is left out because a reader may not open it.
         self.hidden = len(self.tasks) < len(ids)
         self.status = {i: statuses[i] for i in self.tasks}
+        self.someone = someone
+        # Only a page that names people (a milestone's or a project's) reads their names.
+        ids_of_people = {t.assignee_id for t in self.tasks.values() if t.assignee_id}
+        self.names = _names(ids_of_people, ctx.team_id) if someone else {}
         # blocked task -> the open tasks it waits for, those every reader may open
         deps = list(
             TaskDependency.objects.filter(
@@ -106,6 +119,8 @@ class Open:
 
     def row(self, task, **extra: Any) -> dict[str, Any]:
         due = task.due_date.isoformat() if task.due_date else None
+        if self.someone:
+            extra["owner"] = self.owner(task, self.someone)
         return row_of(
             task.display_id,
             task.title,
@@ -114,6 +129,12 @@ class Open:
             status=self.status[task.task_id],
             **extra,
         )
+
+    def owner(self, task, someone: str) -> str | None:
+        """Who has the task: their name while they are on the team, else `someone`."""
+        if task.assignee_id is None:
+            return None
+        return self.names.get(str(task.assignee_id)) or someone
 
     def blocked_ids(self) -> set[int]:
         return {
@@ -139,13 +160,17 @@ def attention(
         if not tasks:
             continue
         rows = []
-        for task in tasks[:3]:
+        for task in tasks[: MAX_ATTENTION_ROWS + MAX_EXTRA_ATTENTION]:
             row = work.row(task)
             if reason == "blocked" and (waits := work.blockers.get(task.task_id)):
                 first = waits[0]
                 row["blocker"] = row_of(first.display_id, first.title, first.task_id)
             rows.append(row)
-        groups.append({"reason": reason, "count": len(tasks), "rows": rows})
+        group = {"reason": reason, "count": len(tasks), "rows": rows[:MAX_ATTENTION_ROWS]}
+        if rows[MAX_ATTENTION_ROWS:]:
+            # Held back until the reader asks (MIP-2452); `visible_tasks` passed them all.
+            group["more_rows"] = rows[MAX_ATTENTION_ROWS:]
+        groups.append(group)
     if not groups:
         return {"type": "clear", "mine": mine}
     return {"type": "attention", "mine": mine, "groups": groups}
@@ -154,11 +179,13 @@ def attention(
 def timeline(work: Open, *, goal: date | None = None, mine: bool = False) -> dict[str, Any]:
     ordered = work.ordered()
     dated = [t for t in ordered if t.due_date]
+    held = dated[MAX_NAMES : MAX_NAMES + MAX_EXTRA_TIMELINE]
     return {
         "type": "timeline",
         "mine": mine,
         "goal": goal.isoformat() if goal else None,
         "rows": [work.row(t) for t in dated[:MAX_NAMES]],
+        **({"more_rows": [work.row(t) for t in held]} if held else {}),
         "more": max(0, len(dated) - MAX_NAMES),
         "undated": len(ordered) - len(dated),
     }
@@ -182,17 +209,11 @@ def _names(user_ids: set[Any], team_id: Any) -> dict[str, str]:
     }
 
 
-def workload(work: Open, team_id: Any, someone: str) -> dict[str, Any]:
+def workload(work: Open, someone: str) -> dict[str, Any]:
     """Open tasks per person, by status: the busiest first, the unassigned last."""
     loads: dict[str | None, Counter] = {}
-    ids = {t.assignee_id for t in work.tasks.values() if t.assignee_id}
-    names = _names(ids, team_id)
     for task in work.tasks.values():
-        if task.assignee_id is None:
-            who = None
-        else:
-            who = names.get(str(task.assignee_id)) or someone
-        loads.setdefault(who, Counter())[work.status[task.task_id]] += 1
+        loads.setdefault(work.owner(task, someone), Counter())[work.status[task.task_id]] += 1
     people = sorted(
         ((name, load) for name, load in loads.items() if name is not None),
         key=lambda p: (-sum(p[1].values()), p[0]),
@@ -344,14 +365,14 @@ def milestone_layout(
     if not hero["total"]:
         return [hero], False
     rule = rule_of(set(work_q.values_list("project_id", flat=True)), ctx.team_id)
-    work = Open(ctx, statuses_of(work_q, rule), readers)
+    work = Open(ctx, statuses_of(work_q, rule), readers, someone)
     blocks: list[dict[str, Any]] = [hero, {"type": "status", "heading": "", "counts": counts}]
     if work.tasks:
         # The summary also knows a task that waits through its parent.
         waiting = {r["task_id"] for r in summary.get("blocked") or []}
         blocks.append(attention(work, today, blocked=work.blocked_ids() | waiting))
         blocks.append(timeline(work, goal=milestone.due_date))
-        blocks.append(workload(work, ctx.team_id, someone))
+        blocks.append(workload(work, someone))
     blocks.append(_done(series, closed_rows, days))
     return blocks, work.hidden
 
@@ -374,7 +395,7 @@ def project_layout(
     project_id = summary["project_id"]
     tasks = TaskMaster.objects.filter(task_id__in=work_ids)
     rule = rule_of([project_id], ctx.team_id)
-    work = Open(ctx, statuses_of(tasks, rule), readers)
+    work = Open(ctx, statuses_of(tasks, rule), readers, someone)
     counts = dict(summary.get("status_breakdown") or {})
     overdue = summary.get("overdue_count") or 0
     blocked = len(work.blocked_ids())
@@ -394,7 +415,7 @@ def project_layout(
         pace(series, period, today, days),
     ]
     if work.tasks:
-        blocks.append(workload(work, ctx.team_id, someone))
+        blocks.append(workload(work, someone))
         blocks.append(attention(work, today))
     blocks.append(_done(series, closed_rows, days))
     return blocks, work.hidden

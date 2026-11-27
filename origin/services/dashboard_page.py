@@ -2,7 +2,7 @@
 
 A dashboard is rendered HERE, on the server, from numbers the job read: a model never writes
 markup. Everything a person or a model wrote (a title, a focus, a task name, a summary) goes
-through `html.escape`; the page has no script, no network, no external font, and one inline
+through `html.escape`; the saved page has no script, no network, no external font, and one inline
 stylesheet that follows the reader's light or dark setting. Every word and number is ordinary text
 laid out by CSS, so it stays readable on a phone; the one drawing (the progress ring) holds no text.
 
@@ -13,7 +13,28 @@ nothing. A page whose data has no `blocks` (the old shape) is drawn from its num
 
 Things on the page are links into the app (MIP-2417) where `services/dashboard_links` gave them
 an `href`; the renderer writes only one of the app's own paths (`is_app_path`), whatever the data
-holds. A link works through the note viewer: the page has no script of its own.
+holds. A link works through the note viewer: the saved page has no script of its own.
+
+INTERACTIVE PARTS (MIP-2452). The page is complete without script. The route that serves it adds
+ONE fixed script (`services/dashboard_ui.js`, see `html_note_pages.document`), which finds what to
+upgrade by these attributes. Their values are escaped like any other text, and no value is ever
+part of the script. Revisions saved earlier are served with today's script, so keep names stable.
+
+* `data-gd-fold`: a section's `h2`; the element after it is the part it folds.
+* `<template data-gd-extra>`: rows held back, inside their list; `data-gd-more` (with `data-gd-for`,
+  the list's id, and `data-gd-less`) marks the "+N more" words that bring them out;
+  `data-gd-rest` is the line for what is not on the page at all.
+* `<template data-gd-tools>`: sort and filter buttons (`data-gd-act`, `data-gd-key`,
+  `data-gd-dim`, `data-gd-val`); `data-gd-none` holds the words of the "nothing matches" line.
+  `data-gd-lead` goes with a "+N more" and is hidden with it.
+* `data-gd-row`: a task row, with `data-gd-i` (its place), `-due`, `-st`, `-rank`, `-stn` (status
+  word), `-who` (a token of this page for the person) and `-name`.
+* `data-gd-col`: a sortable table header.
+* `data-gd-tip` (the words are its `title`) and `data-gd-tips` (the chart that takes the keyboard).
+
+A template is not drawn and the saved note's search text does not read it, so held-back rows and
+controls change neither for a reader without script. The rows in one obey the audience rule like
+every other row: the job puts in the data only what every reader may open.
 
 `render(dashboard)` returns `(html, title, summary)`. The summary is the plain sentence the note
 viewer and search show; it never contains markup.
@@ -39,6 +60,15 @@ MAX_PEOPLE = 6
 MAX_METERS = 8
 TIMELINE_DAYS = 56
 PACE_DAYS = 14
+# Rows past the drawn ones that the page holds back, to show on request (MIP-2452). Each is a task
+# that may carry a link, and a page links at most `dashboard_links.MAX_REFS` things.
+MAX_EXTRA_ATTENTION = 12  # per card
+MAX_EXTRA_TIMELINE = 22
+MAX_EXTRA_DONE = 5
+MAX_PERSON_CHIPS = 8
+# Fewer rows than this need no sorting or filtering.
+MIN_TOOL_ROWS = 4
+MIN_SORT_TABLE_ROWS = 3
 # Closes in the pace window below which no finish date is guessed.
 PACE_MIN_CLOSES = 3
 
@@ -54,6 +84,7 @@ _VERDICT_CLASS = {
     "done": "good",
     "stalled": "quiet",
 }
+_STATUS_RANK = {"Blocked": 0, "WIP": 1, "Open": 2, "Pending": 3, "Closed": 4}
 _VERDICT_ORDER = {"past": 0, "risk": 1, "stalled": 2, "tight": 3, None: 4, "ontrack": 5, "done": 6}
 _NUMBER_KEYS = ("num_tasks", "num_closed", "num_overdue", "num_blocked")
 
@@ -173,7 +204,7 @@ header+section{margin-top:0}
 [dir=rtl] .name,[dir=rtl] .clamp,[dir=rtl] td{text-align:right}
 .id{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;margin-inline-end:6px}
 .rows li{padding:6px 0;border-bottom:1px solid var(--line)}
-.rows li:last-child{border-bottom:0}
+.rows li:last-of-type{border-bottom:0}
 .meter{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 12px;align-items:center}
 .meter .stack{grid-column:1/-1;height:8px}
 .meter .meta{grid-column:1/-1}
@@ -222,6 +253,29 @@ th,td{text-align:start;padding:7px 10px 7px 0;border-bottom:1px solid var(--line
 th{font-size:12px;color:var(--muted);font-weight:600}
 .clear{display:flex;gap:8px;align-items:center;color:var(--good);font-weight:600}
 .note{color:var(--muted);font-size:12px;margin-top:28px}
+[hidden]{display:none!important}
+button:focus-visible,[data-gd-tips]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gd-fold,.gd-link,.gd-th{font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;text-align:start;background:none;border:0;padding:0;cursor:pointer}
+.gd-fold{display:inline-flex;align-items:center;gap:8px;min-height:24px}
+.gd-chev{flex:none;width:6px;height:6px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:translateY(-1px) rotate(45deg)}
+.gd-fold[aria-expanded=false] .gd-chev{transform:rotate(-45deg)}
+[dir=rtl] .gd-fold[aria-expanded=false] .gd-chev{transform:rotate(135deg)}
+.gd-link{color:var(--accent);text-decoration:underline;text-underline-offset:3px;padding:4px 0;min-height:28px}
+.gd-th{text-decoration:underline dotted;text-underline-offset:3px;padding:2px 0}
+th[aria-sort=ascending] .gd-th::after{content:" \\25B2"}
+th[aria-sort=descending] .gd-th::after{content:" \\25BC"}
+.gd-tools{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-bottom:12px}
+.gd-group{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.gd-sort,.gd-chip{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:2px 10px;font:inherit;font-size:12px;color:var(--fg);background:transparent;border:1px solid var(--line);border-radius:999px;cursor:pointer}
+.gd-sort[aria-pressed=true],.gd-chip[aria-pressed=true]{border-color:var(--accent);background:var(--card);box-shadow:inset 0 0 0 1px var(--accent)}
+.gd-chip b{font-weight:600;color:var(--muted)}
+.gd-chip .key{margin:0}
+.gd-nm{max-width:12em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.timeline li.gd-grp,li.gd-grp{display:block;padding:10px 0 0;font-size:12px;font-weight:600;color:var(--muted)}
+.gd-js [data-gd-tips]{cursor:pointer}
+.stack i.gd-on{box-shadow:inset 0 0 0 2px var(--fg)}
+.col.gd-on i,.bars .gd-on i,.track.gd-on .dot{outline:2px solid var(--fg);outline-offset:1px}
+.gd-tip{position:fixed;z-index:9;max-width:min(260px,calc(100vw - 16px));padding:4px 8px;border-radius:6px;background:var(--fg);color:var(--bg);font-size:12px;line-height:1.4;pointer-events:none}
 """
 
 _ID = re.compile(r"^([A-Z][A-Z0-9]{0,9}-\d+|#\d+) · (.*)$", re.DOTALL)
@@ -286,6 +340,13 @@ class _Page:
     def __init__(self, dash: Dashboard) -> None:
         self.locale = words.locale_of(dash.get("locale"))
         self.today = _date(dash.get("today")) or date.today()
+        self.mine = dash.get("kind") == "mine"
+        self._ids = 0
+
+    def new_id(self) -> str:
+        """An id of this page, the same on every render of the same data."""
+        self._ids += 1
+        return f"gd-{self._ids}"
 
     def plain(self, key: str, **values: Any) -> str:
         return words.text(self.locale, key, **values)
@@ -308,8 +369,178 @@ class _Page:
     def head(self, block: dict[str, Any], key: str) -> str:
         """The block's own heading, else the page's words for `key`; "" draws none."""
         if "heading" in block:
-            return f"<h2>{_t(block['heading'], 80)}</h2>" if block["heading"] else ""
-        return f"<h2>{self.say(key)}</h2>" if key else ""
+            return f"<h2 data-gd-fold>{_t(block['heading'], 80)}</h2>" if block["heading"] else ""
+        return f"<h2 data-gd-fold>{self.say(key)}</h2>" if key else ""
+
+
+# -- interactive parts (see the module note) -----------------------------------------------------
+
+
+def _section(page: _Page, head: str, body: str) -> str:
+    """A block with its heading; with one, the rest folds under it."""
+    if not head:
+        return f"<section>{body}</section>"
+    return f'<section>{head}<div class="gd-body" id="{page.new_id()}">{body}</div></section>'
+
+
+def _more_hook(page: _Page, list_id: str) -> str:
+    """The attributes of the "+N more" words that bring a list's held-back rows out."""
+    return f' data-gd-more data-gd-for="{list_id}" data-gd-less="{page.say("show_fewer")}"'
+
+
+def _held(page: _Page, rows: list[str], unlisted: int) -> str:
+    """Rows kept out of sight until asked for, and what even they do not list."""
+    if unlisted > 0:
+        key = "more_elsewhere"
+        rows = [*rows, f'<li class="meta" data-gd-rest>{page.say(key, n=unlisted)}</li>']
+    return f"<template data-gd-extra>{''.join(rows)}</template>"
+
+
+def _owner_of(row: Any) -> str | None:
+    """The person a row names, None for no one."""
+    owner = row.get("owner") if isinstance(row, dict) else None
+    return str(owner) if owner else None
+
+
+def _people(page: _Page, rows: list[Any]) -> dict[str | None, int]:
+    """`{person: their place in an owner sort}`: by name, "someone else" and no one last. Empty
+    unless every row says who has it. The page's attributes carry the number, not the name."""
+    if page.mine or not rows or not all(isinstance(r, dict) and "owner" in r for r in rows):
+        return {}
+    someone = page.plain("someone")
+    found = {_owner_of(r) for r in rows}
+    ordered = sorted(
+        found, key=lambda n: (n is None, n == someone, (n or "").casefold(), str(n or ""))
+    )
+    return {name: i for i, name in enumerate(ordered)}
+
+
+def _same_task(row: Any) -> Any:
+    """What tells two rows of the same task apart from two tasks."""
+    ref = row.get("ref") if isinstance(row, dict) else None
+    return (str(ref.get("kind")), str(ref.get("id"))) if isinstance(ref, dict) else row_text(row)
+
+
+def _person_label(page: _Page, name: str | None) -> str:
+    return _t(name, 60) if name else page.say("unassigned")
+
+
+def _row_hooks(
+    page: _Page, row: Any, index: int, people: dict[str | None, int], *, sortable: bool = False
+) -> str:
+    """What sorting and filtering read of a task row."""
+    out = f' data-gd-row data-gd-i="{index}"'
+    if not isinstance(row, dict):
+        return out
+    if sortable and (due := _date(row.get("due"))) is not None:
+        out += f' data-gd-due="{due.isoformat()}"'
+    status = row.get("status")
+    if sortable and status in STATUSES:
+        out += (
+            f' data-gd-st="{status.lower()}" data-gd-rank="{_STATUS_RANK[status]}"'
+            f' data-gd-stn="{page.status(status)}"'
+        )
+    if people:
+        name = _owner_of(row)
+        out += f' data-gd-who="p{people[name]}"'
+        if sortable:
+            out += f' data-gd-name="{_person_label(page, name)}"'
+    return out
+
+
+def _button(css: str, act: str, inner: str, data: str, pressed: bool = False) -> str:
+    return (
+        f'<button type="button" class="{css}" data-gd-act="{act}" {data} '
+        f'aria-pressed="{"true" if pressed else "false"}">{inner}</button>'
+    )
+
+
+def _group(label: str, buttons: list[str], shown: str = "") -> str:
+    words = f'<span class="meta" aria-hidden="true">{shown}</span>' if shown else ""
+    return (
+        f'<div class="gd-group" role="group" aria-label="{label}">{words}{"".join(buttons)}</div>'
+    )
+
+
+def _tools(
+    page: _Page, rows: list[Any], people: dict[str | None, int], *, sortable: bool = False
+) -> str:
+    """Sort and filter buttons for these rows (all the page holds), or nothing when they would not
+    change anything. `sortable` rows have a due date and a status; the others filter by person."""
+    if len(rows) < MIN_TOOL_ROWS:
+        return ""
+    statuses = {s: 0 for s in STATUSES}
+    if sortable:
+        for row in rows:
+            if isinstance(row, dict) and row.get("status") in statuses:
+                statuses[row["status"]] += 1
+    statuses = {s: n for s, n in statuses.items() if n}
+    many_people = len(people) > 1
+    groups = []
+    if sortable:
+        keys = ["due"]
+        keys += ["status"] if len(statuses) > 1 else []
+        keys += ["owner"] if many_people else []
+        if len(keys) > 1:
+            label = page.say("sort_by")
+            buttons = [
+                _button(
+                    "gd-sort",
+                    "sort",
+                    page.say(f"sort_{k}"),
+                    f'data-gd-key="{k}"',
+                    pressed=k == "due",
+                )
+                for k in keys
+            ]
+            groups.append(_group(label, buttons, label))
+    if len(statuses) > 1:
+        buttons = [
+            _button(
+                f"gd-chip {_STATUS_CLASS[s]}",
+                "chip",
+                f'<span class="key"></span>{page.status(s)} <b>{n}</b>',
+                f'data-gd-dim="st" data-gd-val="{s.lower()}"',
+            )
+            for s, n in statuses.items()
+        ]
+        groups.append(_group(page.say("filter_status"), buttons))
+    if many_people:
+        counts: dict[str | None, int] = {name: 0 for name in people}
+        # A task named in two cards (overdue and blocked) is one task of that person.
+        for row in {_same_task(r): r for r in rows}.values():
+            counts[_owner_of(row)] += 1
+        # The busiest first; no one (the unassigned) always has its place.
+        named = sorted((n for n in people if n is not None), key=lambda n: (-counts[n], people[n]))
+        shown = named[: MAX_PERSON_CHIPS - (None in people)] + ([None] if None in people else [])
+        buttons = []
+        for name in shown:
+            label = _person_label(page, name)
+            buttons.append(
+                _button(
+                    "gd-chip",
+                    "chip",
+                    f'<span class="gd-nm" dir="auto">{label}</span> <b>{counts[name]}</b>',
+                    f'data-gd-dim="who" data-gd-val="p{people[name]}" title="{label}"',
+                )
+            )
+        groups.append(_group(page.say("filter_person"), buttons))
+    if not groups:
+        return ""
+    clear = (
+        '<button type="button" class="gd-link" data-gd-act="clear" hidden>'
+        f"{page.say('clear_filters')}</button>"
+    )
+    return (
+        f'<template data-gd-tools><div class="gd-tools">{"".join(groups)}{clear}</div>'
+        f'<p class="meta" role="status" data-gd-none="{page.say("nothing_matches")}"></p>'
+        "</template>"
+    )
+
+
+def _tip(words: str) -> str:
+    """A tooltip of these (already escaped) words; the browser's own when there is no script."""
+    return f' data-gd-tip title="{words}"'
 
 
 # -- progress ------------------------------------------------------------------------------------
@@ -375,9 +606,10 @@ def _hero(page: _Page, block: dict[str, Any]) -> str:
     done = min(_int(block.get("done")), total)
     percent = math.floor(100 * done / total) if total else 0
     circle = '<circle cx="18" cy="18" r="15.5" fill="none" stroke-width="4" '
+    said = page.say("done_of", done=done, total=total) if total else page.say("no_tasks")
+    hooks = f' role="group" aria-label="{said}" data-gd-tips{_tip(said)}' if total else ""
     ring = [
-        '<div class="ring"><svg viewBox="0 0 36 36" role="img" '
-        f'aria-label="{page.say("done_of", done=done, total=total) if total else page.say("no_tasks")}">',
+        f'<div class="ring"{hooks}><svg viewBox="0 0 36 36" role="img" aria-label="{said}">',
         circle + 'stroke="var(--track)"' + ("" if total else ' stroke-dasharray="2 2"') + "/>",
     ]
     if percent:
@@ -412,14 +644,19 @@ def _hero(page: _Page, block: dict[str, Any]) -> str:
     return f'<section class="hero">{"".join(ring)}<div>{"".join(lines)}</div></section>'
 
 
-def _stack(counts: list[tuple[str, int]], whole: int, label: str = "") -> str:
-    """One bar split by status, `whole` wide (parts that add to less leave the rest empty)."""
+def _stack(
+    page: _Page, counts: list[tuple[str, int]], whole: int, label: str = "", who: str = ""
+) -> str:
+    """One bar split by status, `whole` wide (parts that add to less leave the rest empty). Each
+    part says its number on hover or tap; `who` (escaped) says whose bar it is."""
+    lead = f"{who}: " if who else ""
     parts = "".join(
-        f'<i class="{_STATUS_CLASS[s]}" style="width:{100 * n / whole:.2f}%"></i>'
+        f'<i class="{_STATUS_CLASS[s]}" style="width:{100 * n / whole:.2f}%"'
+        f"{_tip(f'{lead}{n} {page.status(s)}')}></i>"
         for s, n in counts
         if n > 0 and whole > 0
     )
-    said = f' role="img" aria-label="{label}"' if label else ""
+    said = f' role="img" aria-label="{label}" data-gd-tips' if label else ""
     return f'<div class="stack"{said}>{parts}</div>'
 
 
@@ -444,8 +681,8 @@ def _status(page: _Page, block: dict[str, Any]) -> str:
     counts = [(s, _int(raw.get(s))) for s in STATUSES if _int(raw.get(s))]
     if not counts:
         return ""
-    bar = _stack(counts, sum(n for _, n in counts), _said(page, counts))
-    return f"<section>{page.head(block, 'sec_status')}{bar}{_legend(page, counts)}</section>"
+    bar = _stack(page, counts, sum(n for _, n in counts), _said(page, counts))
+    return _section(page, page.head(block, "sec_status"), bar + _legend(page, counts))
 
 
 def _meters(page: _Page, block: dict[str, Any]) -> str:
@@ -464,7 +701,7 @@ def _meters(page: _Page, block: dict[str, Any]) -> str:
         facts = [f"{done}/{total}" if total else page.say("no_tasks")]
         if due is not None:
             facts.append(page.say("due", date=words.day(page.locale, due, page.today)))
-        bar = _stack([("Closed", done), ("WIP", wip)], total, facts[0]) if total else ""
+        bar = _stack(page, [("Closed", done), ("WIP", wip)], total, facts[0]) if total else ""
         out.append(
             f'<li class="meter">{_named(row)}<span>{_chip(page, state, total - done)}</span>{bar}'
             f'<span class="meta">{" · ".join(facts)}</span></li>'
@@ -472,9 +709,7 @@ def _meters(page: _Page, block: dict[str, Any]) -> str:
     rest = len(rows) - len(out) + _int(block.get("more"))
     if rest:
         out.append(f'<li class="meta">{page.say("more", n=rest)}</li>')
-    return (
-        f'<section>{page.head(block, "sec_meters")}<ul class="rows">{"".join(out)}</ul></section>'
-    )
+    return _section(page, page.head(block, "sec_meters"), f'<ul class="rows">{"".join(out)}</ul>')
 
 
 # -- people and time -----------------------------------------------------------------------------
@@ -494,7 +729,8 @@ def _workload(page: _Page, block: dict[str, Any]) -> str:
         label = _t(name, 60) if name else page.say("unassigned")
         out.append(
             f'<li><span class="who" title="{label}"><span class="face">{face}</span>'
-            f'<span dir="auto">{label}</span></span>{_stack(load, top, _said(page, load))}'
+            f'<span dir="auto">{label}</span></span>'
+            f"{_stack(page, load, top, _said(page, load), who=label)}"
             f'<span class="count">{sum(n for _, n in load)}</span></li>'
         )
     if more_people := _int(block.get("more_people")):
@@ -504,26 +740,29 @@ def _workload(page: _Page, block: dict[str, Any]) -> str:
             f'<span class="count">{_int(block.get("more_tasks"))}</span></li>'
         )
     used = [(s, 0) for s in _LOAD if any(_int(r.get(s)) for r in rows)]
-    return (
-        f'<section>{page.head(block, "sec_workload")}<ul class="people">{"".join(out)}</ul>'
-        f"{_legend(page, used, values=False)}</section>"
-    )
+    body = f'<ul class="people">{"".join(out)}</ul>{_legend(page, used, values=False)}'
+    return _section(page, page.head(block, "sec_workload"), body)
+
+
+def _dated(rows: list[Any]) -> list[tuple[dict[str, Any], date]]:
+    """The rows that name something with a due date, soonest first."""
+    found = [
+        (r, due)
+        for r in rows
+        if isinstance(r, dict) and row_text(r) and (due := _date(r.get("due"))) is not None
+    ]
+    return sorted(found, key=lambda p: p[1])
 
 
 def _timeline(page: _Page, block: dict[str, Any]) -> str:
-    dated = [
-        (r, due)
-        for r in _rows(block)
-        if isinstance(r, dict) and row_text(r) and (due := _date(r.get("due"))) is not None
-    ]
-    dated.sort(key=lambda p: p[1])
+    dated = _dated(_rows(block))
     shown = dated[:MAX_BLOCK_ROWS]
     undated = _int(block.get("undated"))
     head = page.head(block, "sec_next" if block.get("mine") else "sec_timeline")
     if not shown:
         if not undated:
             return ""
-        return f'<section>{head}<p class="meta">{page.say("all_undated", n=undated)}</p></section>'
+        return _section(page, head, f'<p class="meta">{page.say("all_undated", n=undated)}</p>')
     goal = _date(block.get("goal"))
     start = page.today - timedelta(days=2)
     end = max([page.today + timedelta(days=7), shown[-1][1], *([goal] if goal else [])])
@@ -542,40 +781,77 @@ def _timeline(page: _Page, block: dict[str, Any]) -> str:
         if at(goal) - now > 35:
             word = page.say("due", date=words.day(page.locale, goal, page.today))
             axis.append(f'<span style="inset-inline-end:{100 - at(goal):.1f}%">{word}</span>')
-    out = []
-    for row, due in shown:
+
+    rest = len(dated) - len(shown) + _int(block.get("more"))
+    # The rows past the drawn ones, kept on the page: drawn on the same scale (a later date sits
+    # at its end; its date is written beside it).
+    extra = _dated(_rows(block, "more_rows"))[: min(rest, MAX_EXTRA_TIMELINE)]
+    everything = [r for r, _ in (*shown, *extra)]
+    people = {} if block.get("mine") else _people(page, everything)
+
+    def line(index: int, row: dict[str, Any], due: date) -> str:
         late = due < page.today
         status = str(row.get("status") or "")
         css = "s-blocked" if late else _STATUS_CLASS.get(status, "s-open")
         when = page.say("days_late", n=(page.today - due).days) if late else page.day(due)
         state = f" · {page.status(status)}" if status in STATUSES else ""
-        out.append(
-            f"<li>{_named(row)}"
-            f'<div class="track" title="{page.day(due)}{state}">{goal_line}'
+        return (
+            f"<li{_row_hooks(page, row, index, people, sortable=True)}>{_named(row)}"
+            f'<div class="track"{_tip(page.day(due) + state)}>{goal_line}'
             f'<span class="now" style="inset-inline-start:{now:.1f}%"></span>'
             f'<span class="dot {css}" style="inset-inline-start:{at(due):.1f}%"></span>'
             f'<span class="when{" bad" if late else ""}">{when}</span></div></li>'
         )
+
+    out = [line(i, row, due) for i, (row, due) in enumerate(shown)]
+    list_id = page.new_id()
+    if extra:
+        held = [line(len(shown) + i, row, due) for i, (row, due) in enumerate(extra)]
+        out.append(_held(page, held, rest - len(extra)))
     foot = []
-    if rest := len(dated) - len(shown) + _int(block.get("more")):
-        foot.append(page.say("more", n=rest))
+    if rest:
+        hook = _more_hook(page, list_id) if extra else ""
+        foot.append(f"<span{hook}>{page.say('more', n=rest)}</span>")
     if undated:
         foot.append(page.say("undated", n=undated))
+        if rest:
+            # The "+N more" and its separator go together while a filter hides it.
+            foot = [f"<span data-gd-lead>{foot[0]} · </span>{foot[1]}"]
     used = [(s, 0) for s in _LOAD if any(str(r.get("status")) == s for r, _ in shown)]
-    return (
-        f'<section>{head}<div class="axis">{"".join(axis)}</div>'
-        f'<ul class="timeline">{"".join(out)}</ul>'
+    # The list takes the keyboard for its tooltips, so it has a name.
+    name = _t(block["heading"], 80) if block.get("heading") else ""
+    name = name or page.say("sec_next" if block.get("mine") else "sec_timeline")
+    body = (
+        _tools(page, everything, people, sortable=True)
+        + f'<div class="axis">{"".join(axis)}</div>'
+        + f'<ul class="timeline" id="{list_id}" aria-label="{name}" data-gd-tips>{"".join(out)}</ul>'
         + (_legend(page, used, values=False) if used else "")
         + (f'<p class="meta">{" · ".join(foot)}</p>' if foot else "")
-        + "</section>"
     )
+    return _section(page, head, body)
 
 
 # -- what needs a person --------------------------------------------------------------------------
 
 
+def _card_row(page: _Page, row: Any, hooks: str) -> str:
+    extra = ""
+    if isinstance(row, dict):
+        if isinstance(row.get("blocker"), dict):
+            extra = (
+                f'<div class="line meta"><span>{page.say("waits_on")}</span>'
+                f"{_named(row['blocker'])}</div>"
+            )
+        elif row.get("note"):
+            extra = f'<p class="meta">{_t(row["note"], 80)}</p>'
+        elif (due := _date(row.get("due"))) is not None and due < page.today:
+            late = page.say("days_late", n=(page.today - due).days)
+            extra = f'<p class="meta">{page.day(due)} · {late}</p>'
+    return f"<li{hooks}>{_named(row, 'clamp')}{extra}</li>"
+
+
 def _attention(page: _Page, block: dict[str, Any]) -> str:
-    cards = []
+    groups = []
     for group in _rows(block, "groups")[:4]:
         if not isinstance(group, dict):
             continue
@@ -583,37 +859,42 @@ def _attention(page: _Page, block: dict[str, Any]) -> str:
         count = _int(group.get("count")) or len(rows)
         if not count:
             continue
+        shown = rows[:MAX_ATTENTION_ROWS]
+        held = rows[MAX_ATTENTION_ROWS:] + [r for r in _rows(group, "more_rows") if row_text(r)]
+        held = held[: max(0, min(count - len(shown), MAX_EXTRA_ATTENTION))]
+        groups.append((group, count, shown, held))
+    everything = [r for _, _, shown, held in groups for r in (*shown, *held)]
+    # One set of people for all the cards: a person's button filters every card.
+    people = {} if block.get("mine") else _people(page, everything)
+
+    cards = []
+    for group, count, shown, held in groups:
         reason = str(group.get("reason") or "")
         # A skill names its own cards (the reason then only gives the colour).
         if group.get("title"):
             title = _t(group["title"], 60)
         else:
             title = page.say(reason, n=count) if reason in _REASON_CLASS else ""
-        items = []
-        for row in rows[:MAX_ATTENTION_ROWS]:
-            extra = ""
-            if isinstance(row, dict):
-                if isinstance(row.get("blocker"), dict):
-                    extra = (
-                        f'<div class="line meta"><span>{page.say("waits_on")}</span>'
-                        f"{_named(row['blocker'])}</div>"
-                    )
-                elif row.get("note"):
-                    extra = f'<p class="meta">{_t(row["note"], 80)}</p>'
-                elif (due := _date(row.get("due"))) is not None and due < page.today:
-                    late = page.say("days_late", n=(page.today - due).days)
-                    extra = f'<p class="meta">{page.day(due)} · {late}</p>'
-            items.append(f"<li>{_named(row, 'clamp')}{extra}</li>")
-        if count > len(items):
-            items.append(f'<li class="meta">{page.say("more", n=count - len(items))}</li>')
+        items = [_card_row(page, r, _row_hooks(page, r, i, people)) for i, r in enumerate(shown)]
+        list_id = page.new_id()
+        if count > len(shown):
+            hook = _more_hook(page, list_id) if held else ""
+            items.append(f'<li class="meta"{hook}>{page.say("more", n=count - len(shown))}</li>')
+        if held:
+            extra = [
+                _card_row(page, r, _row_hooks(page, r, len(shown) + i, people))
+                for i, r in enumerate(held)
+            ]
+            items.append(_held(page, extra, count - len(shown) - len(held)))
         cards.append(
             f'<div class="card {_REASON_CLASS.get(reason, "s-pending")}"><h3>{title}</h3>'
-            f"<ul>{''.join(items)}</ul></div>"
+            f'<ul id="{list_id}">{"".join(items)}</ul></div>'
         )
     if not cards:
         return ""
     head = page.head(block, "sec_needs_you" if block.get("mine") else "sec_attention")
-    return f'<section>{head}<div class="cards">{"".join(cards)}</div></section>'
+    body = _tools(page, everything, people) + f'<div class="cards">{"".join(cards)}</div>'
+    return _section(page, head, body)
 
 
 def _clear(page: _Page, block: dict[str, Any]) -> str:
@@ -633,7 +914,16 @@ def _point_label(page: _Page, label: Any, unit: str) -> str:
     return page.day(value)
 
 
-def _chart(page: _Page, points: list[Any], unit: str, added: bool) -> str:
+def _chart(
+    page: _Page,
+    points: list[Any],
+    unit: str,
+    added: bool,
+    names: tuple[str, str] = ("", ""),
+) -> str:
+    """The columns. `names` (escaped) are a skill's own words for the column and the line."""
+    first = names[0] or page.say("closed")
+    second = names[1] or page.say("added")
     points = [p for p in points if isinstance(p, dict)][-MAX_SERIES:]
     closed = [_int(p.get("closed")) for p in points]
     created = [_int(p.get("created")) if added else 0 for p in points]
@@ -646,13 +936,11 @@ def _chart(page: _Page, points: list[Any], unit: str, added: bool) -> str:
     few = len(points) <= 16
     for p, c, a in zip(points, closed, created):
         label = _point_label(page, p.get("label"), unit)
-        said = f"{label}: {c} {page.say('closed')}" + (
-            f", {a} {page.say('added')}" if added else ""
-        )
+        said = f"{label}: {c} {first}" + (f", {a} {second}" if added else "")
         number = f"<b>{c}</b>" if c and few else ""
         tick = f'<u style="--at:{min(1.0, a / top) * 82:.1f}%"></u>' if a else ""
         columns.append(
-            f'<div class="col" title="{said}">{number}'
+            f'<div class="col"{_tip(said)}>{number}'
             f'<i style="height:{c / top * 82:.1f}%"></i>{tick}</div>'
         )
         labels.append(label)
@@ -660,30 +948,32 @@ def _chart(page: _Page, points: list[Any], unit: str, added: bool) -> str:
         axis = '<div class="xlabels">' + "".join(f"<span>{x}</span>" for x in labels) + "</div>"
     else:
         axis = f'<div class="xlabels ends"><span>{labels[0]}</span><span>{labels[-1]}</span></div>'
-    said = page.say("closed") + ": " + ", ".join(str(c) for c in closed)
-    return f'<div class="chart" role="img" aria-label="{said}">{"".join(columns)}</div>{axis}'
+    said = first + ": " + ", ".join(str(c) for c in closed)
+    return (
+        f'<div class="chart" role="img" aria-label="{said}" data-gd-tips>{"".join(columns)}</div>'
+        f"{axis}"
+    )
 
 
 def _trend(page: _Page, block: dict[str, Any]) -> str:
     unit = str(block.get("unit") or "")
     points = [p for p in _rows(block, "points") if isinstance(p, dict)]
     added = any(_int(p.get("created")) for p in points)
-    chart = _chart(page, points, unit, added)
-    head = page.head(block, "sec_trend")
-    if not chart:
-        return f'<section>{head}<p class="meta">{page.say("nothing_closed")}</p></section>'
     # What the solid column and the line count: a skill's own words, else closed and added.
     named = block.get("legend")
-    first, second = named if isinstance(named, list) and len(named) == 2 else ("", "")
-    legend = [f'<li><span class="key fill"></span>{_t(first, 30) or page.say("closed")}</li>']
+    given = named if isinstance(named, list) and len(named) == 2 else ("", "")
+    names = (_t(given[0], 30), _t(given[1], 30))
+    chart = _chart(page, points, unit, added, names)
+    head = page.head(block, "sec_trend")
+    if not chart:
+        return _section(page, head, f'<p class="meta">{page.say("nothing_closed")}</p>')
+    legend = [f'<li><span class="key fill"></span>{names[0] or page.say("closed")}</li>']
     if added:
-        legend.append(
-            f'<li><span class="key tick"></span>{_t(second, 30) or page.say("added")}</li>'
-        )
+        legend.append(f'<li><span class="key tick"></span>{names[1] or page.say("added")}</li>')
     if unit in ("day", "week", "month"):
         average = sum(_int(p.get("closed")) for p in points) / max(1, len(points))
         legend.append(f"<li>{page.say(f'per_{unit}', n=f'{average:.1f}'.removesuffix('.0'))}</li>")
-    return f'<section>{head}{chart}<ul class="legend">{"".join(legend)}</ul></section>'
+    return _section(page, head, f'{chart}<ul class="legend">{"".join(legend)}</ul>')
 
 
 def _headline(page: _Page, block: dict[str, Any]) -> str:
@@ -728,16 +1018,25 @@ def _done(page: _Page, block: dict[str, Any]) -> str:
     if not count:
         return ""
     shown = rows[:5]
-    items = "".join(
-        f'<li class="line"><span class="good" aria-hidden="true">✓</span>{_named(r)}</li>'
-        for r in shown
-    )
+    held = rows[5 : 5 + max(0, min(count - len(shown), MAX_EXTRA_DONE))]
+
+    def line(row: Any, hooks: str) -> str:
+        mark = '<span class="good" aria-hidden="true">✓</span>'
+        return f'<li class="line"{hooks}>{mark}{_named(row)}</li>'
+
+    items = "".join(line(r, _row_hooks(page, r, i, {})) for i, r in enumerate(shown))
+    list_id = page.new_id()
     if count > len(shown):
-        items += f'<li class="meta">{page.say("more", n=count - len(shown))}</li>'
+        hook = _more_hook(page, list_id) if held else ""
+        items += f'<li class="meta"{hook}>{page.say("more", n=count - len(shown))}</li>'
+    if held:
+        extra = [line(r, _row_hooks(page, r, len(shown) + i, {})) for i, r in enumerate(held)]
+        items += _held(page, extra, count - len(shown) - len(held))
     said = ""
     if days := _int(block.get("days")):
         said = f'<p class="big">{page.say("closed_in_days", n=count, days=days)}</p>'
-    return f'<section>{page.head(block, "sec_done")}{said}<ul class="rows">{items}</ul></section>'
+    body = f'{said}<ul class="rows" id="{list_id}">{items}</ul>'
+    return _section(page, page.head(block, "sec_done"), body)
 
 
 def _bars(page: _Page, block: dict[str, Any]) -> str:
@@ -745,12 +1044,18 @@ def _bars(page: _Page, block: dict[str, Any]) -> str:
     if not rows:
         return ""
     top = max(_int(r["value"]) for r in rows)
-    items = "".join(
-        f'<li>{_named(r)}<span><i style="width:{max(2, 100 * _int(r["value"]) / top):.1f}%">'
-        f'</i></span><span class="count">{_int(r["value"])}</span></li>'
-        for r in rows
-    )
-    return f'<section>{page.head(block, "")}<ul class="bars">{items}</ul></section>'
+
+    def bar(row: dict[str, Any]) -> str:
+        value = _int(row["value"])
+        said = f"{_t(row_text(row), 120)}: {value}"
+        return (
+            f"<li>{_named(row)}<span{_tip(said)}>"
+            f'<i style="width:{max(2, 100 * value / top):.1f}%">'
+            f'</i></span><span class="count">{value}</span></li>'
+        )
+
+    items = "".join(bar(r) for r in rows)
+    return _section(page, page.head(block, ""), f'<ul class="bars" data-gd-tips>{items}</ul>')
 
 
 def _table(page: _Page, block: dict[str, Any]) -> str:
@@ -758,7 +1063,9 @@ def _table(page: _Page, block: dict[str, Any]) -> str:
     rows = [r for r in _rows(block) if isinstance(r, list)][:12]
     if not columns or not rows:
         return ""
-    head = "".join(f"<th>{_t(c, 40)}</th>" for c in columns)
+    sortable = len(rows) >= MIN_SORT_TABLE_ROWS
+    hooks = [f' data-gd-col="{i}"' if sortable else "" for i in range(len(columns))]
+    head = "".join(f"<th{hook}>{_t(c, 40)}</th>" for hook, c in zip(hooks, columns))
     body = "".join(
         "<tr>"
         + "".join(
@@ -768,10 +1075,11 @@ def _table(page: _Page, block: dict[str, Any]) -> str:
         + "</tr>"
         for row in rows
     )
-    return (
-        f'<section>{page.head(block, "")}<div class="scroll"><table><thead><tr>{head}</tr></thead>'
-        f"<tbody>{body}</tbody></table></div></section>"
+    table = (
+        f'<div class="scroll"><table><thead><tr>{head}</tr></thead>'
+        f"<tbody>{body}</tbody></table></div>"
     )
+    return _section(page, page.head(block, ""), table)
 
 
 def _list(page: _Page, block: dict[str, Any]) -> str:
@@ -779,13 +1087,13 @@ def _list(page: _Page, block: dict[str, Any]) -> str:
     if not rows:
         return ""
     items = "".join(f"<li>{_named(r, 'clamp')}</li>" for r in rows)
-    return f'<section>{page.head(block, "")}<ul class="rows">{items}</ul></section>'
+    return _section(page, page.head(block, ""), f'<ul class="rows">{items}</ul>')
 
 
 def _text_block(page: _Page, block: dict[str, Any]) -> str:
     if not block.get("text"):
         return ""
-    return f'<section>{page.head(block, "")}<p class="narr">{_t(block["text"], 240)}</p></section>'
+    return _section(page, page.head(block, ""), f'<p class="narr">{_t(block["text"], 240)}</p>')
 
 
 _DRAW = {
