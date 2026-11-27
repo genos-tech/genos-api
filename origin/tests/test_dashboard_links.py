@@ -278,7 +278,7 @@ class RenderTests(SimpleTestCase):
         self.assertIn(
             '<a href="/workspace/tasks/project/1/task/2">&lt;b&gt;mine&lt;/b&gt;</a>', html
         )
-        self.assertIn("<li>an old plain row</li>", html)
+        self.assertIn('title="an old plain row">an old plain row</div>', html)
         self.assertNotIn("evil.example", html)
         self.assertNotIn("javascript:", html)
         self.assertNotIn("<script", html)
@@ -428,7 +428,7 @@ class SkillPageTests(DashBase):
         revision = self.run_page(
             self.answer({"text": "Guessed", "ref": {"kind": "task", "id": task.task_id}})
         )
-        self.assertIn("<li>Guessed</li>", revision.html)
+        self.assertIn('title="Guessed">Guessed</div>', revision.html)
         self.assertNotIn("<a ", revision.html)
 
     def test_a_task_the_owner_may_not_open_is_words_only_even_when_a_result_named_its_id(self):
