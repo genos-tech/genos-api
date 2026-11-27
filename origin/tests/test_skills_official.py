@@ -69,7 +69,9 @@ class CatalogTests(SkillBase):
     def test_a_text_only_names_tools_the_in_app_agent_has(self):
         """A connector-only name (`get_my_briefing`) or one the connector renames (`get_task`) in a
         text would send the in-app agent to a tool it does not have."""
-        in_app = set(tool_base.REGISTRY)
+        # A flag-gated tool counts (MIP-2485): the skill that needs one is published after the flag
+        # is on (see the flag's comment in settings).
+        in_app = set(tool_base.REGISTRY) | set(tool_base.FLAGGED_REGISTRY)
         connector_names = {t.name for t in mcp_tools.CATALOG} | set(tool_base.MCP_ONLY_REGISTRY)
         for spec in official.load_catalog():
             for name in set(re.findall(r"`([a-z]+(?:_[a-z0-9]+)+)`", spec.body_markdown)):

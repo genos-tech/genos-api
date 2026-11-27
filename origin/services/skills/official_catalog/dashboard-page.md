@@ -76,4 +76,4 @@ Example. Its numbers and ids are made up: yours come from this run.
 }
 ```
 
-Source: [Genos skills v0.7.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.7.0/plugins/genos/skills/dashboard-page/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.8.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.8.0/plugins/genos/skills/dashboard-page/SKILL.md), the runbook this skill was made from.

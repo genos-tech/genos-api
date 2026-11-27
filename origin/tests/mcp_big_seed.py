@@ -319,6 +319,7 @@ def read_calls(case) -> dict[str, dict]:
             "limit": 100,
         },
         "list_my_unread": {"limit": 300},
+        "list_my_waiting_comments": {"limit": 50, "days": 90},
         "get_my_importance": {"limit": 10},
         "get_my_memory": {},
         "list_my_schedules": {},

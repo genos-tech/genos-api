@@ -1,8 +1,20 @@
 {
-  "release": "v0.7.0",
+  "release": "v0.8.0",
   "source": "https://github.com/genos-tech/genos-claude-plugin",
-  "docs_ref": "a9828266a244d90557074cbb9b2ca5f2cb3cc031",
+  "docs_ref": "b7587d750cd9ed10eb0ea0754f1e0b466f8c7465",
   "skills": [
+    {
+      "slug": "comments-waiting-on-me",
+      "title": "Comments waiting on me",
+      "description": "Task and milestone comments that wait for your answer: what others asked you on work that is not closed and that you have not replied or reacted to, ranked by urgency, each with a link to the task and a one-line \"what they need from you\".",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "read",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/comments-waiting-on-me/SKILL.md"
+    },
     {
       "slug": "create-task",
       "title": "Create a task",
@@ -99,6 +111,18 @@
       "tool_level": "act",
       "pack": "general",
       "source_path": "plugins/genos/skills/triage/SKILL.md"
+    },
+    {
+      "slug": "unread-summary",
+      "title": "Summarize unread messages",
+      "description": "Summarize your unread messages, for example after days off: what is unread in each direct message, group chat and thread with a one-line gist, and a \"read first\" list ranked by what each message asks of you, every chat and thread linked.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "read",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/unread-summary/SKILL.md"
     },
     {
       "slug": "weekly-review",

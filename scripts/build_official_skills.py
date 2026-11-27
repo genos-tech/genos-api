@@ -339,6 +339,7 @@ def lint(slug: str, body: str, tools: dict) -> list[str]:
         if _FORBIDDEN.search(line):
             out.append(f"{slug}: still Claude Code or connector text: {line.strip()[:140]}")
     known = set(tools["registry"]) | {p for ps in tools["params"].values() for p in ps}
+    known |= set(tools.get("flagged", []))
     for name in sorted(set(_TOOL_WORD.findall(body))):
         if name in known or name in FIELD_NAMES:
             continue
@@ -362,6 +363,12 @@ FIELD_NAMES = {
     "redacted_count",
     "task_id",
     "display_id",
+    # MIP-2485: the unread digest and the waiting comments
+    "events_omitted",
+    "your_last_comment",
+    "next_offset",
+    "comments_omitted",
+    "your_ai_app_comment",
     "milestone_id",
     "numeric_id",
     "project_id",

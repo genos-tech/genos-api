@@ -25,7 +25,7 @@ FULL = "full"
 CORE = "core"
 
 # The core: what the genos-workflow skill calls, plus the tools with the most real use in the
-# 2026-11-15..21 log window (MIP-1594, findings note). Not in it on purpose: list_my_unread,
+# 2026-11-15..21 log window (MIP-1594, findings note). Not in it on purpose:
 # get_note_history, restore_task_body and restore_note_version (they are in the domains).
 CORE_TOOLS: tuple[str, ...] = (
     "get_my_briefing",
@@ -67,6 +67,10 @@ CORE_TOOLS: tuple[str, ...] = (
     "list_calendar_events",
     "get_stale_tasks",
     "update_task_dependencies",
+    # MIP-2485: the general skills `unread-summary` and `comments-waiting-on-me` (D1 above:
+    # every tool a shipped general skill calls).
+    "list_my_unread",
+    "list_my_waiting_comments",
 )
 
 # Domain endpoints. Each name here is in exactly one domain, and every catalog tool is in one.
@@ -142,6 +146,7 @@ DOMAIN_TOOLS: dict[str, tuple[str, ...]] = {
         "get_my_briefing",
         "list_my_tasks",
         "list_my_unread",
+        "list_my_waiting_comments",
         "get_my_blockers",
         "list_my_inbox",
         "get_item_line",

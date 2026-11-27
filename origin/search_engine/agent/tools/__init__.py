@@ -124,6 +124,10 @@ from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTONES
 from origin.search_engine.agent.tools.list_my_unread import LIST_MY_UNREAD
+from origin.search_engine.agent.tools.list_my_waiting_comments import (
+    LIST_MY_WAITING_COMMENTS,
+    LIST_MY_WAITING_COMMENTS_INAPP,
+)
 from origin.search_engine.agent.tools.list_note_access import LIST_NOTE_ACCESS
 from origin.search_engine.agent.tools.list_note_folders import LIST_NOTE_FOLDERS
 from origin.search_engine.agent.tools.list_pr_comments import LIST_PR_COMMENTS
@@ -348,6 +352,8 @@ register_flagged_tool(GET_CALENDAR_EVENT, PARITY_FLAG)
 # MIP-2328: "how do I ... in Genos" from the vendored manual, the in-app twin of MCP's tool of the same name
 # (`get_mcp_tool` prefers the MCP-only one). The same flag moves the prompt's "how do I" lines off `search_web`.
 register_flagged_tool(GET_GENOS_HELP_INAPP, "AGENT_INAPP_HELP_TOOL")
+register_flagged_tool(LIST_MY_WAITING_COMMENTS_INAPP, "AGENT_INAPP_WAITING_COMMENTS_TOOL")
+register_tool(LIST_MY_WAITING_COMMENTS)
 
 
 __all__ = [

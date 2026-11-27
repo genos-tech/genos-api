@@ -2021,6 +2021,14 @@ SEARCH_ENGINE["AGENT_INAPP_HELP_TOOL"] = (
     os.environ.get("AGENT_INAPP_HELP_TOOL", "true").lower() == "true"
 )
 
+# MIP-2485 (model-visible, dark-shipped OFF, NOT evaluated): `list_my_waiting_comments` for the in-app agent, the task
+# comments the member has not answered. The official skill `comments-waiting-on-me` needs it: turn this on (web AND
+# schedule-tick services) before `sync_official_skills --apply` publishes that skill. MCP publishes the tool whatever
+# the flag says. OFF = neither declared nor runnable in the app. The eval case is `evals/group/t2485-catchup-skills.yaml`.
+SEARCH_ENGINE["AGENT_INAPP_WAITING_COMMENTS_TOOL"] = (
+    os.environ.get("AGENT_INAPP_WAITING_COMMENTS_TOOL", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["AGENT_INAPP_NOTE_COMMENT_TOOL"] = (
     os.environ.get("AGENT_INAPP_NOTE_COMMENT_TOOL", "false").lower() == "true"
 )

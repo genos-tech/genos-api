@@ -72,7 +72,8 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # the constant goes up to 148,500 (316 characters left). See `test_agent_prefix_budget`.
 # MIP-2329: the arm `t2328` puts `AGENT_INAPP_HELP_TOOL` (+587 characters: the declaration and two prompt lines) into the all-on
 # union: 142,962 with a Long member's block, so 143,500 (538 left). The arm is written, not run (no paid eval, Ken 2026-11-24).
-ALL_ON_BUDGET_CHARS = 143_500
+# MIP-2485: the arm `t2485` puts `list_my_waiting_comments` into the union: 143,890 with a Long member's block, so 144,500.
+ALL_ON_BUDGET_CHARS = 144_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped
@@ -180,7 +181,13 @@ class AllOnDeclarationTests(SimpleTestCase):
         # the parity batch).
         self.assertEqual(
             extra,
-            ["get_timeline", "delete_task_attachment", "get_calendar_event", "get_genos_help"],
+            [
+                "get_timeline",
+                "delete_task_attachment",
+                "get_calendar_event",
+                "get_genos_help",
+                "list_my_waiting_comments",
+            ],
         )
         self.assertEqual(len({d.name for d in on}), len(on), "a tool is declared twice")
 
@@ -266,7 +273,13 @@ class AllOnDeclarationTests(SimpleTestCase):
             self.assertIsNotNone(_app_tool("get_timeline"))
             self.assertEqual(
                 [t.name for t in flagged_tools()],
-                ["get_timeline", "delete_task_attachment", "get_calendar_event", "get_genos_help"],
+                [
+                    "get_timeline",
+                    "delete_task_attachment",
+                    "get_calendar_event",
+                    "get_genos_help",
+                    "list_my_waiting_comments",
+                ],
             )
         self.assertNotIn("get_timeline", REGISTRY)
         self.assertNotIn("delete_task_attachment", REGISTRY)
@@ -350,8 +363,14 @@ class AllOnProviderTests(SimpleTestCase):
             names = [t.get("name") or t["function"]["name"] for t in tools]
             self.assertEqual(names, [d.name for d in decls], client_cls)
             self.assertEqual(
-                names[-4:],
-                ["get_timeline", "delete_task_attachment", "get_calendar_event", "get_genos_help"],
+                names[-5:],
+                [
+                    "get_timeline",
+                    "delete_task_attachment",
+                    "get_calendar_event",
+                    "get_genos_help",
+                    "list_my_waiting_comments",
+                ],
             )
 
 

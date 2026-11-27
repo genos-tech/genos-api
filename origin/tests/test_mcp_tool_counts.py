@@ -28,19 +28,19 @@ from origin.views.public.mcp.tools import CATALOG, published
 # (`get_calendar_event`, the same flag): `FLAGGED_READS`. The flag has been ON by default in production
 # since the 2026-11-15 flip, so a client is offered `OFFERED` = `PUBLISHED` + `FLAGGED` = 106 (55 reads,
 # 51 writes) by default and `PUBLISHED` = 104 with `AGENT_PARITY_TOOLS=false` (the rollback).
-PUBLISHED = 105
+PUBLISHED = 106
 FLAGGED = 2
 FLAGGED_WRITES = 1
 FLAGGED_READS = 1
-OFFERED = 107
-OFFERED_READS = 56
+OFFERED = 108
+OFFERED_READS = 57
 OFFERED_WRITES = 51
 FROM_REGISTRY = (
     83  # published tools backed by a tool in the agent registry (some under another name)
 )
 FROM_REGISTRY_READS = 47
 FROM_REGISTRY_WRITES = 36
-MCP_ONLY = 22
+MCP_ONLY = 23
 # MIP-2046: three more MCP-only reads (list_my_skills, get_skill, run_skill), published only while the
 # top-level setting GENOS_SKILLS is on (`McpTool.setting`). They are in CATALOG and MCP_ONLY_REGISTRY but in
 # neither PUBLISHED nor OFFERED: with the switch off (the default) a client is offered what it was.
@@ -49,7 +49,7 @@ MCP_ONLY = 22
 SKILLS_GATED = 3
 SETTING_GATED = 4
 OFFERED_WITH_SKILLS = OFFERED + SKILLS_GATED
-MCP_ONLY_READS = 8
+MCP_ONLY_READS = 9
 MCP_ONLY_WRITES = 14
 REGISTRY_SIZE = 88
 # Registry tools with no MCP tool at all: 4 reads, and `delete_project` (a write that is in the app only).

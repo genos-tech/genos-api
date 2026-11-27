@@ -45,12 +45,13 @@ Left out on purpose (Ken, 2026-11-12):
 ## Cost
 
 A fixed number of queries however large the account: one for the pool, one for chats, one for
-tasks, a few per DISTINCT note (capped), two for the opened-at times, one for names, one or
-two for the message text, two for the inbox counts. No per-row work.
+tasks, a few per DISTINCT note (capped), two for the opened-at times, one for names, one for
+the unnamed chats' titles, one or two for the message text, two for the inbox counts. No per-row work.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections import Counter
@@ -72,8 +73,8 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
-from origin.services import briefing
-from origin.services.channel_scope import readable_chats_qs
+from origin.services import app_links, briefing
+from origin.services.channel_scope import channel_titles, readable_chats_qs
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,11 @@ MAX_LIMIT = 300
 EVENTS_PER_ITEM = 8
 # Items returned. The rest are counted in `stats` and `truncated`, and reachable by a filter.
 MAX_ITEMS = 50
+# For an outside reader (MCP) the items of one answer are bounded, as indented JSON, under the
+# MCP result cap (24,000), which would otherwise drop items that `next_offset` had counted; and
+# each message is shorter unless one chat or task was asked for.
+OUTSIDE_ANSWER_CHARS = 18_000
+OUTSIDE_TEXT_CHARS = 500
 # Long enough for a real message or comment; the reader is a model that has to understand it.
 TEXT_CHARS = 2000
 ROOT_CHARS = 400
@@ -127,6 +133,10 @@ class _Item:
     key: tuple
     place: str
     rows: list[_Row] = field(default_factory=list)
+
+    @property
+    def place_is_chat(self) -> bool:
+        return self.key[0] in ("chat", "thread")
 
 
 def _int(value: Any) -> int | None:
@@ -245,7 +255,7 @@ def _classify(r: dict[str, Any]) -> _Row | None:
 class _Access:
     """What the member may open NOW, for the items the unread rows point at."""
 
-    chats: set[str]
+    chats: dict[str, Any]  # channel id -> Channel
     tasks: dict[int, Any]
     notes: dict[tuple[int, int], str]
     unchecked_notes: set[tuple[int, int]]
@@ -255,13 +265,14 @@ def _check_access(ctx: ToolContext, items: dict[tuple, _Item]) -> _Access:
     chat_ids = {k[1] for k in items if k[0] in ("chat", "thread")}
     chats = (
         {
-            str(i)
-            for i in readable_chats_qs(ctx.team_id, ctx.user_id)
+            str(c.id): c
+            for c in readable_chats_qs(ctx.team_id, ctx.user_id)
             .filter(id__in=chat_ids)
-            .values_list("id", flat=True)
+            .select_related(None)
+            .only("id", "kind", "title")
         }
         if chat_ids
-        else set()
+        else {}
     )
     access = LabelAccess(ctx)
     tasks = access.tasks({k[1] for k in items if k[0] == "task"})
@@ -386,6 +397,7 @@ def build_unread(
     kinds: Any = None,
     chat_id: Any = None,
     task_id: Any = None,
+    offset: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """The caller's unread items in `ctx.team_id`, with stats. Read-only: nothing is marked read.
@@ -396,6 +408,9 @@ def build_unread(
     now = now or timezone.now()
     flt = _parse_filter(kinds, chat_id, task_id)
     cap = _parse_limit(limit)
+    skip = max(0, _int(offset) or 0)
+    if offset not in (None, "") and _int(offset) is None:
+        raise ToolError(f"`offset` must be an integer (got {offset!r}).")
     since_dt = (
         briefing._parse_since(since, ctx.user_id, now) if since not in (None, "") else None
     ) or now - DEFAULT_LOOKBACK
@@ -466,7 +481,7 @@ def build_unread(
     per_item = cap if flt.narrowed_to_one else EVENTS_PER_ITEM
     budget = cap
     chosen: list[tuple[_Item, list[_Row]]] = []
-    for item in shown_items[:MAX_ITEMS]:
+    for item in shown_items[skip : skip + MAX_ITEMS]:
         events = sorted((r for r in item.rows if r.reason != "reaction"), key=lambda r: r.at)
         take = events[-per_item:][-budget:] if budget > 0 else []
         budget -= len(take)
@@ -483,11 +498,21 @@ def build_unread(
         # A person the caller may not see by name stays "someone" (`get_team_members` rule).
         return wrap_workspace_content(names[user_id]) if user_id in names else "someone"
 
+    titles = channel_titles(
+        [access.chats[i] for i in {item.key[1] for item, _ in chosen if item.place_is_chat}],
+        ctx.user_id,
+    )
+    mcp = ctx.surface == "mcp"
+    text_chars = OUTSIDE_TEXT_CHARS if mcp and not flt.narrowed_to_one else TEXT_CHARS
     out_items = [
-        _render_item(item, take, access, opened, who, texts, roots) for item, take in chosen
+        _render_item(item, take, access, opened, who, texts, roots, titles, mcp, text_chars)
+        for item, take in chosen
     ]
-    events_returned = sum(len(take) for _, take in chosen)
-    events_available = sum(1 for i in shown_items for r in i.rows if r.reason != "reaction")
+    if mcp and not flt.narrowed_to_one:
+        out_items = _fit(out_items)
+    events_returned = sum(len(item["events"]) for item in out_items)
+    left = shown_items[skip:]
+    events_available = sum(1 for i in left for r in i.rows if r.reason != "reaction")
 
     summary = (
         f"{total_rows} unread in {len(items)} item(s)."
@@ -509,12 +534,28 @@ def build_unread(
         "items": out_items,
         "returned": {"items": len(out_items), "events": events_returned},
         "truncated": {
-            "items": max(0, len(shown_items) - len(out_items)),
+            "items": max(0, len(left) - len(out_items)),
             "events": max(0, events_available - events_returned),
         },
+        # Only MCP takes `offset` (the in-app declaration has none).
+        **(
+            {"next_offset": skip + len(out_items)}
+            if mcp and out_items and len(left) > len(out_items)
+            else {}
+        ),
         **({"filter": flt.echo()} if flt.echo() else {}),
         "__summary__": summary,
     }
+
+
+def _fit(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """As many items as fit `OUTSIDE_ANSWER_CHARS`, at least one."""
+    used = 0
+    for i, item in enumerate(items):
+        used += len(json.dumps(item, indent=2, ensure_ascii=False, default=str))
+        if used > OUTSIDE_ANSWER_CHARS and i:
+            return items[:i]
+    return items
 
 
 def _opened_at(ctx: ToolContext, items: dict[tuple, _Item]) -> dict[tuple, datetime]:
@@ -552,13 +593,14 @@ def _thread_roots(items) -> dict[str, tuple[str | None, str]]:
     }
 
 
-def _message_texts(message_ids) -> dict[str, str]:
+def _message_texts(message_ids) -> dict[str, tuple[int, str]]:
+    """`{message_id: (seq, text)}`."""
     ids = list(set(message_ids))
     if not ids:
         return {}
     return {
-        str(m["id"]): _clip(m["body_text"] or extract_text(m["body"]), TEXT_CHARS)
-        for m in Message.objects.filter(id__in=ids).values("id", "body_text", "body")
+        str(m["id"]): (m["seq"], _clip(m["body_text"] or extract_text(m["body"]), TEXT_CHARS))
+        for m in Message.objects.filter(id__in=ids).values("id", "seq", "body_text", "body")
     }
 
 
@@ -568,8 +610,11 @@ def _render_item(
     access: _Access,
     opened: dict[tuple, datetime],
     who,
-    texts: dict[str, str],
+    texts: dict[str, tuple[int, str]],
     roots: dict[str, tuple[str | None, str]],
+    titles: dict[Any, str],
+    mcp: bool,
+    text_chars: int,
 ) -> dict[str, Any]:
     key = item.key
     rows = sorted(item.rows, key=lambda r: r.at)
@@ -577,6 +622,12 @@ def _render_item(
 
     if key[0] in ("chat", "thread"):
         out["chat_id"] = key[1]
+        title = titles.get(access.chats[key[1]].id)
+        if title:
+            out["title"] = wrap_workspace_content(title)
+        if mcp:
+            thread_id = key[2] if key[0] == "thread" else None
+            out["url"] = app_links.chat_url(item.place, key[1], thread_id)
         if key[0] == "thread":
             out["thread_id"] = key[2]
             root = roots.get(key[2])
@@ -590,7 +641,10 @@ def _render_item(
             title=wrap_workspace_content(task.title or ""),
             status=task.status,
             project=wrap_workspace_content(task.project.project_name) if task.project_id else None,
+            project_id=task.project_id,
         )
+        if mcp and task.project_id:
+            out["url"] = app_links.task_url(task.project_id, key[1])
     else:
         out.update(
             note_type=_NOTE_KIND[key[1]],
@@ -613,14 +667,17 @@ def _render_item(
 
     events = []
     for r in take:
-        text = texts.get(r.message_id) if r.message_id else r.text
+        seq, text = texts.get(r.message_id, (None, None)) if r.message_id else (None, r.text)
         event: dict[str, Any] = {"at": r.at.isoformat(), "reason": r.reason, "by": who(r.actor_id)}
         if r.location:
             event["in"] = r.location
         if text:
-            event["text"] = wrap_workspace_content(_clip(text, TEXT_CHARS))
+            event["text"] = wrap_workspace_content(_clip(text, text_chars))
         if r.message_id:
             event["message_id"] = r.message_id
+        # A chat or thread only: a task comment's copy has no message page of its own.
+        if mcp and seq is not None and key[0] in ("chat", "thread"):
+            event["url"] = app_links.message_url(out["url"], seq)
         if seen_at is not None and seen_at >= r.at:
             event["opened_since"] = True
         events.append(event)

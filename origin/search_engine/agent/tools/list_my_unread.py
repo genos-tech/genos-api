@@ -28,6 +28,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         kinds=args.get("kinds"),
         chat_id=args.get("chat_id"),
         task_id=args.get("task_id"),
+        offset=args.get("offset"),
     )
 
 
