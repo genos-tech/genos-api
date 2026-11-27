@@ -489,7 +489,9 @@ def report_of(dashboard: Dashboard) -> Report:
 # with the calendar alone while nothing happens: a block's columns are labelled by the window's
 # days (the `series` already holds what was closed and created), and the two counts are of windows
 # that roll forward. With them every AI dashboard would pay for a new summary each day.
-_NOT_FINGERPRINTED = ("ref", "href", "points", "previous", "closed_recently")
+# `owner` and `more_rows` are what the page's filters and "+N more" hold (MIP-2452): the summary is
+# written from the report's numbers and lists, never from them, so they must move no hash.
+_NOT_FINGERPRINTED = ("ref", "href", "points", "previous", "closed_recently", "owner", "more_rows")
 
 
 def _words_only(value: Any) -> Any:
