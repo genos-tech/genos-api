@@ -70,7 +70,8 @@ class Command(BaseCommand):
                         "The app will start without search index setup. "
                         "Run `manage.py opensearch_setup` once OpenSearch is ready."
                     )
-                    # Exit 0 so the Dockerfile CMD continues to gunicorn.
+                    # Exit 0: this runs in the Railway pre-deploy step (MIP-938), and a
+                    # search outage must not block the deploy.
 
     def _refuse_foreign_alias(self, client, physical, alias):
         """Raise (CommandError, exit 1) BEFORE any write if `alias` is not ours to create/re-point.
