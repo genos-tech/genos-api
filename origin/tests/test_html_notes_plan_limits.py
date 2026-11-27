@@ -18,6 +18,8 @@ What is pinned:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from unittest import mock
 
 from django.core.cache import cache
@@ -80,6 +82,19 @@ def stored(team, user, size: int, *, model=PersonalNoteMaster, code: int = 1, **
     )
     kept(note.note_id, size, code=code)
     return note.note_id
+
+
+class PinnedClock:
+    """Pins the hourly save limit's clock (a fixed window per clock hour), so a run that crosses an
+    hour boundary between two saves cannot restart the count mid-test. Move it with `self.now`."""
+
+    START = datetime(2026, 1, 1, 12, 30, tzinfo=dt_timezone.utc)
+
+    def pin_clock(self):
+        self.now = self.START
+        patcher = mock.patch.object(html_notes, "timezone")
+        patcher.start().now.side_effect = lambda: self.now
+        self.addCleanup(patcher.stop)
 
 
 class TheTable(HtmlBase):
@@ -265,7 +280,7 @@ class StorageUsed(HtmlBase):
         self.assertEqual(text(1), "1 KB")
 
 
-class StorageQuota(HtmlBase):
+class StorageQuota(PinnedClock, HtmlBase):
     size = len(GOOD.encode())
 
     def fill(self, left: int, user=None, row=CORE) -> None:
@@ -351,6 +366,7 @@ class StorageQuota(HtmlBase):
         self.assertEqual(self.page_count(note.note_id), 1)
 
     def test_an_editor_cannot_probe_the_owners_storage_for_free(self):
+        self.pin_clock()
         note = self.html_note()
         PersonalNoteMaster.objects.filter(note_id=note.note_id).update(owner=self.user2)
         NotePermissionMaster.objects.filter(note_id=note.note_id, note_type=1).update(
@@ -390,7 +406,22 @@ class StorageQuota(HtmlBase):
             self.save()
 
 
-class RatePerTier(HtmlBase):
+class RatePerTier(PinnedClock, HtmlBase):
+    def setUp(self):
+        super().setUp()
+        self.pin_clock()
+
+    def test_a_new_clock_hour_starts_the_count_again(self):
+        self.now = self.START.replace(minute=59, second=59)
+        for _ in range(CORE.saves_per_hour):
+            self.save()
+        text = self.refused(SAVE, html=GOOD, note_type="personal", title="t")
+        self.assertIn("about 1 minutes", text)
+        self.now += timedelta(seconds=1)  # 13:00:00
+        for _ in range(CORE.saves_per_hour):
+            self.save()
+        self.refused(SAVE, html=GOOD, note_type="personal", title="t")
+
     def test_core_gets_30_an_hour(self):
         for _ in range(CORE.saves_per_hour):
             self.save()

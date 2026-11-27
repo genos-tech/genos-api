@@ -16,7 +16,11 @@ _PROJECT_NUMBER_MAX_RETRIES = 8
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import (
+    ProjectMaster,
+    ProjectStatus,
+    drop_stale_custom_status,
+)
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 
@@ -94,6 +98,16 @@ class TaskMaster(models.Model):
     priority = models.CharField(blank=True, null=True)
     effort_level = models.CharField(blank=True, null=True)
     status = models.CharField()
+    # The project's own label within `status`'s category (MIP-2492); cleared by `save()` when
+    # `status` or the project no longer matches it.
+    custom_status = models.ForeignKey(
+        ProjectStatus,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="status_tasks",
+        to_field="status_id",
+    )
     priority_code = models.BigIntegerField(blank=True, null=True)
     effort_level_code = models.BigIntegerField(blank=True, null=True)
     status_code = models.BigIntegerField(blank=True, null=True)
@@ -183,6 +197,10 @@ class TaskMaster(models.Model):
                 name="taskmaster_parent_task_idx",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        drop_stale_custom_status(self, kwargs)
+        super().save(*args, **kwargs)
 
     @property
     def display_id(self) -> str:

@@ -11,8 +11,20 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
 from django.db import transaction
-from django.db.models import Case, Count, F, IntegerField, Q, Sum, Value, When
+from django.db.models import (
+    Case,
+    Count,
+    F,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+    When,
+)
 from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Coalesce
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -33,6 +45,11 @@ from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.live_projects import not_in_gone_project
+from origin.services.project_statuses import (
+    StatusError,
+    is_same_status_id,
+    pick_custom_status,
+)
 from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_attachment_manage import (
     add_attachment,
@@ -157,6 +174,10 @@ def _cascade_project_to_subtasks(root_task_id, project_id, team_id) -> int:
         project_id=project_id,
         team_id=team_id,
     )
+
+
+def _status_refusal(exc: StatusError) -> Response:
+    return Response({"error": exc.message, "code": exc.code, **exc.extra}, status=exc.status)
 
 
 def _no_task():
@@ -428,6 +449,22 @@ class TaskMasterView(AuthenticatedAPIView):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
         data["custom_field_values"] = cleaned_values
 
+        # The project's own label for the status (MIP-2492). Picking one picks its category,
+        # which then wins over an "Open" the form filled in; any other status contradicts it.
+        if request.data.get("custom_status") not in (None, ""):
+            try:
+                row, implied = pick_custom_status(
+                    project.project_id,
+                    request.data.get("custom_status"),
+                    current_id=None,
+                    current_status="Open",
+                    requested_status=data["status"],
+                )
+            except StatusError as exc:
+                return _status_refusal(exc)
+            data["custom_status"] = row.status_id
+            data["status"] = implied or data["status"]
+
         # The thread has to be one the writer can read, judged before the
         # one-task-per-thread answer below so that answer (which names the other
         # task) is never given to someone outside the chat (MIP-1314).
@@ -662,6 +699,13 @@ class TaskMasterView(AuthenticatedAPIView):
             "",
         )
 
+        # `custom_status` (MIP-2492): a value other than the stored one is a pick, an explicit
+        # null a clear; a full save restating the stored one says nothing (`TaskMaster.save`
+        # drops it when the status has moved on).
+        custom_status_picked = "custom_status" in request.data and not is_same_status_id(
+            request.data.get("custom_status"), task.custom_status_id
+        )
+
         # Remove None values from the update_data
         for key, val in request.data.items():
             if val is None:
@@ -880,6 +924,35 @@ class TaskMasterView(AuthenticatedAPIView):
             # a move into (or out of) a shared project look like it did
             # nothing at all.
             update_data["team"] = dest_project.team_id
+
+        # After the destination's own answers, so a refusal here says nothing about a project
+        # the writer is not on.
+        update_data.pop("custom_status", None)
+        if custom_status_picked:
+            if task.is_milestone:
+                # A null is a full save echoing a row it holds no label for: dropped, not refused.
+                if request.data.get("custom_status") not in (None, ""):
+                    return Response(
+                        {
+                            "error": "Set a milestone's status on the milestone.",
+                            "code": "milestone_status",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                try:
+                    row, implied = pick_custom_status(
+                        people_project.project_id if people_project else None,
+                        request.data.get("custom_status"),
+                        current_id=task.custom_status_id,
+                        current_status=task.status,
+                        requested_status=request.data.get("status"),
+                    )
+                except StatusError as exc:
+                    return _status_refusal(exc)
+                update_data["custom_status"] = row.status_id if row else None
+                if implied:
+                    update_data["status"] = implied
 
         # `project_task_number` is only unique WITHIN a project, so it can't
         # ride along on a move: re-sending the source project's number with
@@ -1379,6 +1452,9 @@ def _team_task_row(t) -> dict:
         "startDate": str(t.start_date) if t.start_date else None,
         "daysLeft": (max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None),
         "status": t.status,
+        # The project's own label within `status` (MIP-2492): resolve it in
+        # `projects/<id>/statuses/`, and ignore one of another category.
+        "customStatusId": t.custom_status_id,
         # This is a TEAM-WIDE list, so it hits rows whose nullable
         # FKs are actually null — an unassigned task (assignee),
         # and a task with no project. Guard EVERY FK attribute
@@ -1435,6 +1511,7 @@ _TEAM_TASK_ROW_FIELDS = (
     "due_date",
     "start_date",
     "status",
+    "custom_status",
     "assignee",
     "parent_task_id",
     "root_task_id",
@@ -1643,12 +1720,34 @@ class ChildTaskView(AuthenticatedAPIView):
         )
         child_tasks = (
             (all_children if wanted is None else all_children.filter(status__in=wanted))
-            .annotate(_status_rank=status_order_expr)
-            .order_by("_status_rank", "-ts_updated_at")
+            .annotate(
+                _status_rank=status_order_expr,
+                # Within a category, the project's own order (MIP-2492). A task with no
+                # custom status stands where the category's default does.
+                _label_rank=Coalesce(
+                    Case(
+                        When(
+                            custom_status__category=F("status"),
+                            then="custom_status__sort_order",
+                        )
+                    ),
+                    Subquery(
+                        ProjectStatus.objects.filter(
+                            project_id=project_id,
+                            category=OuterRef("status"),
+                            is_default=True,
+                            archived_at__isnull=True,
+                        ).values("sort_order")[:1]
+                    ),
+                    Value(0),
+                ),
+            )
+            .order_by("_status_rank", "_label_rank", "-ts_updated_at")
             .values(
                 "task_id",
                 "title",
                 "status",
+                "custom_status_id",
                 "tags",
                 "root_task_id",
                 "parent_task_id",
@@ -1703,6 +1802,7 @@ class ChildTaskView(AuthenticatedAPIView):
                         "color": status_colors["chipColor"],
                         "textColor": status_colors["textColor"],
                     },
+                    "customStatusId": t["custom_status_id"],
                     "tags": t["tags"] or [],
                     "parentTaskId": t["parent_task_id"],
                     "rootTaskId": t["root_task_id"],
@@ -1920,6 +2020,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                         "color": status_color(t.status)["chipColor"],
                         "textColor": status_color(t.status)["textColor"],
                     },
+                    "customStatusId": t.custom_status_id,
                     "priority": {
                         "code": 0,
                         "priority": t.priority,
@@ -2099,6 +2200,7 @@ class GetTaskView(AuthenticatedAPIView):
                         "color": status_color(t.status)["chipColor"],
                         "textColor": status_color(t.status)["textColor"],
                     },
+                    "customStatusId": t.custom_status_id,
                     "priority": {
                         "code": 0,
                         "priority": t.priority,
@@ -2288,6 +2390,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": t.status,
+                    "customStatusId": t.custom_status_id,
                     "assigneeId": t.assignee.id if t.assignee else None,
                     "assigneeEmail": t.assignee.email if t.assignee else None,
                     "assigneeName": t.assignee.username if t.assignee else None,
@@ -2397,6 +2500,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                         max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None
                     ),
                     "status": t.status,
+                    "customStatusId": t.custom_status_id,
                     "assigneeId": t.assignee.id if t.assignee else None,
                     "assigneeEmail": t.assignee.email if t.assignee else None,
                     "assigneeName": t.assignee.username if t.assignee else None,

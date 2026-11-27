@@ -74,6 +74,17 @@ urlpatterns = [
         ProjectCustomFieldsView.as_view(),
         name="project_custom_fields",
     ),
+    # A project's own statuses (MIP-2492): the built-in labels and the added ones.
+    path(
+        "api/v2/projects/<int:project_id>/statuses/",
+        ProjectStatusListView.as_view(),
+        name="project_statuses",
+    ),
+    path(
+        "api/v2/projects/<int:project_id>/statuses/<int:status_id>/",
+        ProjectStatusDetailView.as_view(),
+        name="project_status_detail",
+    ),
     path(
         "api/v2/project/profile/",
         ProjectMasterView.as_view(),

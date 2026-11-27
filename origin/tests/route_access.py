@@ -758,6 +758,8 @@ REGISTRY = {
     "origin.views.project.change_views.ProjectChangesView": checked(
         "require_project_member_or_response"
     ),
+    "origin.views.project.prj_views.ProjectStatusDetailView": checked("_project"),
+    "origin.views.project.prj_views.ProjectStatusListView": checked("_project"),
     "origin.views.project.prj_views.ProjectTaskFieldRulesView": checked("_is_member", "can_manage"),
     "origin.views.project.prj_views.ProjectTaskTemplateView": checked("_is_member"),
     "origin.views.project.prj_views.ProjectTemplateDefaultsView": checked("_is_member"),

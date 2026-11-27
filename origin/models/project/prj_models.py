@@ -1,6 +1,7 @@
 import os
 
 from django.db import models
+from django.db.models.functions import Lower
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
@@ -293,6 +294,110 @@ class ProjectCustomField(models.Model):
                 name="unique_project_custom_field",
             )
         ]
+
+
+class ProjectStatus(models.Model):
+    """A status of ONE project: a built-in label or one the team made (MIP-2492).
+
+    `category` is a system status value, the one `TaskMaster.status` and
+    `MilestoneMaster.status` hold and everything in the backend compares against. A task shows
+    its `custom_status` only while that row's category equals its `status` (see
+    `drop_stale_custom_status`), so no automation has to know these rows exist.
+
+    The built-in rows (`builtin_key` set) are written the first time a project's list is read
+    (`services/project_statuses.ensure_project_statuses`): a project nobody opened has none and
+    behaves as it did before. `archived_at` is "turned off": hidden from pickers, while the
+    tasks that hold the status keep it.
+    """
+
+    status_id = models.BigAutoField(primary_key=True)
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="team_project_statuses",
+        to_field="team_id",
+    )
+    project = models.ForeignKey(
+        ProjectMaster,
+        on_delete=models.CASCADE,
+        related_name="project_statuses",
+        to_field="project_id",
+    )
+    name = models.CharField(max_length=24)
+    category = models.CharField(max_length=16)
+    builtin_key = models.CharField(max_length=16, null=True, blank=True)
+    # A client palette value; "" leaves the client's own colour for the category.
+    color = models.CharField(max_length=24, blank=True, default="")
+    sort_order = models.IntegerField(default=0)
+    # The label a task of `category` with no `custom_status` shows.
+    is_default = models.BooleanField(default=False)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    # Display hint only, never an authorization gate.
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_project_statuses",
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(Lower("name"), "project", name="uniq_project_status_name"),
+            models.UniqueConstraint(
+                fields=["project", "builtin_key"],
+                name="uniq_project_status_builtin",
+                condition=models.Q(builtin_key__isnull=False),
+            ),
+            models.UniqueConstraint(
+                fields=["project", "category"],
+                name="uniq_project_status_default",
+                condition=models.Q(is_default=True, archived_at__isnull=True),
+            ),
+        ]
+
+
+# The columns whose write can leave a `custom_status` behind.
+_CUSTOM_STATUS_GUARDED = frozenset(
+    {"status", "custom_status", "custom_status_id", "project", "project_id"}
+)
+
+
+def drop_stale_custom_status(instance, save_kwargs: dict) -> None:
+    """Clear `instance.custom_status` when it no longer fits the row about to be saved: another
+    category than `status`, or another project (a move). Called from `save()` of the task and
+    milestone models, so every writer (auto-Blocked, PR merge, the agent, a move) is covered
+    without knowing about custom statuses.
+
+    A `pre_save` signal cannot do this: most writers save with `update_fields`, which a signal
+    cannot extend, so the cleared column would never reach the database. A queryset `.update()`
+    skips `save()`; `update_tasks_recorded` handles that path, and readers check the category.
+    """
+    update_fields = save_kwargs.get("update_fields")
+    if update_fields is not None and not _CUSTOM_STATUS_GUARDED.intersection(update_fields):
+        return
+    if instance.custom_status_id is None:
+        return
+    row = (
+        ProjectStatus.objects.filter(status_id=instance.custom_status_id)
+        .values_list("category", "project_id")
+        .first()
+    )
+    if row is not None and row == (instance.status, _as_int(instance.project_id)):
+        return
+    instance.custom_status = None
+    if update_fields is not None:
+        save_kwargs["update_fields"] = {*update_fields, "custom_status"}
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
 
 
 class ProjectLabel(models.Model):
