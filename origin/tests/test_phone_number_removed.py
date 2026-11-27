@@ -1,13 +1,16 @@
 """Genos no longer asks for, shows or hands out a phone number (MIP-2464).
 
-The column still exists until it is cleared, so every test here starts with a
-number stored: what is proved is that no answer carries it and no request sets
-it.
+Migration 0297 cleared the stored numbers and took the field off the model. The
+empty column stays until a later migration drops it, so every test here puts a
+number back with SQL: what is proved is that no answer carries it and no request
+sets it, and that the migration's statement clears it.
 """
 
+import importlib
 import json
 
 from django.contrib.auth import get_user_model
+from django.db import connection
 
 from origin.services.account_export import build_export
 from origin.tests.test_base import BaseAPITestCase
@@ -17,12 +20,23 @@ User = get_user_model()
 NUMBER = "+81 90-1234-5678"
 
 
+def _column(user, value=...):
+    """The raw column: read it, or write `value` to it."""
+    with connection.cursor() as cursor:
+        if value is not ...:
+            cursor.execute(
+                "UPDATE origin_customuser SET phone_number = %s WHERE id = %s", [value, user.pk]
+            )
+            return value
+        cursor.execute("SELECT phone_number FROM origin_customuser WHERE id = %s", [user.pk])
+        return cursor.fetchone()[0]
+
+
 class PhoneNumberRemovedTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
         for user in (self.user, self.user2):
-            user.phone_number = NUMBER
-            user.save(update_fields=["phone_number"])
+            _column(user, NUMBER)
         self.authenticate(self.user)
 
     def assert_no_number(self, response):
@@ -40,8 +54,7 @@ class PhoneNumberRemovedTests(BaseAPITestCase):
         )
         self.assertEqual(res.status_code, 400, res.content)
         self.assertEqual(res.data["fields"], ["phone_number"])
-        self.user.refresh_from_db()
-        self.assertEqual(self.user.phone_number, NUMBER)
+        self.assertEqual(_column(self.user), NUMBER)
 
     def test_sign_up_ignores_it(self):
         self.client.force_authenticate(user=None)
@@ -57,7 +70,7 @@ class PhoneNumberRemovedTests(BaseAPITestCase):
             format="json",
         )
         self.assertEqual(res.status_code, 201, res.content)
-        self.assertIsNone(User.objects.with_email("newcomer@example.com").get().phone_number)
+        self.assertIsNone(_column(User.objects.with_email("newcomer@example.com").get()))
 
     def test_me(self):
         self.assert_no_number(self.client.get("/api/v2/user/me/"))
@@ -109,3 +122,11 @@ class PhoneNumberRemovedTests(BaseAPITestCase):
         export = json.dumps(build_export(self.user), default=str)
         self.assertNotIn(NUMBER, export)
         self.assertNotIn("phone_number", export)
+
+    def test_the_migration_clears_every_stored_number(self):
+        migration = importlib.import_module("origin.migrations.0297_clear_phone_numbers_mip2464")
+        (operation,) = migration.Migration.operations
+        with connection.cursor() as cursor:
+            cursor.execute(operation.database_operations[0].sql)
+        self.assertIsNone(_column(self.user))
+        self.assertIsNone(_column(self.user2))

@@ -16,7 +16,7 @@ intact and erases the identity, which is what the law actually asks for:
 past work stays attributed to "Deleted user", and nothing dangles.
 
 **What erasure means here, concretely:**
-  * identity fields overwritten (email, username, phone, job title,
+  * identity fields overwritten (email, username, job title,
     status, avatar) — the email is replaced with an unroutable
     `deleted-<uuid>@deleted.invalid` so the unique constraint still
     holds and nothing can ever mail them again;
@@ -602,7 +602,6 @@ def delete_account(user) -> dict:
         # Identity erasure. The email must stay unique and unroutable.
         user.email = f"deleted-{uuid.uuid4().hex[:16]}@{DELETED_EMAIL_DOMAIN}"
         user.username = DELETED_USERNAME
-        user.phone_number = None
         user.custom_status = None
         user.role = None
         user.current_location = None
