@@ -471,7 +471,17 @@ def note_readers_missing(channel: Channel, schedule: MemberSchedule, note_id: in
     }
 
 
-def notice_blocks(body: dict[str, Any], note_id: int, *, shared: bool) -> list[dict[str, Any]]:
+def _notice_note_kind(schedule: MemberSchedule, channel: Channel, note_id: int) -> str:
+    """The section of Notes the notice's chip opens: a team folder's page is in Team Notes
+    (MIP-2408); otherwise Shared with me for a chat with other readers, My Notes for one's own."""
+    from origin.services.schedule_dashboards import in_team_space  # noqa: PLC0415 (import cycle)
+
+    if in_team_space(str(schedule.user_id), str(schedule.team_id), note_id):
+        return "team"
+    return "shared" if len(schedule_audience.readers(channel)) > 1 else "my"
+
+
+def notice_blocks(body: dict[str, Any], note_id: int, *, note_kind: str) -> list[dict[str, Any]]:
     """The dashboard's chat notice (MIP-2355): its title, the one-line summary and a link chip to
     the note, nothing else. The numbers live on the page, which only people with a role on the
     note can open; the chat shows no item. The chip is the editor's own `hashNote` mention, which
@@ -484,7 +494,7 @@ def notice_blocks(body: dict[str, Any], note_id: int, *, shared: bool) -> list[d
     chip = {
         "type": "hashNote",
         "props": {
-            "noteKind": "shared" if shared else "my",
+            "noteKind": note_kind,
             "noteId": str(note_id),
             "title": body["title"][:120],
         },
@@ -601,7 +611,9 @@ def deliver_to_chat(
             channel=channel,
             sender=None,
             body=(
-                notice_blocks(body, note_id, shared=len(schedule_audience.readers(channel)) > 1)
+                notice_blocks(
+                    body, note_id, note_kind=_notice_note_kind(schedule, channel, note_id)
+                )
                 if note_id is not None
                 else chat_blocks(body)
             ),

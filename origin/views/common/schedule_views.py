@@ -368,8 +368,15 @@ class ScheduleRunView(_Base):
         return Response(out)
 
 
-def _dashboard_note(note) -> dict[str, Any]:
-    return {"noteId": note.note_id, "noteType": schedule_dashboards.NOTE_TYPE, "title": note.title}
+def _dashboard_note(row) -> dict[str, Any]:
+    note = row["note"]
+    return {
+        "noteId": note.note_id,
+        "noteType": schedule_dashboards.NOTE_TYPE,
+        "title": note.title,
+        # Where the app shows it (MIP-2408): Team Notes, not My Notes or Shared with me.
+        "inTeamFolder": row["in_team_folder"],
+    }
 
 
 class ScheduleDashboardsView(_Base):
@@ -398,13 +405,13 @@ class ScheduleDashboardsView(_Base):
                 "enabled": p["enabled"],
                 "lastRun": p["last_run"],
                 "lastStatus": p["last_status"],
-                "note": _dashboard_note(row["note"]) if row["note"] else None,
+                "note": _dashboard_note(row) if row["note"] else None,
             }
             if "paused_reason" in p:
                 item["pausedReason"] = p["paused_reason"]
             own.append(item)
         shared = [
-            {**_dashboard_note(row["note"]), "ownerName": row["owner"].username or ""}
+            {**_dashboard_note(row), "ownerName": row["owner"].username or ""}
             for row in data["shared"]
         ]
         return Response({"own": own, "shared": shared})

@@ -24,6 +24,8 @@ from origin.models.common.schedule_models import MemberSchedule
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.search_engine.agent.acl import may_read_note
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.search_engine.note_context import _root_folder_ids
+from origin.views.utils.note_folder_role import readable_team_folder_roles
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL
 
 JOB = "ai_dashboard"
@@ -47,8 +49,26 @@ def _html_notes(team_id: str, note_ids: set[int]) -> dict[int, PersonalNoteMaste
         return {}
     rows = PersonalNoteMaster.objects.filter(
         note_id__in=note_ids, team_id=team_id, body_format="html"
-    ).only("note_id", "title", "owner_id", "team_id", "body_format")
+    ).only("note_id", "title", "owner_id", "team_id", "body_format", "folder_id", "parent_note_id")
     return {n.note_id: n for n in rows}
+
+
+def team_space_note_ids(user_id: str, team_id: str, notes: list[PersonalNoteMaster]) -> set[int]:
+    """Of these notes, the ones in a team folder this member can open (MIP-2408). The app shows
+    such a note in Team Notes, so its address is `/workspace/notes/team/<id>`; through the `my` or
+    `shared` address the page still opens, but the sidebar does not show where it is. A note under
+    another note sits where its root note sits."""
+    folder_of = _root_folder_ids(notes)
+    if not folder_of:
+        return set()
+    reachable = readable_team_folder_roles(user_id, team_id)
+    return {note_id for note_id, folder_id in folder_of.items() if folder_id in reachable}
+
+
+def in_team_space(user_id: str, team_id: str, note_id: int) -> bool:
+    """`team_space_note_ids` for one note, by id."""
+    notes = list(_html_notes(team_id, {note_id}).values())
+    return bool(team_space_note_ids(user_id, team_id, notes))
 
 
 def _readable(user_id: str, note: PersonalNoteMaster | None) -> bool:
@@ -100,4 +120,9 @@ def list_dashboards(ctx: ToolContext) -> dict[str, list[dict[str, Any]]]:
         shared.append({"note": note, "owner": sched.user})
         if len(shared) >= MAX_SHARED:
             break
+    in_team = team_space_note_ids(
+        ctx.user_id, ctx.team_id, [r["note"] for r in [*own, *shared] if r["note"] is not None]
+    )
+    for row in [*own, *shared]:
+        row["in_team_folder"] = row["note"] is not None and row["note"].note_id in in_team
     return {"own": own, "shared": shared}
