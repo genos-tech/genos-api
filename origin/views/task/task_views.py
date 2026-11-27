@@ -45,6 +45,7 @@ from origin.services.task_cache import (
     invalidate_project_tasks_cache,
     set_cached_project_tasks,
 )
+from origin.services.task_card_post import post_task_created_card
 from origin.services.task_collaborators import may_name_person as _may_name_person
 from origin.services.task_collaborators import people_allowed_on as _people_allowed_on
 from origin.services.task_collaborators import refuse_new_people, sync_task_collaborators
@@ -513,6 +514,11 @@ class TaskMasterView(AuthenticatedAPIView):
                 ensure_webhooks_for_links(request.user, links_for_webhook)
             except Exception:
                 logger.exception("ensure_webhooks_for_links crashed (swallowed)")
+            # A one-request create (quick add, diagram sub-task, to-do to task) is the whole
+            # create, so its project-chat card is posted here (MIP-2483). The create form's
+            # scaffold row gets its card when the form's PUT finalizes it.
+            if not serializer.instance.is_init_task:
+                post_task_created_card(serializer.instance, actor_id=request.user.id)
             return Response(
                 {
                     # Mirror the PUT handler and surface the computed
@@ -1120,6 +1126,13 @@ class TaskMasterView(AuthenticatedAPIView):
                 notify_task_assigned(
                     task, actor_id=request.user.id, previous_assignee_id=previous_assignee_id
                 )
+            else:
+                # The create form's finalizing save IS the create: post its card here, so it
+                # does not depend on the browser staying open to send one (MIP-2483). Read after
+                # every write above, so the card shows the row as it ended up.
+                task.refresh_from_db()
+                if not task.is_init_task:
+                    post_task_created_card(task, actor_id=request.user.id, self_assign=True)
 
             # What a move did that the person who made it is told (MIP-1583, MIP-1597), on a move
             # only: the task notes whose author lost their Owner role because they are not on the

@@ -334,6 +334,23 @@ def _allocate_seq_and_create_message_with_activities(
     return msg, activities
 
 
+def _existing_task_card(channel, metadata) -> Message | None:
+    """The live card of the task `metadata.taskId` names, in a project chat; else None."""
+    if channel.kind != ChannelKind.PM:
+        return None
+    try:
+        task_id = int((metadata or {}).get("taskId"))
+    except (TypeError, ValueError):
+        return None
+    return (
+        Message.objects.filter(
+            channel=channel, task_id=task_id, is_thread_reply=False, deleted_at__isnull=True
+        )
+        .order_by("seq")
+        .first()
+    )
+
+
 def _unhide_for_new_message(channel) -> None:
     """A new message brings a DM / MDM back into the sidebar of everyone who had removed it
     (MIP-1414), the sender included (they may write from another device). Their open apps are told
@@ -406,6 +423,13 @@ def _allocate_seq_and_create_message(
                 if return_parent:
                     return existing, None, False
                 return existing
+
+        # One card per task in a project chat (MIP-2483). The server posts it when the task is
+        # created; a browser tab that still sends its own gets that card back, not a second one.
+        if parent_id is None and (card := _existing_task_card(channel, metadata)) is not None:
+            if return_parent:
+                return card, None, False
+            return card
 
         # Compute next seq via Max() over the locked channel.
         last_seq = Message.objects.filter(channel=channel).aggregate(m=Max("seq"))["m"] or 0
@@ -924,7 +948,9 @@ class MessageDetailView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-def rewrite_card_message(message, *, body, body_text, metadata=None, server_built=False):
+def rewrite_card_message(
+    message, *, body, body_text, metadata=None, server_built=False, sync_mentions=True
+):
     """Replace a task card's body (and metadata, when given) and re-sync its mentions.
 
     `metadata.via` (a connected app's stamp, MIP-1570) is not the caller's to set: unless the
@@ -932,9 +958,10 @@ def rewrite_card_message(message, *, body, body_text, metadata=None, server_buil
     edit that had no browser), a `via` in it is dropped, and so is one already on the card when
     `metadata` is not given: the body is a person's now.
 
-    The one definition of "rewrite a card": `TaskCardMessageView.patch` (the browser's
-    rewrite after an edit) and `task_card_post.refresh_*_card` (the server's, after an edit
-    that had no browser, MIP-1460) both go through it, so the two cannot drift.
+    The one definition of "rewrite a card": `task_card_post.refresh_*_card` (after every write,
+    MIP-1460 and MIP-2483) and the `repair_task_cards` backfill both go through it, so the two
+    cannot drift. `sync_mentions=False` leaves the card's `@` rows as they are: the backfill of
+    old cards must not put them in anyone's list of mentions today.
     """
     if not server_built:
         given = metadata if isinstance(metadata, dict) else message.metadata
@@ -962,6 +989,8 @@ def rewrite_card_message(message, *, body, body_text, metadata=None, server_buil
         # created here — task-body mention notifications are owned
         # separately by the task PUT / `task_body_mention` path, and a
         # reassignment's by `task_assignment_notice` (MIP-1461).
+        if not sync_mentions:
+            return
         new_mentioned_ids = _valid_mention_user_ids(message.channel, body)
         MessageMention.objects.filter(message=message).delete()
         if new_mentioned_ids:
@@ -977,49 +1006,31 @@ def rewrite_card_message(message, *, body, body_text, metadata=None, server_buil
 class TaskCardMessageView(AuthenticatedAPIView):
     """PATCH /api/v3/tasks/{task_id}/card-message/
 
-    Rewrite the body of the PM channel's top-level "task card" header
-    message for a task, so an edit to the task's title / status /
-    priority / assignee / etc. is reflected on the card that renders in
-    the PM channel — for every viewer, live.
+    The app calls this after an edit to a task, and the Flask WS proxy re-broadcasts the
+    returned row as `message.updated`. The card is REBUILT HERE from the row as stored
+    (`task_card_post.refresh_task_card`, MIP-2483): the `body`, `body_text` and `metadata` the
+    client sends are accepted for compatibility and ignored, so there is one builder and the card
+    cannot say what the task does not. The write that preceded this call has usually refreshed
+    it already.
 
-    Background: the card's body (BlockNote blocks: title heading, status
-    chip, priority, ...) is built client-side at task-create time and
-    stored on the message row; `PUT /task/` updates only the `TaskMaster`
-    row, so the stored card body froze at creation. (`taskStatus` /
-    `displayId` re-derive live off the `task` FK in `MessageSerializer`,
-    but the rendered body blocks do not.) The pre-v3 socket
-    `message` PUT used to rewrite the card + broadcast; its Flask handler
-    was removed in the v3 migration. This endpoint restores that:  the
-    client supplies the freshly-built `body`, we relocate it onto the
-    stored row and bump `ts_updated_at`. The Flask WS proxy re-broadcasts
-    the returned row as `message.updated`; the next `?since=` delta sync
-    surfaces it to clients that missed the live event.
+    Keyed by `task_id` (not message_id) because the caller — the task editor — knows the task id
+    but not the PM message UUID, and the edit can originate from surfaces (Task Home, board) where
+    the PM channel isn't loaded client-side.
 
-    Keyed by `task_id` (not message_id) because the caller — the task
-    editor — knows the task id but not the PM message UUID, and the edit
-    can originate from surfaces (Task Home, board) where the PM channel
-    isn't loaded client-side.
-
-    Authorization: the requester must be a member of the PM channel
-    that holds the card (`is_chat_member`: the project's people). A
-    non-member is answered exactly as a task with no card (200
-    `{"updated": false}`), so the response does not say whether a card
-    exists. This deliberately does NOT require the
-    requester to be the message's sender (the card's sender is the
-    project system user), which is why it can't reuse
-    `MessageDetailView.patch` (sender-only).
+    Authorization: the requester must be a member of the PM channel that holds the card
+    (`is_chat_member`: the project's people). A non-member is answered exactly as a task with no
+    card (200 `{"updated": false}`), so the response does not say whether a card exists. This
+    deliberately does NOT require the requester to be the message's sender, which is why it can't
+    reuse `MessageDetailView.patch` (sender-only).
     """
 
     def patch(self, request, task_id):
         data = body_object(request)
-        body_json = data.get("body")
-        if body_json is None or not isinstance(body_json, list):
+        if not isinstance(data.get("body"), list):
             return Response(
                 {"error": "body must be a non-empty list of blocks."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        body_text = data.get("body_text") or ""
-        metadata = data.get("metadata")
 
         # The top-level (non-thread-reply) card header for this task.
         # There is one per task per PM channel; `order_by("seq")` resolves
@@ -1033,10 +1044,9 @@ class TaskCardMessageView(AuthenticatedAPIView):
             .first()
         )
         if message is None:
-            # No card message (task predates the PM-card feature, is a
-            # sub-task with no header, or the project has no PM channel).
-            # Not an error — nothing to sync. 200 with a sentinel so the
-            # WS proxy knows to skip the broadcast instead of erroring.
+            # No card message (task predates the PM-card feature, or the project
+            # has no PM channel). Not an error — nothing to sync. 200 with a
+            # sentinel so the WS proxy knows to skip the broadcast.
             return Response({"updated": False}, status=status.HTTP_200_OK)
 
         if not is_chat_member(message.channel_id, request.user.id):
@@ -1044,7 +1054,9 @@ class TaskCardMessageView(AuthenticatedAPIView):
             # above told any team member whether a task id has a chat card they cannot read.
             return Response({"updated": False}, status=status.HTTP_200_OK)
 
-        rewrite_card_message(message, body=body_json, body_text=body_text, metadata=metadata)
+        from origin.services.task_card_post import refresh_task_card  # noqa: PLC0415
+
+        refresh_task_card(message.task_id)
 
         message = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
         return Response(MessageSerializer(message).data)

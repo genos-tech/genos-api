@@ -40,6 +40,7 @@ from origin.services.milestone_service import (
     sync_milestone_assignees,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_card_post import schedule_refresh
 from origin.services.task_project_move import (
     assignee_problem_sentence,
     collect_descendant_task_ids,
@@ -423,6 +424,8 @@ def _delete_locked(milestone: MilestoneMaster) -> None:
         TaskMaster.objects.filter(task_id=milestone.task_id).update(
             is_deleted=True, status="Deleted", ts_updated_at=timezone.now()
         )
+        # No signal fires for a queryset update: say so on the chat card too (MIP-2483).
+        schedule_refresh(milestone_id=milestone.milestone_id)
     # Re-root first: it reads the parent edges the unparenting below cuts.
     if milestone.task_id is not None:
         reroot_detached_tasks(milestone.task_id, milestone.milestone_id)

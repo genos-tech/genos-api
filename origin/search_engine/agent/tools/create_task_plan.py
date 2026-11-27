@@ -606,7 +606,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
         if backing is not None:
             notify_task_body_mentions(backing, actor_id=ctx.user_id)
-    # The project chat's "created" cards, which the app's browser would post: the milestone's
+    # The project chat's "created" cards, as the app's create endpoints post them: the milestone's
     # first, then each task in plan order (MIP-1450).
     if milestone_spec is not None and milestone is not None:
         post_milestone_created_card(milestone, actor_id=ctx.user_id)
