@@ -13,6 +13,7 @@
   },
   "Connecting Genos to other tools: API, MCP, and realtime": {
    "sha256": [
+    "b9ca454f37745de4db975b6693c42c17939e576601116f3c0ae2aa499d65fc86",
     "bc96462c414acba8d5821afab63c6e51d7933b64254c9b509f51880ead48f711"
    ]
   },
@@ -153,6 +154,7 @@
   },
   "Genos を他のツールにつなぐ: API、MCP、リアルタイム": {
    "sha256": [
+    "8484479b773fa826c00c6f5d093c03c510b66266b36676b15a79e43ef83414a3",
     "8c8584f8c42040d11da0063e14de274c6301691be95da41527455b55cef13f4e"
    ]
   },
