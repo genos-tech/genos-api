@@ -21,6 +21,7 @@ duplication bug structurally impossible to recur.
 
 import uuid
 
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 
 from origin.models.common.team_models import TeamMaster
@@ -476,6 +477,42 @@ class MessageAttachment(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["message"], name="attachment_message_idx"),
+        ]
+
+
+class MessageMovedAway(models.Model):
+    """A message that left `channel` for another chat (a task moved with its card and thread,
+    MIP-2505). Two readers (`services/moved_messages.py`):
+
+      * the delta sync of `channel` names the id in `deletes`, so a device that was offline drops
+        its cached copy;
+      * `/media/` lets the readers of the chat the message is in NOW open the files it pasted
+        inline, which stay under `chats/<old channel>/inline/`.
+
+    `message_id` is a plain UUID, not a foreign key: the row must outlive the message.
+    Never pruned: the second reader needs it as long as the file exists.
+    """
+
+    # No constraint and nothing on delete: the files stay readable by the chat their message went
+    # to even after the chat it left is gone.
+    channel = models.ForeignKey(
+        Channel, on_delete=models.DO_NOTHING, db_constraint=False, related_name="+"
+    )
+    message_id = models.UUIDField()
+    is_thread_reply = models.BooleanField(default=False)
+    #: Storage paths (`chats/<uuid>/inline/<name>`) the message showed when it moved.
+    inline_files = models.JSONField(default=list, blank=True)
+    moved_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["channel", "is_thread_reply", "moved_at"], name="msg_moved_channel_ts_idx"
+            ),
+            models.Index(fields=["message_id"], name="msg_moved_message_idx"),
+            GinIndex(
+                fields=["inline_files"], opclasses=["jsonb_path_ops"], name="msg_moved_files_idx"
+            ),
         ]
 
 

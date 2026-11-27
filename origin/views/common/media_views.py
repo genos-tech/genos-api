@@ -37,7 +37,10 @@ belongs to and checked against that object's existing ACL.
     chats/<channel_uuid>/messages/…   → active ChannelMember of the chat the
                                         message is in NOW (a moved task takes
                                         its thread along, MIP-2505)
-    chats/<channel_uuid>/inline/…     → active ChannelMember
+    chats/<channel_uuid>/inline/…     → active ChannelMember; once a message
+                                        showing it moved, of the chat it is in
+                                        now (and of this one only while a
+                                        message here still shows it)
     notes/personal|task|chat/<id>/…   → note_role.get_effective_role
 
 The ACLs are *borrowed*, never re-derived: an attachment is exactly as
@@ -188,6 +191,7 @@ def _may_read_media(clean: str, user_id) -> bool:
     """
     from origin.models.chat.unified_models import Message  # noqa: PLC0415
     from origin.services.channel_scope import is_chat_member  # noqa: PLC0415
+    from origin.services.moved_messages import may_read_moved_file  # noqa: PLC0415
     from origin.views.utils.note_role import (  # noqa: PLC0415
         NOTE_TYPE_CHAT,
         NOTE_TYPE_PERSONAL,
@@ -231,7 +235,16 @@ def _may_read_media(clean: str, user_id) -> bool:
                     .first()
                 )
                 channel_id = current or channel_id
-        return channel_id is not None and is_chat_member(channel_id, user_id)
+        if channel_id is None:
+            return False
+        # A pasted image has no row of its own; the moves of the messages showing it do.
+        if segments[2] == "inline":
+            # The id in its one spelling, as the move recorded it.
+            path = "/".join(["chats", channel_id, *segments[2:]])
+            allowed = may_read_moved_file(path, channel_id, user_id)
+            if allowed is not None:
+                return allowed
+        return is_chat_member(channel_id, user_id)
 
     # Notes carry a real ACL of their own (explicit grants, project/chat
     # membership, and Team-Note folder inheritance). Reuse it wholesale —
