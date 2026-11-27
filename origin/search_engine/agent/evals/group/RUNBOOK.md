@@ -353,3 +353,20 @@ the model.
   which is the model-visible change: compare them across arms. Read the `inject-*` answers by hand. The rules of the
   replacement, what a resumed leg and a later turn read, and `dropped_references` on the card and on the resumed `done` are
   pinned by free tests, not here.
+
+## Dashboard cases (MIP-2378): `agent_eval_dashboards`, not the group harness
+
+`group/mcp/t2361-mcp-dashboards.yaml` (11 cases, a Claude model as the connected MCP client) and
+`group/skills/t2409-dashboard-page.yaml` (1 case, the scheduled `dashboard-page` skill run) have their own
+command. BILLED: only on the maintainer's go, never CI.
+
+```
+python manage.py agent_eval_dashboards --dry-run                      # free: plan and cost estimate
+python manage.py agent_eval_setup                                     # once: the v1 fixture (billed embeddings)
+python manage.py agent_eval_dashboards --reps 1 --cost-cap-usd 4 --ken-approved --json run.jsonl
+```
+
+`--suite mcp|skill`, `--case ID`. Every case runs in a transaction that is rolled back, so the plants and the
+schedules it creates never stay in the eval database. In the MCP suite `create_my_schedule` is run (the model
+reads the real answer or refusal); any other write is only recorded, ends the case and fails it. Claude judges
+the JSONL; the injection case with the rubric of t2295.
