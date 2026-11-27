@@ -517,8 +517,8 @@ def write_task_comment_as_thread_reply(
             # The header is the task's full card (MIP-2483), built where every card is
             # (`task_card_post.header_parts`); posted silently, with no `MessageMention` rows
             # and no activity, so a comment on an old task notifies who it always did and puts
-            # nobody's old card in their list of mentions. Sender is the task's reporter (the card's author),
-            # never the commenter.
+            # nobody's old card in their list of mentions. Sender is the task's reporter (the card's
+            # author), never the commenter.
             from origin.models.task.task_models import TaskMaster
 
             task_row = (
