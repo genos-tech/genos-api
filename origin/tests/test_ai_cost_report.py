@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import timedelta
 from io import StringIO
 
+from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
@@ -243,6 +244,20 @@ class BudgetAlarmTests(TestCase):
         with override_settings(SEARCH_ENGINE=_se(AI_MONTHLY_BUDGET_JPY=300)):
             with self.assertRaises(CommandError):
                 _report("--days", "7", "--alert")
+
+    def test_says_when_the_month_has_reached_the_budget_and_ai_runs_plain(self):
+        """MIP-2363: the alert stays, and the report says the soft stop is on."""
+        cache.clear()
+        self.addCleanup(cache.clear)
+        _event(cost_jpy_milli=400_000)
+        with override_settings(SEARCH_ENGINE=_se(AI_MONTHLY_BUDGET_JPY=50_000)):
+            self.assertNotIn("Soft stop is on", _report("--days", "7", "--alert"))
+        cache.clear()
+        with override_settings(SEARCH_ENGINE=_se(AI_MONTHLY_BUDGET_JPY=300)):
+            out = StringIO()
+            with self.assertRaises(CommandError):
+                call_command("ai_cost_report", "--days", "30", "--alert", stdout=out)
+        self.assertIn("Soft stop is on", out.getvalue())
 
     def test_budget_is_pro_rated_to_the_window(self):
         # ¥30,000/month is ¥1,000/day; ¥900 over 1 day stays under.

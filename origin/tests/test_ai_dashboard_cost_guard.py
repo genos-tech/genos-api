@@ -28,6 +28,7 @@ from origin.services.report_ai import llm, narrative
 from origin.services.schedule_jobs import JOBS
 from origin.services.schedule_jobs.ai_dashboard import MAX_DASHBOARD_SCHEDULES, data_fingerprint
 from origin.services.schedule_text import job_catalog
+from origin.tests.spend_limit_support import over_the_monthly_budget
 from origin.tests.test_report_ai_sentences import AiBase
 
 TIER_PATH = "origin.search_engine.quota.get_effective_tier"
@@ -62,6 +63,13 @@ class TestZeroCredits(DashboardAiBase):
         self.assertNotIn("narrative", report["dashboard"])
         self.assertTrue(report["dashboard"]["stats"], "the page still has its numbers")
         self.assertIn("no AI credits left", report["summary"])
+
+    def test_a_reached_monthly_limit_is_the_same_plain_dashboard(self):
+        with over_the_monthly_budget():
+            report = self.run_dash(ai_sentences=True)
+        self.assertEqual(self.model.calls, [])
+        self.assertEqual(report["ai_skipped"], "monthly_limit")
+        self.assertIn("monthly limit", report["summary"])
 
     def test_the_plain_dashboard_never_asks_for_a_call(self):
         report = self.run_dash()

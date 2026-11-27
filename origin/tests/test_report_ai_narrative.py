@@ -33,6 +33,7 @@ from origin.services import schedule_delivery, schedules
 from origin.services.report_ai import estimate, llm, narrative, validate
 from origin.services.schedule_jobs import AI_EFFORT_KEY, JOBS
 from origin.services.schedule_text import job_catalog
+from origin.tests.spend_limit_support import over_the_monthly_budget
 from origin.tests.test_report_ai_sentences import LIVE, AiBase
 
 FOUR_JOBS = ("project_updates", "milestone_updates", "team_activity", "what_is_left")
@@ -199,6 +200,12 @@ class TestSkipPaths(NarrativeBase):
             report = self.skipped("no_credits")
         self.assertIn("no AI credits left", report["summary"])
 
+    def test_a_reached_monthly_limit_makes_no_call_and_says_so(self):
+        self.seed()
+        with over_the_monthly_budget():
+            report = self.skipped("monthly_limit")
+        self.assertIn("monthly limit", report["summary"])
+
     def test_a_failed_call_is_a_plain_report_that_names_the_request(self):
         self.seed()
         self.model.reply = RuntimeError("boom")
@@ -333,6 +340,18 @@ class TestDelivery(NarrativeBase):
         self.assertNotIn("ai", self.item().item_optionals)
         sched.refresh_from_db()
         self.assertEqual(sched.last_result["ai_skipped"], "no_credits")
+
+    def test_a_monthly_limit_skip_is_filed_plain_and_the_card_is_told(self):
+        self.seed()
+        sched = self.make_schedule(ai_sentences=True)
+        with over_the_monthly_budget():
+            self.assertEqual(self.execute(sched), ("ok", ""))
+        self.assertEqual(self.item().item_optionals["ai_skipped"], "monthly_limit")
+        self.assertNotIn("ai", self.item().item_optionals)
+        self.assertEqual(self.model.calls, [])
+        sched.refresh_from_db()
+        self.assertTrue(sched.enabled)
+        self.assertEqual(sched.last_result["ai_skipped"], "monthly_limit")
 
     def test_the_spend_survives_a_delivery_that_fails(self):
         self.seed()

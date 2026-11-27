@@ -27,6 +27,7 @@ from origin.search_engine.quota import resolve_effective_tier
 from origin.services import demo_ai_limits
 from origin.services.report_ai import llm
 from origin.services.schedule_jobs import run_skill
+from origin.tests.spend_limit_support import over_the_monthly_budget
 from origin.tests.test_demo_ai_limits import _make_user
 from origin.views.public.mcp import views as mcp_views
 
@@ -236,6 +237,17 @@ class SummaryViewTests(_Base):
             self.assertIs(resp.json()["generated"], True)
             regen.assert_called_once()
             self.assertEqual(_count(), n)
+
+    def test_a_reached_monthly_limit_refuses_a_new_summary_and_keeps_the_cached_one(self):
+        """MIP-2363: the zero-credit way out for note and thread summaries."""
+        for call in (self._note, self._thread):
+            with over_the_monthly_budget():
+                resp, regen = call(self.pro, self.pro_team, cached=False)
+                kept, _ = call(self.pro, self.pro_team, cached=True)
+            self.assertEqual(resp.status_code, 429, call.__name__)
+            self.assertEqual(resp.json()["category"], "ai_monthly_limit")
+            regen.assert_not_called()
+            self.assertEqual(kept.status_code, 200, call.__name__)
 
     def test_a_normal_user_is_served_while_the_demo_cap_is_zero_and_never_counted(self):
         with (

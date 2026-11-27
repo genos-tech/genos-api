@@ -352,7 +352,7 @@ class MonthlyCeilingTests(TestCase):
     def test_a_db_failure_fails_open(self):
         with override_settings(SEARCH_ENGINE=_se(AI_CEILING_PAUSE=True)):
             with mock.patch(
-                "origin.search_engine.agent_views._month_spend_usd_micro",
+                "origin.search_engine.agent_views.month_spend_usd_micro",
                 side_effect=RuntimeError("db down"),
             ):
                 from origin.search_engine.agent_views import _enforce_monthly_ceilings

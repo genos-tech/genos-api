@@ -45,7 +45,8 @@ from origin.search_engine.agent_views import (
     _credits_block,
 )
 from origin.search_engine.llm import spend
-from origin.search_engine.models import AiCreditEntry, AiRequestCost
+from origin.search_engine.models import AgentRun, AiCreditEntry, AiRequestCost
+from origin.tests.spend_limit_support import over_the_monthly_budget
 from origin.tests.test_base import BaseAPITestCase
 from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
@@ -587,6 +588,23 @@ class AskPathEnforcementTests(_StreamingBase):
         body = resp.json()
         self.assertEqual(body["category"], "ai_credits")
         self.assertTrue(body["limit_reached"])
+
+    @AUTHORITATIVE
+    def test_a_reached_monthly_limit_refuses_before_anything_is_opened(self):
+        """MIP-2363: the zero-credit way out, with the limit's words. Credits are untouched."""
+        credit_ledger.ensure_monthly_grant(str(self.user.id), "free")
+        balance = credit_ledger.balance_milli(str(self.user.id), "free")
+        with over_the_monthly_budget():
+            resp = self._ask()
+            block = _credits_block(str(self.user.id), "free")
+        self.assertEqual(resp.status_code, 429)
+        self.assertEqual(resp.json()["category"], "ai_monthly_limit")
+        self.assertIn("monthly limit", resp.json()["error"])
+        self.assertFalse(AiRequestCost.objects.exists())
+        self.assertFalse(AgentRun.objects.exists())
+        self.assertEqual(block["balance"], round(balance / 1000, 2))
+        # Under the limit again, the same ask is served.
+        self.assertEqual(self._ask().status_code, 200)
 
     @AUTHORITATIVE
     def test_the_free_breaker_is_off_by_default(self):

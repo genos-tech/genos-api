@@ -21,7 +21,8 @@ What it does, cheapest first, and never raises (a failed or skipped run is a pla
 2. **Cache.** The same prompt for the same member, effort level and prompt version is not paid
    for twice (a "Run now" twice, a retry): the text, or the fact that there was none, is kept.
 3. **Gates**, in this order, each a reason NOT to spend (`llm.preflight`: operator switch, cost
-   meter, credentials; then `llm.credit_block`: the member has no AI credits left).
+   meter, credentials; then `llm.credit_block`: the member has no AI credits left, or a monthly
+   spend limit is reached).
 4. **One metered call** on the model the effort level names (`llm.complete`), the cost recorded.
 5. **Clean** (`validate.clean_narrative`): strict JSON, plain text, no link, no markup, at most
    `NARRATIVE_SENTENCES` sentences and `NARRATIVE_CHARS` characters, and no task id the report
@@ -180,7 +181,7 @@ def _run(
         out.text = hit  # "" = it had nothing worth saying, cached too
         return out
     if not reason:
-        reason = llm.credit_block(ctx.user_id)  # out of AI credits: no call, so no charge
+        reason = llm.credit_block(ctx.user_id, ctx.team_id)  # out of AI credits: no call, so no charge
     if not reason:
         reason = llm.demo_block(ctx.user_id)  # a demo visitor's daily cap (MIP-2364)
     if reason:

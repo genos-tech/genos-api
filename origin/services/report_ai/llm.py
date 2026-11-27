@@ -29,6 +29,7 @@ from typing import Any
 
 from django.conf import settings
 
+from origin.search_engine.spend_limits import monthly_limit_reached
 from origin.services.report_ai.effort import RunSettings
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,10 @@ SKIP_NO_MODEL = "no_model_for_level"
 SKIP_FAILED = "call_failed"
 # The member has no AI credits left (MIP-1960): the report runs without its AI sentences and says so.
 SKIP_NO_CREDITS = "no_credits"
+# A monthly AI spend limit is reached (MIP-2363): the same way out as no credits, other words.
+SKIP_MONTHLY_LIMIT = "monthly_limit"
+# The reasons a delivery keeps on the item, so the card never shows "no AI" without one.
+SKIPS_LIMITED = (SKIP_NO_CREDITS, SKIP_MONTHLY_LIMIT)
 # A demo visitor's daily AI cap is reached (MIP-2364): no call, the report files plain.
 SKIP_DEMO_LIMIT = "demo_limit"
 
@@ -83,11 +88,14 @@ def configured(provider: str) -> bool:
     return False
 
 
-def credit_block(user_id: str) -> str:
-    """`SKIP_NO_CREDITS` when the member's AI credits are used up AND credits are the customer's
+def credit_block(user_id: str, team_id: str = "") -> str:
+    """`SKIP_MONTHLY_LIMIT` while a monthly spend limit is reached (`spend_limits`, credits on or
+    off). Else `SKIP_NO_CREDITS` when the member's AI credits are used up AND credits are the customer's
     limit (`credits_authoritative`); else "". In shadow-only mode a charge is recorded but nothing
     is refused, as for an ask. An unlimited plan has no balance to run out of. Never raises: a doubt
     is "may call", the same fail-open a plan gate has."""
+    if monthly_limit_reached(team_id):
+        return SKIP_MONTHLY_LIMIT
     try:
         from origin.search_engine import credit_ledger, quota  # noqa: PLC0415
 
