@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0297_clear_phone_numbers_mip2464"),
+        ("origin", "0298_project_status_mip2492"),
     ]
 
     operations = [
