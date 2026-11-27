@@ -210,15 +210,24 @@ def paths_for(ctx: ToolContext, refs: Iterable[Ref], readers: set[str]) -> dict[
 
 
 def _holders(value: Any) -> Iterable[dict[str, Any]]:
-    """Every dict of a page's data that may name a thing (it has a `ref` or an `href`)."""
-    if isinstance(value, dict):
-        if "ref" in value or "href" in value:
-            yield value
-        for child in value.values():
-            yield from _holders(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _holders(child)
+    """Every dict of a page's data that may name a thing (it has a `ref` or an `href`). The rows
+    the page holds back (`more_rows`, MIP-2452) come last, so on a page with more things than it
+    links (`MAX_REFS`) it is never a row in sight that goes without."""
+    held: list[Any] = []
+    stack = [value]
+    while stack or held:
+        if not stack:
+            stack, held = held[::-1], []
+        item = stack.pop()
+        if isinstance(item, dict):
+            if "ref" in item or "href" in item:
+                yield item
+            children = []
+            for key, child in item.items():
+                (held if key == "more_rows" else children).append(child)
+            stack.extend(children[::-1])
+        elif isinstance(item, list):
+            stack.extend(item[::-1])
 
 
 def link_page(page: Any, ctx: ToolContext, readers: set[str]) -> None:

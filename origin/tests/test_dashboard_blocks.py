@@ -436,8 +436,9 @@ class SkillBlockTests(SimpleTestCase):
         rows = [{"text": f"task {n}"} for n in range(10)]
         dash = self.parse([{"type": "attention", "groups": [{"title": "Overdue", "rows": rows}]}])
         body = dashboard_page.render(dash)[0].split("</style>", 1)[1]
-        self.assertIn("task 2", body)
-        self.assertNotIn("task 3", body)
+        in_sight = body.split("<template data-gd-extra>", 1)[0]
+        self.assertIn("task 2", in_sight)
+        self.assertNotIn("task 3", in_sight)
         self.assertIn("+7 more", body)
 
     def test_the_model_is_told_to_give_every_attention_row_not_three(self):
