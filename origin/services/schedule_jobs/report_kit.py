@@ -26,6 +26,7 @@ from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.services.schedule_jobs import AI_EFFORT_KEY, Report, ReportItem, ReportSection
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import zone_for_user_id
 
 # A report line is a sentence, not a document: a snippet or a title is cut here.
@@ -143,7 +144,7 @@ def _urgency(facts: TaskFacts, today: date) -> tuple:
     due = facts.due_date
     rank = _PRIORITY_RANK.get(facts.priority, 2)
     number = facts.number or 0
-    if due is not None and due < today and facts.status not in ("Closed", "Deleted"):
+    if due is not None and due < today and facts.status not in FINISHED_STATUSES:
         return (0, rank, due, number, facts.task_id)
     return (1, due or date.max, rank, number, facts.task_id)
 
@@ -166,7 +167,7 @@ def _typed_fields(facts: TaskFacts, today: date) -> dict[str, Any]:
         out["priority"] = facts.priority
     if facts.due_date is not None:
         out["due_date"] = facts.due_date.isoformat()
-        if facts.due_date < today and facts.status not in ("Closed", "Deleted"):
+        if facts.due_date < today and facts.status not in FINISHED_STATUSES:
             out["overdue_days"] = (today - facts.due_date).days
     return out
 
@@ -233,7 +234,7 @@ def status_line(total: int, breakdown: dict[str, int]) -> str:
     has not ("0 pending" is noise in a short report)."""
     parts = [
         f"{breakdown[s]} {s.lower()}"
-        for s in ("Open", "WIP", "Blocked", "Pending", "Closed")
+        for s in ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")
         if breakdown.get(s)
     ]
     return f"{counted(total, 'task')}: {', '.join(parts)}" if parts else counted(total, "task")

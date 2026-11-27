@@ -21,15 +21,16 @@ from django.db.models import Prefetch, Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneFolder, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools import ancestor_rule
+from origin.search_engine.agent.tools import ancestor_rule, custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.template_prompts import has_written_body
+from origin.services.task_status_values import UNCOUNTED_STATUSES
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 100
-_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
-_CLOSED_STATUSES = ["Closed", "Deleted"]
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"}
+_CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 
 
 def _backing_display_id(m: MilestoneMaster) -> str | None:
@@ -53,8 +54,8 @@ def _rollups(milestones: list[MilestoneMaster], rule: Any, today: Any) -> dict[i
     """`{milestone_id: {tasks_total, tasks_closed, overdue}}` for all rows in ONE query.
 
     Same predicate as `milestone_work_q` (FK branch, or the children of the backing row that are
-    not milestones themselves; never the backing row, never a Deleted status or a Deleted
-    effective status), applied in Python over the candidate rows so the query count does not grow
+    not milestones themselves; never the backing row, never a Deleted or Rejected status,
+    own or effective), applied in Python over the candidate rows so the query count does not grow
     with the number of milestones (it used to be one aggregate per milestone).
     """
     out = {m.milestone_id: {"tasks_total": 0, "tasks_closed": 0, "overdue": 0} for m in milestones}
@@ -70,7 +71,7 @@ def _rollups(milestones: list[MilestoneMaster], rule: Any, today: Any) -> dict[i
         match |= Q(parent_task_id__in=list(by_backing))
     rows = (
         TaskMaster.objects.filter(match, is_deleted=False, is_init_task=False)
-        .exclude(status="Deleted")
+        .exclude(status__in=UNCOUNTED_STATUSES)
         .values_list(
             "task_id", "milestone_id", "parent_task_id", "is_milestone", "status", "due_date"
         )
@@ -78,7 +79,7 @@ def _rollups(milestones: list[MilestoneMaster], rule: Any, today: Any) -> dict[i
     for task_id, milestone_id, parent_id, is_milestone, status, due_date in rows:
         eff = status
         if rule is not None:
-            if task_id in rule.deleted:
+            if task_id in rule.deleted or task_id in rule.rejected:
                 continue
             if task_id in rule.closed:
                 eff = "Closed"
@@ -262,6 +263,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
     ]
 
+    custom_status.add_to_milestones(milestones)  # MIP-2494 (flag `AGENT_CUSTOM_STATUS`)
     return {
         "project_id": int(raw_project_id) if raw_project_id is not None else None,
         "milestones": milestones,
@@ -305,7 +307,7 @@ LIST_MILESTONES = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"],
                 },
                 "description": (
                     "Filter milestones by one or more status values (the same "
@@ -317,7 +319,7 @@ LIST_MILESTONES = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"],
                 },
                 "description": ("Older spelling of `status`; accepted for now. Send `status`."),
             },

@@ -278,7 +278,7 @@ class FlagOnTests(Tree):
         mine = TaskMaster.objects.filter(assignee=self.user, is_deleted=False, is_init_task=False)
         total, counts, overdue = self.oracle(mine.exclude(status="Deleted"))
         self.assertEqual(out["total"], total)
-        self.assertEqual(out["status_breakdown"], counts)
+        self.assertEqual(out["status_breakdown"], {**counts, "Rejected": 0})
         self.assertEqual(out["overdue_count"], overdue)
         before = self.run_tool("get_my_task_summary")
         self.assertGreater(out["status_breakdown"]["Closed"], before["status_breakdown"]["Closed"])

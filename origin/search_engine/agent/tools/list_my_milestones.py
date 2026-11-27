@@ -23,15 +23,15 @@ from django.db.models import Count, Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools import ancestor_rule
+from origin.search_engine.agent.tools import ancestor_rule, custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
-_VALID_STATUSES = {"Open", "WIP", "Pending", "Closed", "Deleted"}
-_CLOSED_STATUSES = ["Closed", "Deleted"]
+_VALID_STATUSES = {"Open", "WIP", "Pending", "Closed", "Rejected", "Deleted"}
+_CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -129,6 +129,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     else:
         summary = "You are not assigned to any milestones."
 
+    custom_status.add_to_milestones(milestones)  # MIP-2494 (flag `AGENT_CUSTOM_STATUS`)
     return {
         "milestones": milestones,
         "__summary__": summary,
@@ -154,7 +155,7 @@ LIST_MY_MILESTONES = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Pending", "Closed", "Deleted"],
+                    "enum": ["Open", "WIP", "Pending", "Closed", "Rejected", "Deleted"],
                 },
                 "description": (
                     "Filter by one or more milestone statuses. Omit to "

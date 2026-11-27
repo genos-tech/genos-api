@@ -43,6 +43,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_enums import blank_to_none
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 20
@@ -54,7 +55,7 @@ _PRIORITY_RANK = {
     "Low": 3,
     "Minimal": 4,
 }
-_INACTIVE_STATUSES = ["Closed", "Deleted"]
+_INACTIVE_STATUSES = list(FINISHED_STATUSES)
 _DELIVERY_FILTERS = ("open_pr", "merged_pr", "no_pr")
 
 

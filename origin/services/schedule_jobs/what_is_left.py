@@ -34,6 +34,7 @@ from origin.services.schedule_jobs.report_kit import (
     more,
     plain,
 )
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import zone_for_user_id
 
 DEFAULT_DAYS = 7
@@ -41,7 +42,7 @@ DEFAULT_DAYS = 7
 MAX_TASKS = 30
 MAX_TODOS = 15
 _FINISHED = {"Closed"}
-_GONE = {"Closed", "Deleted"}
+_GONE = set(FINISHED_STATUSES)
 
 
 def _latest(events: list[dict[str, Any]]) -> str:

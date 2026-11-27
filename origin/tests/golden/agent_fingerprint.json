@@ -2,7 +2,7 @@
   "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py record_agent_goldens` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
   "states": {
     "flags_off": {
-      "all": "5039024ea9f6ee477080acfa04e526aae88cecc39e2322d8c1c67a435a72478d",
+      "all": "9ad7fcd54009a4e71b0c09de60bba1de7c1e6c2032f13d14ed365710ac601d93",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27488,
@@ -49,8 +49,8 @@
           "sha256": "5f5a8611b10d3db8878a34a24bcba69396b3acef8f7a700bc1becb1111fc361f"
         },
         "result.b.get_milestone_summary": {
-          "bytes": 1609,
-          "sha256": "e79d6dc11438e0f65d15c29672ba4d50c276cb60f0fc697ee66ae75598050cca"
+          "bytes": 1626,
+          "sha256": "9c90ca23429f485e1c56cda0eeccbcc4e11a521766331d8f22af67c07d3732a1"
         },
         "result.b.get_my_blockers": {
           "bytes": 681,
@@ -65,16 +65,16 @@
           "sha256": "7a8bc9b86c4ad67da75112e18bc44c585460ac7428d2e74d11459b0c0706552f"
         },
         "result.b.get_my_task_summary": {
-          "bytes": 553,
-          "sha256": "2943fbec26c2464f8786b73244e334f974220f4cdcff1603278850d5b319beb1"
+          "bytes": 570,
+          "sha256": "cad9d62b290f0240dc35a06f769804b3d81293e87e568b8422a32f31fbe5c2b5"
         },
         "result.b.get_project_summary": {
-          "bytes": 282,
-          "sha256": "d3fe36b0bdd4cab230b9c6db3aac21594e0e016f527359495348d428f59f9de2"
+          "bytes": 299,
+          "sha256": "99d36b5164de53a86a2531f1ad3baf6862551300f333d3272b4d2b652d76dbcf"
         },
         "result.b.get_sprint_summary": {
-          "bytes": 609,
-          "sha256": "e957f80e5362a515c8a3595473846b65a9bed90e456e391aca0d0e53fbd85815"
+          "bytes": 626,
+          "sha256": "f139e2d0a2fd09e5ce8f7696f7fda7d9236ca198d5f6eaa78501e07f3b16e324"
         },
         "result.b.get_stale_tasks": {
           "bytes": 3247,
@@ -89,8 +89,8 @@
           "sha256": "c2e187c3bac948013bb93a92b5a1ac3cc3386dc62d90853321421dde118ae6ab"
         },
         "result.b.get_team_task_summary": {
-          "bytes": 558,
-          "sha256": "3646ed6841eb6135b205df830b27ddc9ac5f42500f85dc0cd6bf9a2b129129f6"
+          "bytes": 575,
+          "sha256": "7b05b61656a2cbb2eea2c548e362330fa949772437470e4e6f9c7e31f2dccbf6"
         },
         "result.b.get_workload_distribution": {
           "bytes": 579,
@@ -129,8 +129,8 @@
           "sha256": "021deb20d39cb0aa6647d3373068419bfbb7d34cd7c92986a1ffdf65442878be"
         },
         "result.get_project_summary": {
-          "bytes": 292,
-          "sha256": "8a4cc5a2ed16231fdef42acf275a54a6831bdc9ae2aadd242c983ff32b48be84"
+          "bytes": 309,
+          "sha256": "99fae317b573cbcdb93d26668817953a7013cab0eda4171ebad3b999f5ccf206"
         },
         "result.get_task_history": {
           "bytes": 688,
@@ -153,41 +153,41 @@
           "sha256": "deed7095a5f946277261de9695683e2dda795f9398a1b162bbfd5e89f7d39659"
         },
         "tools.claude.full": {
-          "bytes": 125767,
-          "sha256": "82da7432c11d518321bd265c3599f331cbad94a5ec36cb6c0db80849fd0bf44a"
+          "bytes": 126215,
+          "sha256": "a3875caa5a8c69df6c9bb3b79eabc98fe8b3e046cc25bf0cbe9815faf31b71e2"
         },
         "tools.claude.read": {
-          "bytes": 57235,
-          "sha256": "8e13606641ff139a3d960122cd4ed2180e1b7a6c72107e656e299d89d9c0952f"
+          "bytes": 57595,
+          "sha256": "e5beec04043a9b79bf87bc287b0a6cc52e70dae5b717d0726daac50da30cc5b8"
         },
         "tools.gemini.full": {
-          "bytes": 133972,
-          "sha256": "8d07ccb49753f1d8c05e13e95757f2cc92f971766aac5e4ba79385c92064b9db"
+          "bytes": 134441,
+          "sha256": "dda25396ff5ebb4630a03986d664224a5e91db356dd77483b471208c5138bc79"
         },
         "tools.gemini.read": {
-          "bytes": 60588,
-          "sha256": "d4e4694c02a704a67bebcf03aaca24af086f7561118fc17ae77db0b58abe7b2e"
+          "bytes": 60960,
+          "sha256": "afb10a7d3296e077519e4bc0cc770238fb48abb07644cffd80b6de06d4c55d18"
         },
         "tools.neutral.full": {
-          "bytes": 122159,
-          "sha256": "d7f6bc869bd4c547bcc8cbb38cb17f8afe01a4b870f192a430e5a7e13347ff5f"
+          "bytes": 122600,
+          "sha256": "9ad4cac9716fa059583b6ad20fab4144c8de384debeefc8a8ac03b5c96b1a6c8"
         },
         "tools.neutral.read": {
-          "bytes": 55491,
-          "sha256": "70ef816870b665644160321886695f8c8179b52a8acf1d2f6b9e4f55a9a23d8f"
+          "bytes": 55847,
+          "sha256": "f48a893989ff5147829a8e2ac6da8089eaa899d9b34b28a8f6a8c049fe44d852"
         },
         "tools.openai.full": {
-          "bytes": 132163,
-          "sha256": "4f65d794c52a7349604a9f1957e4bafdc9175b3f70dd5945b89fab9851cf61e7"
+          "bytes": 132618,
+          "sha256": "235bb41df384b87f810ff2cb59252165f93fee4b5a044ffe0d47a4bcec80d157"
         },
         "tools.openai.read": {
-          "bytes": 60472,
-          "sha256": "afc3289f73d546115d47cf82882d7b8ab9a52032eaaa311fe3560a09a98630d7"
+          "bytes": 60836,
+          "sha256": "6913cd1ecd12e7f2aaa76c4816d58523fdf4af55761dc5beeac1280c7cb35f22"
         }
       }
     },
     "production": {
-      "all": "505d63a4e2bdeb17ed6db51cf3ed6112252e22cb471eb55696cd1f214974b083",
+      "all": "29113e0daffb13d57ec49b9ecdd78b09607ec0d8c2b07f43f4229f4287ec75a0",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 28028,
@@ -234,8 +234,8 @@
           "sha256": "5f5a8611b10d3db8878a34a24bcba69396b3acef8f7a700bc1becb1111fc361f"
         },
         "result.b.get_milestone_summary": {
-          "bytes": 1346,
-          "sha256": "0d5b1d792cfd534e7920dd3f8022275b3a22d31255778fef13a3da025361adb6"
+          "bytes": 1363,
+          "sha256": "a6d898fdd2bf051a93f9bd7ddef9444dd7e7f9c4406badbd1cf511142bce6abd"
         },
         "result.b.get_my_blockers": {
           "bytes": 168,
@@ -250,16 +250,16 @@
           "sha256": "e6c7ebb076ee50a498ba3d39f41f4f51b1e18a5a5cb6e2ed0038a6558eae8f27"
         },
         "result.b.get_my_task_summary": {
-          "bytes": 550,
-          "sha256": "02a6e7ffaa4eee6188c00b1dbb2139ed8209dd1b36e9f0a2170758811850de1c"
+          "bytes": 567,
+          "sha256": "bd28083b728b24c190fd86cedf230504e5ded4ab167ab2605a36015a2ad16a52"
         },
         "result.b.get_project_summary": {
-          "bytes": 282,
-          "sha256": "696639c8893a36b9dd7ea42798643006a4f409e1dc9a47127841fa5452f96a7d"
+          "bytes": 299,
+          "sha256": "3922dfdc3548e9cc8559460ceaff2b94e485da148feadd628684a2b793e56932"
         },
         "result.b.get_sprint_summary": {
-          "bytes": 609,
-          "sha256": "66e66089d7aecbb498c5a34619032969df2090f99679974150a66f796b1c012a"
+          "bytes": 626,
+          "sha256": "436f3bfbe686e6627431cde0cebb1506d1dd3dc0bbe429d94889379bf9ffdddc"
         },
         "result.b.get_stale_tasks": {
           "bytes": 1502,
@@ -274,8 +274,8 @@
           "sha256": "c2e187c3bac948013bb93a92b5a1ac3cc3386dc62d90853321421dde118ae6ab"
         },
         "result.b.get_team_task_summary": {
-          "bytes": 558,
-          "sha256": "2aa2766de1434f743c4ccb463b7fbe9f9045d468d1313a4a109f3f13e26d1130"
+          "bytes": 575,
+          "sha256": "77939dbea903a882fac51b874e07f98841b9ca6341876b8b038ccd24afbffffa"
         },
         "result.b.get_workload_distribution": {
           "bytes": 579,
@@ -314,8 +314,8 @@
           "sha256": "0177553323da4fecd70a00081fd192ae6c5e888796c3a99ef993711024ffeb07"
         },
         "result.get_project_summary": {
-          "bytes": 292,
-          "sha256": "8a4cc5a2ed16231fdef42acf275a54a6831bdc9ae2aadd242c983ff32b48be84"
+          "bytes": 309,
+          "sha256": "99fae317b573cbcdb93d26668817953a7013cab0eda4171ebad3b999f5ccf206"
         },
         "result.get_task_history": {
           "bytes": 688,
@@ -338,36 +338,36 @@
           "sha256": "0f91563de066d29a0bad81904b1a05efe0a8a1637549055ebb210e6b9de27d7c"
         },
         "tools.claude.full": {
-          "bytes": 139463,
-          "sha256": "2c8f929e01d2c24bdbd343fbb785c5a13b2bcf300006a9b063c0e16f03b18025"
+          "bytes": 140209,
+          "sha256": "a8c284d5a66e0fdd3b422ecff2222fe374ce006ea5d03f8543917cfd737fc249"
         },
         "tools.claude.read": {
-          "bytes": 64712,
-          "sha256": "f43c9eb7c8484647976f1fa4e698472339ee744c32e2459b35c82addacac1ed2"
+          "bytes": 65329,
+          "sha256": "cdf6caf9b23f674683eedaa6caf9f5f707ef9e36094347e271320e2fd8fe0301"
         },
         "tools.gemini.full": {
-          "bytes": 148377,
-          "sha256": "c25c395d32e41f2440b11287c9738818d586198051ced83de40e7a4e2004c6cf"
+          "bytes": 149150,
+          "sha256": "b8f09234a1eb5b5db90b4b0fc3a6d9c1c8f8ea434d6f371809320f79de705d2b"
         },
         "tools.gemini.read": {
-          "bytes": 68359,
-          "sha256": "3cc668f6be6b1a1f965c3b0c7268c8be57ab6b98c5a114f2cc04b486873310c6"
+          "bytes": 68988,
+          "sha256": "7009c13be1c05e1a5c00dd6e6ed623ab9c7b164478b5d5db4597d95f076f1c75"
         },
         "tools.neutral.full": {
-          "bytes": 135592,
-          "sha256": "1e0cd6fa98cde911a540e74c50ef910880a0d7c71d76796b4af90350d513ba19"
+          "bytes": 136329,
+          "sha256": "bde0cbe54ee133850ab746375dce44cccfa318125e4ce73d319566d8f8edaf71"
         },
         "tools.neutral.read": {
-          "bytes": 62850,
-          "sha256": "cb7a8ffe01b843d945118472de0ddb2feb025cbfb788df14142c3ceaf47ee991"
+          "bytes": 63463,
+          "sha256": "9d9b5e41ae5d5f5441a1bafe4955580af32efe9faf21812065ff84566de5daea"
         },
         "tools.openai.full": {
-          "bytes": 146262,
-          "sha256": "93f1e33eafa4b5fce6baed897ecb37557d4e734c3f88d0c926af33fb00623b98"
+          "bytes": 147017,
+          "sha256": "7ccb9d4c864e99d489ab04d3b22b881d8fbced2803adfeb0fd1c05766af62fe5"
         },
         "tools.openai.read": {
-          "bytes": 68172,
-          "sha256": "68835c8097264304edcd75e99792ba1b69b6d44e7c283ff15bb55ae95562a65a"
+          "bytes": 68793,
+          "sha256": "f4161a9e6e35e1f68653ef5d19cbe83706212f32946ee1fd1435bf7603f90a30"
         }
       }
     }

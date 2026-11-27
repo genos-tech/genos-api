@@ -486,7 +486,8 @@ DONE_STATUS = "Closed"
 # Statuses we treat as "already done" — no-op if the task is in one of
 # these to avoid clobbering a manual close or re-firing on webhook
 # replays.
-DONE_STATUSES = {"Closed"}
+# "Rejected" (MIP-2494) too: a person decided the task will not be done, and a merge keeps that.
+DONE_STATUSES = {"Closed", "Rejected"}
 
 
 def _payload_repo(payload) -> tuple[str, str] | None:

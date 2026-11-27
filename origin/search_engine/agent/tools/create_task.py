@@ -60,6 +60,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
 from origin.search_engine.agent.parity import followups_on, ignore_unless_parity, parity_on
+from origin.search_engine.agent.tools import custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -283,6 +284,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             # The body a task made in the app starts with: the template named, else the
             # project's default (see `plan_task_bodies`).
             content_text = new_task_body(project, title, template)
+    # MIP-2494 (flag `AGENT_CUSTOM_STATUS`): a status named the project's way also sets `status`.
+    choice = custom_status.choose(
+        project,
+        custom_status.requested(args),
+        requested_status=args.get("status") if parity else None,
+    )
+    status = choice.status or status
     priority = args.get("priority")
     if priority is not None and priority not in _VALID_PRIORITIES:
         raise ToolError(
@@ -372,6 +380,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 parent_milestone = MilestoneMaster.objects.get(milestone_id=parent_milestone_id)
                 create_kwargs["milestone"] = parent_milestone
                 create_kwargs["sprint_id"] = parent_milestone.sprint_id
+        if (row := choice.resolve_row()) is not None:
+            create_kwargs["custom_status"] = row
         task = TaskMaster.objects.create(**create_kwargs)
     except Exception as e:  # noqa: BLE001 — surface as ToolError for the model
         # The model and the MCP caller read this; the database error
@@ -401,7 +411,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if assignee is not None:
         assignee_username = assignee.username or str(assignee.id)
         summary += f", assigned to {assignee_username}"
-    if parity and status != _DEFAULT_STATUS:
+    if (parity or choice.status) and status != _DEFAULT_STATUS:
         summary += f", status {status}"
     # `due_date` is still the raw input string on the instance `create()`
     # returned (`2026-6-30`, a datetime), so read what was stored back: the
@@ -457,6 +467,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
         except Exception as e:  # noqa: BLE001 — the task exists; the hint is best effort
             log_failure("create_task suggestions failed", e)
+    custom_status.add_to_tasks([result])
+    if choice.suggestion:
+        result["suggestions"] = [*result.get("suggestions", []), choice.suggestion]
     # Undo (`agent/undo.py`): a stamp of the task as made, taken last, once every
     # post-save write (collaborators, root, mentions) has landed.
     if ctx.capture_undo and (image := created_task_capture(task)):
@@ -470,7 +483,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 PARITY_PROPERTIES: dict[str, dict[str, Any]] = {
     "status": {
         "type": "STRING",
-        "enum": ["Open", "WIP", "Blocked", "Pending", "Closed"],
+        "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected"],
         "description": "Optional starting status. Default Open.",
     },
     "reporter_id": {

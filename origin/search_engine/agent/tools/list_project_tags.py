@@ -36,6 +36,7 @@ from origin.models.project.prj_models import (
     ProjectSavedTaskFilter,
 )
 from origin.search_engine.agent.parity import followups_on
+from origin.search_engine.agent.tools import custom_status
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -54,7 +55,7 @@ from origin.services.hidden_scope import project_hidden_from
 # spelled both two ways over time.
 _ANY = {"all", "__all__"}
 _NONE = {"none", "__none__"}
-_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
+_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"}
 
 
 def _labels(raw: Any, known: set[str]) -> list[str]:
@@ -202,6 +203,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "custom_fields": custom_fields,
         "saved_filters": filters,
     }
+    if custom_status.enabled():  # MIP-2494: the names `custom_status` takes
+        result["statuses"] = custom_status.project_status_choices(project)
     if followups_on():
         # MIP-1589: what a new task here must carry, and the templates it can start from (names only).
         # Member-gated above, as the app's own reads of both are.

@@ -36,6 +36,7 @@ from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.search_engine.agent.tools.task_custom_fields import parse_iso_date
@@ -170,6 +171,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return uid, None
 
     planned: list[tuple[TaskMaster, dict[str, Any], str]] = []
+    # MIP-2494 (flag `AGENT_CUSTOM_STATUS`): per task, the project status a row names.
+    choices: dict[int, custom_status.Choice] = {}
     for i, row in enumerate(updates):
         if not isinstance(row, dict):
             continue
@@ -207,6 +210,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 errors.append(f"{where}: `{field}` must be one of {sorted(valid)} (got {value!r}).")
                 continue
             changes[field] = value
+
+        named = custom_status.requested(row)
+        if named is not None:
+            choices[tid] = custom_status.choose(
+                task.project, named, requested_status=row.get("status")
+            )
+            if choices[tid].status:
+                changes.setdefault("status", choices[tid].status)
 
         if "due_date" in row and row["due_date"] is not None:
             raw_due = row["due_date"]
@@ -291,7 +302,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ):
             # MIP-1997: for a status change the rationale is posted on the task as a comment.
             errors.append(f"{where}: {message}")
-        if not changes:
+        # A row that only names a status that does not fit is answered with a suggestion.
+        if not changes and tid not in choices:
             errors.append(
                 f"{where}: no changes given for task {tid} — provide at least one of "
                 "priority / effort_level / status / due_date / start_date / tags / "
@@ -364,6 +376,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                             and not new_value
                             else field
                         )
+                choice = choices.get(task.task_id)
+                if choice is not None and custom_status.apply_to(task, choice):
+                    update_fields.append("custom_status")
+                    changed.append("custom_status")
                 milestone = milestone_by_task_id.get(task.task_id)
                 if not update_fields:
                     pass  # at most a milestone move — applied below
@@ -438,9 +454,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if noops:
         summary += f" ({len(noops)} already up to date)"
 
+    custom_status.add_to_tasks(updated)  # MIP-2494 (flag `AGENT_CUSTOM_STATUS`)
+    left_out = [
+        {**choice.suggestion, "task_id": task_id}
+        for task_id, choice in choices.items()
+        if choice.suggestion
+    ]
     return {
         "updated": updated,
         "noops": noops,
+        **({"suggestions": left_out} if left_out else {}),
         "__summary__": summary,
     }
 

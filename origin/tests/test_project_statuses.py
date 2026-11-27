@@ -98,6 +98,7 @@ class StatusListApiTests(StatusTestBase):
                 ("Blocked", "Blocked", True),
                 ("Pending", "Pending", True),
                 ("Closed", "Closed", True),
+                ("Rejected", "Rejected", True),
             ],
         )
         self.assertTrue(first.data["canManage"])
@@ -144,7 +145,17 @@ class StatusListApiTests(StatusTestBase):
         names = [r["name"] for r in self.client.get(self.url()).data["statuses"]]
         self.assertEqual(
             names,
-            ["Open", "In Review", "Ready", "WIP", "Doing", "Blocked", "Pending", "Closed"],
+            [
+                "Open",
+                "In Review",
+                "Ready",
+                "WIP",
+                "Doing",
+                "Blocked",
+                "Pending",
+                "Closed",
+                "Rejected",
+            ],
         )
 
     def test_create_refusals(self):

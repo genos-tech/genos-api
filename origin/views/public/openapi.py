@@ -433,6 +433,7 @@ OPENAPI = {
                                         "Blocked",
                                         "Pending",
                                         "Closed",
+                                        "Rejected",
                                         "Deleted",
                                     ],
                                 },

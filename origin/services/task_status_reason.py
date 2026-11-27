@@ -73,8 +73,8 @@ def status_reason_error(old: str, new: str, raw_reason: Any, *, arg: str = "reas
 
 STATUS_REASON_MESSAGE = (
     "The status changed ({old} \u2192 {new}) but no `{arg}` was given, so the task shows nobody why. "
-    "Add a comment saying why: Closed = what shipped; Pending or Blocked = what it waits for and "
-    "when it comes back; reopened = why."
+    "Add a comment saying why: Closed = what shipped; Rejected = why it will not be done; Pending or "
+    "Blocked = what it waits for and when it comes back; reopened = why."
 )
 
 

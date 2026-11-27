@@ -15,7 +15,7 @@ VALID_EFFORTS = {"Minimal", "Low", "Moderate", "High", "Extensive"}
 # "Deleted" is deliberately absent: bulk/plan tools must not soft-delete
 # tasks as a side effect of an organize pass. `update_task` still allows
 # it for a single, explicitly-named task.
-VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed"}
+VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Rejected"}
 
 PRIORITY_ENUM = sorted(VALID_PRIORITIES)
 EFFORT_ENUM = sorted(VALID_EFFORTS)

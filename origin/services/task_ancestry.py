@@ -1,8 +1,9 @@
-"""A task under a Closed or Deleted ancestor reads as closed or deleted (MIP-1413).
+"""A task under a Closed, Rejected or Deleted ancestor reads as finished (MIP-1413).
 
 Ken's rule (MIP-1353, MIP-1389): if a task's parent, grandparent, ... up to the root task or
 its milestone is Closed (or Deleted), the task is treated as Closed (or Deleted), whatever
-its own status says. The status itself is never changed: users do not update every
+its own status says. Rejected (MIP-2494) works the same way, except that a task's own Closed
+or Rejected is kept. The status itself is never changed: users do not update every
 status, and reopening the parent must bring the branch back exactly as it was.
 
 The rule lived in two places that had to agree:
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     from origin.search_engine.agent.tools.base import ToolContext
 
 CLOSED = "Closed"
+REJECTED = "Rejected"
 DELETED = "Deleted"
 
 # A branch deeper than any real tree is a bad link, not a task tree: stop short.
@@ -65,8 +67,8 @@ COLUMNS = ("task_id", "milestone_id", "parent_task_id", "is_milestone", "status"
 
 
 class Verdict(NamedTuple):
-    """What an ancestor says about a task: `status` is Closed or Deleted, `ancestor_id` the
-    nearest ancestor that said it."""
+    """What an ancestor says about a task: `status` is Closed, Rejected or Deleted, `ancestor_id`
+    the nearest ancestor that said it."""
 
     status: str
     ancestor_id: int
@@ -84,7 +86,7 @@ def _parent_links(row, backing_of: dict[int, int]) -> list[int]:
 
 
 def ancestor_verdicts(rows) -> dict[int, Verdict]:
-    """`{task_id: Verdict}` for the rows under a Closed or Deleted ancestor.
+    """`{task_id: Verdict}` for the rows under a Closed, Rejected or Deleted ancestor.
 
     `rows` are `(task_id, milestone_id, parent_task_id, is_milestone, status)` tuples, the
     tasks AND their ancestors (a project's rows, whole). See the module docstring for the
@@ -100,7 +102,7 @@ def ancestor_verdicts(rows) -> dict[int, Verdict]:
 
     Order is the rule: ancestors are visited nearest first (a parent before what is above
     it, the parent link before the milestone link). The first Deleted wins outright (it
-    beats Closed); otherwise the first Closed is named. A node reached twice (the parent
+    beats the others); otherwise the first Closed or Rejected is named. A node reached twice (the parent
     link and the milestone link) is read once.
     """
     by_id = {r[0]: r for r in rows}
@@ -123,8 +125,8 @@ def ancestor_verdicts(rows) -> dict[int, Verdict]:
             ancestor = by_id[ancestor_id]
             if ancestor[4] == DELETED:
                 return Verdict(DELETED, ancestor_id)
-            if closed is None and ancestor[4] == CLOSED:
-                closed = Verdict(CLOSED, ancestor_id)
+            if closed is None and ancestor[4] in (CLOSED, REJECTED):
+                closed = Verdict(ancestor[4], ancestor_id)
             stack.extend((p, depth + 1) for p in reversed(parents_of(ancestor)))
         return closed
 
@@ -170,6 +172,10 @@ class Effective(NamedTuple):
 def effective(own_status: str, found: Verdict | None) -> Effective:
     """The status the rule reads for a task whose own status is `own_status`."""
     if found is None or own_status == DELETED or own_status == found.status:
+        return Effective(own_status, None)
+    # A task's own Closed or Rejected says how ITS work ended, and a finished ancestor does not
+    # change that (MIP-2494): done work under a rejected parent stays done.
+    if found.status != DELETED and own_status in (CLOSED, REJECTED):
         return Effective(own_status, None)
     # Closed under a Deleted ancestor reads Deleted; anything else under an ancestor reads
     # the ancestor's verdict.

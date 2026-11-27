@@ -33,6 +33,7 @@ from origin.search_engine.agent.tools import ancestor_rule as _rule
 from origin.search_engine.agent.tools import create_calendar_event as _create_calendar_event
 from origin.search_engine.agent.tools import create_task as _create_task
 from origin.search_engine.agent.tools import create_task_plan as _create_task_plan
+from origin.search_engine.agent.tools import custom_status as _custom_status
 from origin.search_engine.agent.tools import delete_calendar_event as _delete_calendar_event
 from origin.search_engine.agent.tools import list_calendar_events as _list_calendar_events
 from origin.search_engine.agent.tools import list_calendars as _list_calendars
@@ -97,6 +98,10 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
         _list_uncompleted_todos.DAYS_AHEAD_FLAG,
         _list_uncompleted_todos.DESCRIPTION_ADDITION,
     ),
+    # MIP-2494: the project's own status names.
+    ("list_project_tags", _custom_status.FLAG, _custom_status.LIST_DESCRIPTION_ADDITION),
+    ("fetch_task", _custom_status.FLAG, _custom_status.READ_DESCRIPTION_ADDITION),
+    ("list_tasks", _custom_status.FLAG, _custom_status.READ_DESCRIPTION_ADDITION),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`

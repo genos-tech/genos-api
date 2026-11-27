@@ -41,6 +41,7 @@ from origin.models.common.webhook_models import (
     EVENT_TASK_COMMENT_CREATED,
     EVENT_TASK_COMPLETED,
     EVENT_TASK_CREATED,
+    EVENT_TASK_REJECTED,
     EVENT_TASK_UPDATED,
     SUBSCRIBABLE_CHANNEL_KINDS,
     WebhookDelivery,
@@ -182,6 +183,7 @@ def enqueue_event(team_id, event: str, payload: dict, scope: dict | None = None)
 _EVENT_PRECEDENCE = {
     EVENT_TASK_CREATED: 3,
     EVENT_TASK_COMPLETED: 2,
+    EVENT_TASK_REJECTED: 2,
     EVENT_TASK_UPDATED: 1,
 }
 
@@ -253,6 +255,9 @@ def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
 
     if created:
         event = EVENT_TASK_CREATED
+    elif status_changed_to == "Rejected":
+        # Finished but not done (MIP-2494): its own event, never `task.completed`.
+        event = EVENT_TASK_REJECTED
     elif status_changed_to is not None and status_changed_to in CLOSED_STATUSES:
         event = EVENT_TASK_COMPLETED
     else:

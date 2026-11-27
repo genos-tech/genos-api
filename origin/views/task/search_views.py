@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from origin.models.project.prj_models import *
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import *
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_project_member, reachable_project_ids
 
@@ -19,6 +20,7 @@ STATUS_MAP = {
     "blocked": "Blocked",
     "pending": "Pending",
     "closed": "Closed",
+    "rejected": "Rejected",
     "deleted": "Deleted",
 }
 
@@ -101,18 +103,18 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
 
         # Unless the caller explicitly asked for finished tasks (or for
         # everything via include_all), hide tasks that live under a
-        # Closed/Deleted container: walking the full parent chain covers
+        # finished (Closed/Rejected/Deleted) container: walking the full parent chain covers
         # both "sub-task of a closed task" and "task in a closed
         # milestone" (closing a milestone mirrors Closed onto its
         # backing task, which is the children's parent).
         parent_by_id: dict[int, int | None] = {}
         finished_task_ids: set[int] = set()
-        if statuses != ["Closed"] and statuses != ["Deleted"] and include_all == False:
+        if statuses not in (["Closed"], ["Rejected"], ["Deleted"]) and include_all == False:
             for _tid, _pid, _status in TaskMaster.objects.filter(
                 scope_filter, is_init_task=False
             ).values_list("task_id", "parent_task_id", "status"):
                 parent_by_id[_tid] = _pid
-                if _status in ("Closed", "Deleted"):
+                if _status in FINISHED_STATUSES:
                     finished_task_ids.add(_tid)
 
         def has_finished_ancestor(task_id: int) -> bool:

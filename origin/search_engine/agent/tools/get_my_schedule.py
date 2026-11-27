@@ -38,6 +38,7 @@ from origin.search_engine.agent.calendar import (
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_enums import blank_to_none
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import zone_for_user_id
 
 _DEFAULT_WINDOW_DAYS = 7
@@ -112,10 +113,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # MIP-1478: a task under a Closed or Deleted ancestor reads as Closed: nothing is due.
         rule = ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
         due_qs = ancestor_rule.with_effective_status(due_qs, rule).exclude(
-            eff_status__in=["Closed", "Deleted"]
+            eff_status__in=FINISHED_STATUSES
         )
     else:
-        due_qs = due_qs.exclude(status__in=["Closed", "Deleted"])
+        due_qs = due_qs.exclude(status__in=FINISHED_STATUSES)
     tasks_qs = due_qs.select_related("project").order_by("due_date", "-ts_updated_at")[:_MAX_TASKS]
 
     tasks_due: list[dict[str, Any]] = []

@@ -73,7 +73,7 @@ FIELDS = (
 )
 MULTI_FIELDS = ("tags", "parent", "external_id")
 
-STATUSES = ("Open", "WIP", "Blocked", "Pending", "Closed")
+STATUSES = ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")
 PRIORITIES = ("Minimal", "Low", "Normal", "High", "Critical")
 
 
@@ -231,6 +231,18 @@ _STATUS_WORDS = {
         "完了",
         "終了",
         "クローズ",
+    ),
+    "Rejected": (
+        "rejected",
+        "declined",
+        "won't do",
+        "won't fix",
+        "wontfix",
+        "cancelled",
+        "canceled",
+        "却下",
+        "対応しない",
+        "キャンセル",
     ),
 }
 _STATUS_LOOKUP = {w: s for s, words in _STATUS_WORDS.items() for w in words}

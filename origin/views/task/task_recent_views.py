@@ -13,7 +13,7 @@ from .common_color import status_color
 
 # Recents includes finished tasks on purpose: it is how you check one right
 # after closing or deleting it.
-RECENT_STATUSES = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
+RECENT_STATUSES = ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"]
 
 
 def _serialize(row) -> dict:

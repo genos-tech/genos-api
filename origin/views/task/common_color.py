@@ -8,6 +8,7 @@ STATUS_COLOR_MAP = {
     "blocked": {"chipColor": "#e11d48", "textColor": "white"},
     "pending": {"chipColor": "#b900ff", "textColor": "white"},
     "closed": {"chipColor": "#1dc200", "textColor": "white"},
+    "rejected": {"chipColor": "#8d6e63", "textColor": "white"},
     "deleted": {"chipColor": "#ff2323", "textColor": "white"},
 }
 

@@ -9,6 +9,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskMaster
 from origin.services import description_edit_runs
 from origin.services.task_body_restore import RestoreRefused, restore_task_body
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.public.mcp.via_privacy import via_for_viewer
 from origin.views.utils.scope_guards import can_access_task
@@ -16,7 +17,10 @@ from origin.views.utils.scope_guards import can_access_task
 # Closed or Deleted: neither is work still to do, which is what a burndown
 # counts down. (Milestone PROGRESS is different: Deleted is gone, not done, and
 # is not counted as closed there; see `services/milestone_rollup.py`.)
+# Velocity and the activity feed's "closed": completed work only. A rejection (MIP-2494) is no close.
 _CLOSED_STATUSES = {"Closed", "Deleted"}
+# Burndown: what is no longer remaining work, so a rejected task burns down on the day it was rejected.
+_NOT_REMAINING_STATUSES = set(FINISHED_STATUSES)
 
 
 # Tasks generate audit rows liberally — clamp the default page so we
@@ -295,7 +299,7 @@ class MilestoneBurndownView(AuthenticatedAPIView):
             TaskMaster.objects.filter(task_id__in=task_ids).values_list("task_id", "status")
         )
         total = len(tasks)
-        closed_now_ids = [tid for tid, s in tasks if s in _CLOSED_STATUSES]
+        closed_now_ids = [tid for tid, s in tasks if s in _NOT_REMAINING_STATUSES]
 
         # Most-recent close activity per currently-closed task. Ordered
         # by `-ts_created_at` so the first row we see for each task IS
@@ -307,7 +311,7 @@ class MilestoneBurndownView(AuthenticatedAPIView):
                 TaskActivity.objects.filter(
                     task_id__in=closed_now_ids,
                     action_type=TaskActivityActionType.STATUS,
-                    new_value__in=list(_CLOSED_STATUSES),
+                    new_value__in=list(_NOT_REMAINING_STATUSES),
                 )
                 .order_by("task_id", "-ts_created_at")
                 .values_list("task_id", "ts_created_at")

@@ -62,6 +62,7 @@ from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import ToolContext, wrap_workspace_content
 from origin.services import item_lines, member_events
 from origin.services.channel_scope import readable_chats_qs
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import zone_for_user_id
 
 log = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ RECENT_DAYS = 3
 RISING_RATIO = 1.5
 COOLING_RATIO = 0.5
 
-_DONE = ("Closed", "Deleted")
+_DONE = FINISHED_STATUSES
 
 
 # --------------------------------------------------------------------------- #

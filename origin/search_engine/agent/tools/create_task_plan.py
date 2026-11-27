@@ -52,6 +52,7 @@ from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
 from origin.search_engine.agent.parity import followups_on, ignore_unless_parity, parity_on
+from origin.search_engine.agent.tools import custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_sizes
@@ -528,6 +529,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 anchor_milestone = milestone
                 sprint_id = milestone.sprint_id if milestone is not None else None
 
+            left_out: list[dict[str, Any]] = []  # `custom_status` names not applied (MIP-2494)
             created: list[TaskMaster] = []
             for i, spec in enumerate(tasks):
                 parent_index = spec.get("parent_index")
@@ -538,6 +540,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 else:
                     parent_task_id = anchor_parent_id
                     task_milestone = anchor_milestone
+                choice = custom_status.choose(
+                    project,
+                    custom_status.requested(spec),
+                    requested_status=spec.get("status") if parity else None,
+                )
+                if choice.suggestion:
+                    left_out.append({**choice.suggestion, "index": i})
                 created.append(
                     TaskMaster.objects.create(
                         team_id=ctx.team_id,
@@ -550,7 +559,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         content=task_body_blocks(
                             spec.get("content_markdown") or "", entity_chip_resolver=chips
                         ),
-                        status=(spec.get("status") or "Open") if parity else "Open",
+                        status=choice.status
+                        or ((spec.get("status") or "Open") if parity else "Open"),
+                        custom_status=choice.resolve_row(),
                         priority=spec.get("priority") or None,
                         effort_level=spec.get("effort_level") or None,
                         start_date=spec.get("start_date") or None,
@@ -712,6 +723,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # MIP-2367: 3+ tasks and not one dependency between them (a milestone's tree too): one more hint.
     if ctx.surface == "mcp" and (hint := no_dependencies_suggestion(len(created), n_deps)):
         suggestions.append(hint)
+    custom_status.add_to_tasks(tasks_out)
+    suggestions.extend(left_out)
     if suggestions:
         result["suggestions"] = suggestions
     return result
@@ -788,7 +801,7 @@ _TASK_ITEM_SCHEMA: dict[str, Any] = {
 PARITY_ROW_PROPERTIES: dict[str, dict[str, Any]] = {
     "status": {
         "type": "STRING",
-        "enum": ["Open", "WIP", "Blocked", "Pending", "Closed"],
+        "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected"],
         "description": "Optional starting status. Default Open.",
     },
     "template": {

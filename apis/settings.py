@@ -2040,6 +2040,15 @@ SEARCH_ENGINE["AGENT_TODO_DAYS_AHEAD"] = (
     os.environ.get("AGENT_TODO_DAYS_AHEAD", "false").lower() == "true"
 )
 
+# MIP-2494 (model-visible, dark-shipped OFF): agents and MCP clients read and set a project's own status names. Reads add
+# `custom_status`, writes take it (a name that does not fit is answered with a suggestion, never a refusal), and
+# `list_project_tags` lists `statuses`. OFF = those declarations and results are byte-identical to before, and a
+# `custom_status` that arrives anyway is ignored. The system status "Rejected" is NOT behind this flag. Rollback: unset
+# or `false`.
+SEARCH_ENGINE["AGENT_CUSTOM_STATUS"] = (
+    os.environ.get("AGENT_CUSTOM_STATUS", "false").lower() == "true"
+)
+
 # MIP-977 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), measured by the grouped eval arm `t977`):
 # a run resumed after an approve or reject keeps the prompt context its first leg
 # had (the thread / note summary of "Ask about this ...", the @/# references block,
