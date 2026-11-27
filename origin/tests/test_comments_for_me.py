@@ -203,9 +203,7 @@ class ShapeTests(WaitingBase):
         self.assertEqual(first["next_offset"], 2)
         rest = self.waiting(limit=2, offset=first["next_offset"])
         self.assertNotIn("next_offset", rest)
-        self.assertEqual(
-            sorted(self.ids(first) + self.ids(rest)), sorted(t.task_id for t in tasks)
-        )
+        self.assertEqual(sorted(self.ids(first) + self.ids(rest)), sorted(t.task_id for t in tasks))
         self.assertEqual(self.ids(self.waiting(task_id=tasks[1].task_id)), [tasks[1].task_id])
         with self.assertRaises(ToolError):
             self.waiting(task_id="PRJ")
@@ -226,8 +224,7 @@ class ShapeTests(WaitingBase):
         with override_settings(FRONTEND_BASE_URL="https://app.example.com/"):
             row = self.waiting(ctx=mcp)["tasks"][0]
         base = (
-            f"https://app.example.com/workspace/tasks/project/{task.project_id}"
-            f"/task/{task.task_id}"
+            f"https://app.example.com/workspace/tasks/project/{task.project_id}/task/{task.task_id}"
         )
         self.assertEqual(row["url"], base)
         self.assertEqual(row["comments"][0]["url"], f"{base}/comment/{comment.comment_id}")

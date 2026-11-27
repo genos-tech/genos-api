@@ -538,7 +538,9 @@ def build_unread(
             "events": max(0, events_available - events_returned),
         },
         **(
-            {"next_offset": skip + len(out_items)} if out_items and len(left) > len(out_items) else {}
+            {"next_offset": skip + len(out_items)}
+            if out_items and len(left) > len(out_items)
+            else {}
         ),
         **({"filter": flt.echo()} if flt.echo() else {}),
         "__summary__": summary,

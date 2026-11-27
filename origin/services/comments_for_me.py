@@ -331,8 +331,7 @@ def _render(ctx, page, shown, waiting, replied, own, app, described) -> list[dic
     if not page:
         return []
     tasks = {
-        t.task_id: t
-        for t in TaskMaster.objects.select_related("project").filter(task_id__in=page)
+        t.task_id: t for t in TaskMaster.objects.select_related("project").filter(task_id__in=page)
     }
     collaborating = set(
         TaskMaster.collaborators.through.objects.filter(
