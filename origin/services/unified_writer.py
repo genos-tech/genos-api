@@ -48,7 +48,15 @@ from origin.models.chat.unified_models import (
     Message,
     Pin,
 )
-from origin.services import message_tombstone, message_via, thread_summary_cleanup
+from origin.services import (
+    message_tombstone,
+    message_via,
+    realtime_push,
+    task_card,
+    task_card_post,
+    thread_summary_cleanup,
+)
+from origin.services.activity_suppression import activity_suppressed
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +395,25 @@ def delete_flag(*, chat_type: int, chat_id: int, message_id: int, user_id: str) 
         return False
 
 
+def _header_content(task_id, sender_id, title) -> tuple[list, str, dict]:
+    """The body, preview text and metadata of a lazily made task header: the task's full card,
+    or, should building it fail, a bare title (a comment must never be lost to its card)."""
+    try:
+        parts = task_card_post.header_parts(task_id, language_of=sender_id)
+        if parts is not None:
+            return parts
+    except Exception:  # noqa: BLE001
+        logger.warning("[unified_writer] card build failed task=%s", task_id, exc_info=True)
+    title = title or "Task"
+    heading = {
+        "type": "heading",
+        "props": dict(task_card.CARD_HEADING_PROPS),
+        "content": [{"type": "text", "text": f"🧾 {title}", "styles": {}}],
+        "children": [],
+    }
+    return [heading], title, {"taskId": task_id}
+
+
 def write_task_comment_as_thread_reply(
     *,
     task_id: int,
@@ -395,6 +422,7 @@ def write_task_comment_as_thread_reply(
     body: list,
     project_id: Optional[int] = None,
     bypass_flag: bool = False,
+    announce_header: bool = False,
 ) -> Optional[Message]:
     """Mirror a legacy `TaskComments` row as a v3 thread-reply `Message`
     under the PM task header.
@@ -420,6 +448,9 @@ def write_task_comment_as_thread_reply(
     `UNIFIED_MESSAGING_DUAL_WRITE` setting, but the comment fan-out, the
     demo seeder and `repair_task_comment_mirrors` run regardless of that
     runtime flag. They pass `True`.
+
+    `announce_header`: tell open chats about a card this call had to make. Only a comment
+    someone just wrote asks for it: an import or a seeder would push one per old task.
 
     Returns the created/found Message on success, None on any failure.
     Never raises — the caller's legacy `TaskComments` save is the
@@ -469,7 +500,8 @@ def write_task_comment_as_thread_reply(
                 task_id=task_id,
                 is_thread_reply=False,
             )
-            .only("id", "reply_count")
+            .only("id", "reply_count", "body")
+            .order_by("seq")
             .first()
         )
         if parent is None:
@@ -482,9 +514,11 @@ def write_task_comment_as_thread_reply(
             # no one. That's why task comments failed to notify while
             # milestones (which always post a header) worked.
             #
-            # Minimal title-only body: the client's `card-message` PATCH
-            # backfills the full card on the task's next metadata save. Sender
-            # is the task's reporter (the card's author), never the commenter.
+            # The header is the task's full card (MIP-2483), built where every card is
+            # (`task_card_post.header_parts`); posted silently, with no `MessageMention` rows
+            # and no activity, so a comment on an old task notifies who it always did and puts
+            # nobody's old card in their list of mentions. Sender is the task's reporter (the card's
+            # author), never the commenter.
             from origin.models.task.task_models import TaskMaster
 
             task_row = (
@@ -499,14 +533,20 @@ def write_task_comment_as_thread_reply(
                     task_id,
                 )
                 return None
+            header_sender = task_row.reporter_id or task_row.assignee_id or sender_id
+            # Not `body`: that is the COMMENT's, which the reply below carries.
+            card_body, card_text, card_metadata = _header_content(
+                task_id, header_sender, task_row.title
+            )
             with transaction.atomic():
-                # Lock the channel + re-check under it: the client's own card
-                # send may land between the lookup above and here, so we must
-                # not insert a duplicate header.
+                # Lock the channel + re-check under it: the task's own card may
+                # land between the lookup above and here, so we must not insert
+                # a duplicate header.
                 Channel.objects.select_for_update().filter(pk=channel.pk).first()
                 parent = (
                     Message.objects.filter(channel=channel, task_id=task_id, is_thread_reply=False)
-                    .only("id", "reply_count")
+                    .only("id", "reply_count", "body")
+                    .order_by("seq")
                     .first()
                 )
                 if parent is None:
@@ -517,36 +557,29 @@ def write_task_comment_as_thread_reply(
                         .first()
                         or 0
                     ) + 1
-                    title = task_row.title or "Task"
                     parent = Message.objects.create(
                         channel=channel,
                         seq=header_seq,
-                        sender_id=(task_row.reporter_id or task_row.assignee_id or sender_id),
-                        body=[
-                            {
-                                "type": "heading",
-                                "props": {
-                                    "level": 3,
-                                    "textColor": "default",
-                                    "textAlignment": "left",
-                                    "backgroundColor": "default",
-                                },
-                                "content": [{"type": "text", "text": f"🧾 {title}", "styles": {}}],
-                                "children": [],
-                            }
-                        ],
-                        body_text=title,
+                        sender_id=header_sender,
+                        body=card_body,
+                        body_text=card_text,
                         task_id=task_id,
                         is_thread_reply=False,
-                        metadata={"taskId": task_id},
+                        metadata=card_metadata,
                         reply_count=0,
                     )
+                    # Chats that are open see the new card now, not at their next sync.
+                    if announce_header and not activity_suppressed():
+                        realtime_push.push_message(parent, realtime_push.CREATED)
                     logger.info(
                         "[unified_writer] lazily created PM task-card header for "
                         "headerless task_id=%s in channel %s",
                         task_id,
                         channel.id,
                     )
+        elif task_card_post.is_title_only(parent.body):
+            # A bare header from before MIP-2483: make it the full card.
+            task_card_post.schedule_refresh(task_id=task_id)
 
         deterministic_id = task_comment_message_uuid(task_id, comment_id)
 

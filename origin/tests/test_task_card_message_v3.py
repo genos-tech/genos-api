@@ -74,54 +74,51 @@ class TaskCardMessageViewTests(BaseAPITestCase):
             )
         return blocks
 
-    def test_member_rewrites_card_body(self):
+    def _patch(self, **extra):
         self.authenticate()
+        payload = {"body": self._new_body("Client title"), "body_text": "Client title", **extra}
+        return self.client.patch(self.url, payload, format="json")
+
+    def test_member_patch_rebuilds_the_card_from_the_row(self):
+        # The row moved on without the card (a queryset update fires no signal).
+        TaskMaster.objects.filter(pk=self.task.pk).update(title="New title", status="WIP")
         before_ts = self.header.ts_updated_at
-        resp = self.client.patch(
-            self.url,
-            {"body": self._new_body("New title"), "body_text": "New title"},
-            format="json",
-        )
+
+        resp = self._patch(metadata={"taskStatus": "Pending", "taskId": 999})
+
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["id"], str(self.header.id))
         self.header.refresh_from_db()
+        # What the client sent is not stored: the row is what the card says (MIP-2483).
         self.assertEqual(self.header.body_text, "New title")
-        self.assertEqual(self.header.body[0]["content"][0]["text"], "New title")
+        self.assertEqual(self.header.body[0]["content"][0]["text"], "🧾 New title")
+        self.assertEqual(self.header.metadata["taskStatus"], "WIP")
+        self.assertEqual(self.header.metadata["taskId"], self.task.task_id)
         # ts_updated_at bumped so the WS proxy re-broadcast + delta sync fire.
         self.assertGreater(self.header.ts_updated_at, before_ts)
 
-    def test_metadata_is_stored_when_provided(self):
-        self.authenticate()
-        resp = self.client.patch(
-            self.url,
-            {
-                "body": self._new_body("New title"),
-                "body_text": "New title",
-                "metadata": {"taskId": self.task.task_id, "taskStatus": "WIP"},
-            },
-            format="json",
-        )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+    def test_a_card_that_already_says_the_row_is_not_written_again(self):
+        self._patch()
         self.header.refresh_from_db()
-        self.assertEqual(self.header.metadata.get("taskStatus"), "WIP")
+        written = self.header.ts_updated_at
 
-    def test_mentions_resynced_from_new_body(self):
-        # Add user2 to the PM channel so a mention of them is a valid member.
+        resp = self._patch()
+
+        self.assertEqual(resp.data["id"], str(self.header.id))
+        self.header.refresh_from_db()
+        self.assertEqual(self.header.ts_updated_at, written)
+
+    def test_mentions_follow_the_assignee_of_the_row(self):
         ProjectMembers.objects.get_or_create(
             team=self.team, project=self.project, attendee=self.user2
         )
         ChannelMember.objects.get_or_create(
             channel=self.channel, user=self.user2, defaults={"role": "member"}
         )
-        self.authenticate()
-        resp = self.client.patch(
-            self.url,
-            {
-                "body": self._new_body("New title", mention_user_id=self.user2.id),
-                "body_text": "New title",
-            },
-            format="json",
-        )
+        TaskMaster.objects.filter(pk=self.task.pk).update(assignee=self.user2)
+
+        resp = self._patch()
+
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(
             MessageMention.objects.filter(
