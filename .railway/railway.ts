@@ -402,6 +402,11 @@ export default defineRailway(() => {
       HTML_NOTES: preserve(),
       REPORT_AI_DASHBOARDS: preserve(),
       REPORT_AI_SENTENCES: preserve(),
+      // The spend controls a run checks before it calls a model: the emergency stop and the monthly limits
+      // (RAILWAY_DEPLOY.md: set the same values here as on backend-django). Unset today means no limit.
+      AI_AGENT_KILL_SWITCH: preserve(),
+      AI_MONTHLY_BUDGET_JPY: preserve(),
+      AI_TEAM_MONTHLY_CEILING_USD: preserve(),
       // The agent loop of a skill run: the same step budget, models and result sizes as in Spotlight.
       AGENT_EFFORT_LEVELS: preserve(),
       AGENT_TWO_TIER_LOOP: preserve(),
