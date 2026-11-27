@@ -163,6 +163,9 @@ class Report(TypedDict):
     # The data of a dashboard page (`services/dashboard_page.Dashboard`), for a job with
     # `delivers_note`. Rendered and stored by the delivery step; never put in the Inbox item.
     dashboard: NotRequired[dict[str, Any]]
+    # The saved page's address, set by the delivery step that saved it (never by a job): the Inbox
+    # item is then only a pointer to the page (`schedule_delivery.pointer_body`, MIP-2419).
+    page_link: NotRequired[str]
 
 
 @dataclass(frozen=True)

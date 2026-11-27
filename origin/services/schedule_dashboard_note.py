@@ -140,4 +140,6 @@ def deliver_note(
         "key": "items",
         "items": [{"text": "Open the dashboard page", "link": link, "kind": "note"}],
     }
-    return {**report, "sections": [head, *report.get("sections", [])]}
+    # `page_link` makes the Inbox item a pointer to the page (MIP-2419). The sections stay for a
+    # chat target, whose notice and item count are built from the whole report.
+    return {**report, "sections": [head, *report.get("sections", [])], "page_link": link}

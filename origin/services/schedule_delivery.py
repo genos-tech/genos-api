@@ -43,6 +43,11 @@ the server never stores HTML, markup or script:
 `item_optionals["seen"]` (MIP-1211) is the report's memory for the next one, `{task_id:
 signature}`: see `services/report_memory.py`.
 
+A dashboard run (`page_link`, set when its page was saved) files only a pointer: the dashboard's
+name and one link to the page (`pointer_body`, MIP-2419). The cost and "no AI credits" facts stay
+in `item_optionals` as for any report. A dashboard run that saved no page (a skill run that was
+skipped) is filed as the report it is, with its reason.
+
 ## A job's output is not trusted
 
 A job reads the member's data, and that data was written by other people. The report is
@@ -125,6 +130,7 @@ REPORT_VERSION = 2
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PUSH_BODY_CHARS = 140
 DEFAULT_SUMMARY = "Nothing to report."
+POINTER_TEXT = "Dashboard page"
 
 _APP_PATH_PREFIX = "/workspace/"
 _ENCODED_ESCAPE = re.compile(r"%(?:2e|2f|5c)", re.IGNORECASE)
@@ -307,6 +313,19 @@ def clean_report(report: Report, fallback_title: str) -> dict[str, Any]:
     if stats := clean_stats(report.get("stats")):
         body["stats"] = stats
     return body
+
+
+def pointer_body(title: str, link: str) -> dict[str, Any]:
+    """The Inbox item of a run that saved a page (MIP-2419): the dashboard's name and one link to
+    the page. No summary, numbers, lists or written text: the page holds them. `text` is what a
+    push and an older reader show. The section has no heading, so a card draws only the link."""
+    item = {"text": POINTER_TEXT, "link": link, "kind": "note"}
+    return {
+        "version": REPORT_VERSION,
+        "title": title,
+        "text": POINTER_TEXT,
+        "sections": [{"heading": "", "items": [item]}],
+    }
 
 
 def _run_key(run_at: datetime) -> str:
@@ -666,6 +685,9 @@ def deliver(
     if is_quiet_tick(report, run_at) and not _ai_unaccounted(schedule, report):
         _note_quiet(schedule, body)
         return None
+    # The Inbox only: a chat's notice is built from the whole report (`deliver_to_chat`).
+    if link := clean_link(report.get("page_link")):
+        body = pointer_body(body["title"], link)
     delivered = sum(len(section["items"]) for section in body["sections"])
     result = {"title": body["title"], "items": delivered}
     optionals: dict[str, Any] = {
