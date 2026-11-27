@@ -156,10 +156,13 @@ a test run is using. Under any other settings they refuse and say how to migrate
 
 ## Deployment (Railway)
 
-Built from the root `Dockerfile` (`railway.toml`, `builder = "DOCKERFILE"`). The
-web container boots in this order (see the Dockerfile `CMD` — preserve the
-sequence): decode the optional Vertex service-account key →
-`collectstatic` → `migrate` → `opensearch_setup` → `gunicorn apis.wsgi`.
+Built from the root `Dockerfile` (`railway.toml`, `builder = "DOCKERFILE"`).
+`migrate` and `opensearch_setup` run in the pre-deploy step, before the new
+container replaces the old one (`preDeployCommand` in genos-platform
+`.railway/railway.ts`; a failed `migrate` stops the deploy, a failed
+`opensearch_setup` does not). The web container then boots in this order (see
+the Dockerfile `CMD`): decode the optional Vertex service-account key →
+`collectstatic` → `gunicorn apis.wsgi`.
 
 Additional cron services share the same image, each with its own config and
 `startCommand`:
