@@ -13,7 +13,7 @@ from django.db import migrations
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0295_note_html_revision_server_rendered_mip2417"),
+        ("origin", "0296_memberschedule_heartbeat_at_mip2457"),
     ]
 
     operations = [
