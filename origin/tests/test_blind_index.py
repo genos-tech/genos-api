@@ -197,7 +197,7 @@ class TestUserLookup(_Keys, BaseAPITestCase):
         # What `rotate_field_keys` and the forms still need.
         self.assertFalse(User.objects.filter(email="").exists())
         self.assertFalse(User.objects.filter(email__isnull=True).exists())
-        self.assertTrue(User.objects.filter(phone_number=None).exists())
+        self.assertTrue(User.objects.filter(current_location=None).exists())
 
     def test_sign_in_ignores_case(self):
         # The default `get_by_natural_key` compared the column exactly.
@@ -845,9 +845,10 @@ class TestMigrationEncrypt(BaseAPITestCase):
 
     def setUp(self):
         super().setUp()
-        # 0281 dropped `base_country` after 0203 ran, so the current schema has no such column.
+        # 0281 dropped `base_country` and 0297 removed `phone_number` after 0203 ran, so the
+        # current models have neither.
         self.all_columns = list(_encrypt_migration._COLUMNS)
-        patched = [c for c in self.all_columns if c[2] != "base_country"]
+        patched = [c for c in self.all_columns if c[2] not in ("base_country", "phone_number")]
         patcher = mock.patch.object(_encrypt_migration, "_COLUMNS", patched)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -858,13 +859,11 @@ class TestMigrationEncrypt(BaseAPITestCase):
         )
         self.invite = _invite_row(self.team, "g@example.com")
         self.suppressed = EmailSuppression.objects.create(address="b@example.com", reason="bounce")
-        self.user.phone_number = "+81 90 1234 5678"
         self.user.current_location = "Asia/Tokyo"
         self.user.about_me = "Runs on coffee."
         self.user.save()
         self.plain = {
             ("origin_customuser", "id", "email", self.user.pk): "test@example.com",
-            ("origin_customuser", "id", "phone_number", self.user.pk): "+81 90 1234 5678",
             ("origin_customuser", "id", "current_location", self.user.pk): "Asia/Tokyo",
             ("origin_customuser", "id", "about_me", self.user.pk): "Runs on coffee.",
             ("origin_connectedaccount", "id", "provider_email", self.account.pk): "g@x.io",
@@ -983,7 +982,6 @@ class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
     def test_every_column_is_ciphertext_and_reads_back(self):
         values = {
             "email": "test@example.com",
-            "phone_number": "+81 90 1234 5678",
             "about_me": "Runs on coffee.",
             "current_location": "Asia/Tokyo",
         }
@@ -1032,10 +1030,10 @@ class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
 
     def test_empty_and_null_are_stored_as_they_are(self):
         self.user.about_me = ""
-        self.user.phone_number = None
+        self.user.current_location = None
         self.user.save()
         self.assertEqual(_raw("origin_customuser", "about_me", "id", self.user.pk), "")
-        self.assertIsNone(_raw("origin_customuser", "phone_number", "id", self.user.pk))
+        self.assertIsNone(_raw("origin_customuser", "current_location", "id", self.user.pk))
 
     def test_plaintext_the_previous_release_wrote_reads_as_is(self):
         _set_raw("origin_customuser", "email", "id", self.user.pk, "test@example.com")
@@ -1066,11 +1064,11 @@ class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
 
     def test_the_plaintext_limits_still_apply(self):
         # The column is `text`; the field still validates the plaintext.
-        self.user.phone_number = "1" * 21
+        self.user.current_location = "x" * 65
         with self.assertRaises(ValidationError) as caught:
             self.user.full_clean()
-        self.assertIn("phone_number", caught.exception.message_dict)
-        self.user.phone_number = None
+        self.assertIn("current_location", caught.exception.message_dict)
+        self.user.current_location = None
         self.user.email = "not-an-address"
         with self.assertRaises(ValidationError) as caught:
             self.user.full_clean()

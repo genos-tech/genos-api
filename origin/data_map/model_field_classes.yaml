@@ -234,7 +234,6 @@ origin.CustomUser:
   username: pii
   email: pii
   email_hash: pii
-  phone_number: pii
   profile_image_url: pii
   profile_image_size_bytes: none
   profile_image_file_name: pii

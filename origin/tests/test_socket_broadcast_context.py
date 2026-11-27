@@ -160,7 +160,6 @@ class PresenceProfileTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
         TeamMembers.objects.get_or_create(team=self.team, attendee=self.user)
-        self.user.phone_number = "+81-90-0000-0000"
         self.user.current_location = "Asia/Tokyo"
         self.user.role = "Engineer"
         self.user.about_me = "hello"
@@ -185,7 +184,6 @@ class PresenceProfileTests(BaseAPITestCase):
         profile = self._profile()
         self.assertNotIn("phoneNumber", profile)
         self.assertNotIn("userEmail", profile)
-        self.assertNotIn("+81-90-0000-0000", str(profile))
         self.assertNotIn(self.user.email, str(profile))
 
     def test_an_unshared_location_is_blank_on_the_card(self):

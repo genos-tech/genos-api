@@ -120,7 +120,6 @@ class TeamTasksPageBase(BaseAPITestCase):
                 username=f"ttc{i}", email=f"ttc{i}@example.com", password="pw-12345-pw"
             )
             # the personal fields stored encrypted, which a join used to decrypt per row
-            person.phone_number = f"+8190000000{i}"
             person.current_location = f"Tokyo {i}"
             person.about_me = f"About person {i}"
             person.profile_image_file_name = f"avatar-{i}.png"
