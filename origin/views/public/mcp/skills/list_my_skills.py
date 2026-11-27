@@ -35,6 +35,7 @@ def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 **r,
                 "title": words(r["title"]),
                 "description": words(r["description"]),
+                "tags": [words(tag) for tag in r["tags"]],
                 "argument_hint": words(r["argument_hint"]),
                 "owner": words(r["owner"]),
             }
@@ -61,7 +62,9 @@ LIST_MY_SKILLS = Tool(
         "properties": {
             "query": {
                 "type": "STRING",
-                "description": "Only skills whose name, title or description contains this text.",
+                "description": (
+                    "Only skills whose name, title, description or a tag contains this text."
+                ),
             },
         },
     },
