@@ -780,7 +780,10 @@ class TaskHistoryValueTests(BaseAPITestCase):
         from origin.models.task.task_activity_models import TaskActivityActionType as A
 
         self._row(A.MILESTONE_LINK, old=None, new=41, field="milestone_id")
-        self._row(A.PARENT, old=None, new=7, field="parent_task_id", newDisplayId="WEB-7")
+        # A parent that exists in a project the reader is on, so its display id is theirs to see
+        # (MIP-2523): the task itself stands in.
+        parent = self.task.task_id
+        self._row(A.PARENT, old=None, new=parent, field="parent_task_id", newDisplayId="WEB-7")
 
         self.assertEqual(self._entry(A.MILESTONE_LINK)["new_value"], 41)
         self.assertEqual(self._entry(A.PARENT)["new_value"], "WEB-7")
@@ -788,7 +791,19 @@ class TaskHistoryValueTests(BaseAPITestCase):
     def test_a_relation_label_is_still_fenced(self):
         from origin.models.task.task_activity_models import TaskActivityActionType as A
 
-        self._row(A.SPRINT_LINK, old=None, new=3, field="sprint_id", newLabel=INJECTION)
+        from origin.models.task.sprint_models import Sprint
+
+        sprint = Sprint.objects.create(
+            team=self.team,
+            project=self.project,
+            sequence_number=1,
+            name="S",
+            start_date="2026-01-01",
+            end_date="2026-01-14",
+        )
+        self._row(
+            A.SPRINT_LINK, old=None, new=sprint.sprint_id, field="sprint_id", newLabel=INJECTION
+        )
 
         self.assertEqual(self._entry(A.SPRINT_LINK)["new_value"], wrap_workspace_content(INJECTION))
 
