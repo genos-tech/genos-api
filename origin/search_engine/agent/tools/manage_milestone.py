@@ -414,7 +414,7 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if parsed.get("description") and milestone.task_id:
         backing = TaskMaster.objects.select_related("project").get(task_id=milestone.task_id)
         notify_task_body_mentions(backing, actor_id=ctx.user_id)
-    # The project chat's "milestone created" card, which the app's browser would post
+    # The project chat's "milestone created" card, as the app's create endpoint posts it
     # (MIP-1450): it is what tells the assignees.
     post_milestone_created_card(milestone, actor_id=ctx.user_id)
 

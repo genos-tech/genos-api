@@ -1,9 +1,7 @@
 """A task's chat card stays current after an edit that had no browser (MIP-1460).
 
-In the app the browser rewrites the card after every save (`PATCH card-message`). An edit over MCP,
-by the in-app agent, by the GitHub webhook or by the dependency rule had nobody to do that, so the
-chat kept the values the card was made with. The audit signal now schedules a refresh for those
-writes only, and only when a field the card shows changed.
+The audit signal schedules a refresh after every write that changes a field the card shows, whoever
+made it: the app included (MIP-2483), whose browser rewrite some screens never sent.
 """
 
 from unittest import mock
@@ -18,6 +16,13 @@ from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services import realtime_push, task_card_post
 from origin.services.activity_suppression import suppress_task_activity
+from origin.services.milestone_manage import delete_milestone
+from origin.services.sprint_manage import delete_sprint, update_sprint
+from origin.services.task_milestone_conversion import (
+    convert_milestone_to_task,
+    convert_task_to_milestone,
+)
+from origin.signals.task_signals import update_tasks_recorded
 
 from .status_reason_support import with_reason
 from .test_task_card_post import CardPostBase, _mention_ids, _text
@@ -153,22 +158,46 @@ class TaskCardRefreshTests(RefreshBase):
         self.pushed.assert_not_called()
 
 
-class AppEditsAreLeftToTheBrowserTests(RefreshBase):
-    def test_an_edit_made_in_the_app_is_not_rewritten_by_the_server(self):
-        """The browser sends its own PATCH, in the viewer's language; a second rewrite here
-        would fight it with English labels and a second broadcast."""
+class AppEditsRefreshTheCardTests(RefreshBase):
+    def _put(self, **payload):
         self.authenticate()
         with self.captureOnCommitCallbacks(execute=True):
             res = self.client.put(
-                "/api/v2/task/",
-                {"task_id": self.task.task_id, "status": "WIP", "priority": "High"},
-                format="json",
+                "/api/v2/task/", {"task_id": self.task.task_id, **payload}, format="json"
             )
         self.assertEqual(res.status_code, 200, res.data)
 
-        self.assertEqual(TaskMaster.objects.get(pk=self.task.pk).status, "WIP")
-        self.assertEqual(self._card().body, self.card.body)
-        self.pushed.assert_not_called()
+    def test_an_edit_made_in_the_app_is_refreshed_by_the_server(self):
+        """No browser rewrite needed (MIP-2483): a screen that sends none, or a tab closed too
+        soon, used to leave the card as it was."""
+        self._put(status="WIP", priority="High")
+
+        text = _text(self._card().body)
+        self.assertIn("Status: WIP", text)
+        self.assertIn("Priority: High", text)
+        self.assertTrue(self.pushed.called)
+
+    def test_a_cleared_due_date_leaves_the_card(self):
+        self._put(due_date="2026-12-24")
+        self.assertIn("Due: 📅 2026-12-24", _text(self._card().body))
+
+        self._put(due_date=None)
+
+        self.assertIn("Due: 📅 —", _text(self._card().body))
+
+    def test_a_new_reporter_updates_the_card(self):
+        self._put(reporter=str(self.user2.id))
+
+        self.assertEqual(_mention_ids(self._card().body), [str(self.user2.id)] * 2)
+
+    def test_a_bulk_cascade_that_writes_a_card_field_refreshes_it(self):
+        """A queryset update fires no signal (an import's undo marks tasks Deleted this way)."""
+        with self.captureOnCommitCallbacks(execute=True):
+            update_tasks_recorded(
+                TaskMaster.objects.filter(pk=self.task.pk), cascade="import_undo", status="Deleted"
+            )
+
+        self.assertIn("Status: Deleted", _text(self._card().body))
 
     def test_a_blocked_flip_the_server_derived_is_refreshed_even_inside_an_app_request(self):
         """Editing task A in the app flips task B to Blocked; the browser only rewrites A's card."""
@@ -197,6 +226,17 @@ class AppEditsAreLeftToTheBrowserTests(RefreshBase):
             clear_current_user()
 
         self.assertIn("Status: WIP", _text(self._card().body))
+
+
+class ConversionCardTests(RefreshBase):
+    def test_converting_to_a_milestone_and_back_rewrites_the_card(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            milestone = convert_task_to_milestone(self.task.task_id)
+        self.assertTrue(_text(self._card().body).startswith("🚩"))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            convert_milestone_to_task(milestone.milestone_id)
+        self.assertTrue(_text(self._card().body).startswith("🧾"))
 
 
 class MilestoneCardRefreshTests(CardPostBase):
@@ -270,6 +310,33 @@ class MilestoneCardRefreshTests(CardPostBase):
             _mention_ids(self._card().body),
             [str(self.user.id), str(self.user2.id), str(self.user.id)],
         )
+
+    def test_deleting_the_milestone_says_so_on_its_card(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            delete_milestone(self.milestone)
+
+        self.assertIn("Status: Deleted", _text(self._card().body))
+        self.assertEqual(self._card().metadata["taskStatus"], "Deleted")
+
+    def test_renaming_and_deleting_the_sprint_updates_its_row(self):
+        sprint = Sprint.objects.create(
+            team=self.team,
+            project=self.project,
+            name="Sprint 7",
+            sequence_number=7,
+            start_date="2026-11-16",
+            end_date="2026-11-29",
+        )
+        self._update(sprint_id=sprint.sprint_id)
+        sprint.refresh_from_db()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            update_sprint(sprint, name="Sprint seven")
+        self.assertIn("Sprint: Sprint seven", _text(self._card().body))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            delete_sprint(sprint)
+        self.assertIn("Sprint: —", _text(self._card().body))
 
     def test_removing_every_assignee_reads_unassigned(self):
         self._update(assignee_ids=[])

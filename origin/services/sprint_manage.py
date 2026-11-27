@@ -35,6 +35,7 @@ from origin.services.sprint_status import (
     SPRINT_STATUS_UPCOMING,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_card_post import schedule_refresh
 from origin.services.workspace_changes import record as record_workspace_change
 from origin.signals.task_signals import update_tasks_recorded
 
@@ -130,6 +131,9 @@ def update_sprint(
         raise SprintRefused("Updated window overlaps another sprint.", 409)
     with transaction.atomic():
         sprint.save()
+        if "name" in changed:
+            # Their chat cards name the sprint (MIP-2483).
+            _refresh_cards(MilestoneMaster.objects.filter(sprint=sprint))
         if changed:
             record_workspace_change(
                 team_id=sprint.team_id,
@@ -140,6 +144,12 @@ def update_sprint(
                 fields=changed,
             )
     return sprint
+
+
+def _refresh_cards(milestones) -> None:
+    """Bring these milestones' chat cards up to date once the write commits."""
+    for milestone_id in milestones.values_list("milestone_id", flat=True):
+        schedule_refresh(milestone_id=milestone_id)
 
 
 def delete_sprint(sprint: Sprint) -> int:
@@ -162,7 +172,9 @@ def delete_sprint(sprint: Sprint) -> int:
             )
 
     # Milestones fall back into "No sprint / Backlog", so the frontend doesn't
-    # try to render them inside a now-invisible sprint.
+    # try to render them inside a now-invisible sprint. Their chat cards name it, and a
+    # queryset update fires no signal (MIP-2483).
+    leaving = list(MilestoneMaster.objects.filter(sprint=sprint).values_list("pk", flat=True))
     detached = MilestoneMaster.objects.filter(sprint=sprint).update(
         sprint=None, ts_updated_at=timezone.now()
     )
@@ -172,4 +184,5 @@ def delete_sprint(sprint: Sprint) -> int:
         TaskMaster.objects.filter(sprint=sprint), cascade="sprint_delete", sprint=None
     )
     invalidate_project_tasks_cache(sprint.team_id, sprint.project_id)
+    _refresh_cards(MilestoneMaster.objects.filter(pk__in=leaving))
     return detached

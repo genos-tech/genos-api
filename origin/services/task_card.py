@@ -1,24 +1,21 @@
 """The PM-channel "task created" card: its BlockNote body, built server-side.
 
 The v3 PM pane renders ONE top-level card `Message` per task (the composer is
-disabled there; only task lifecycle writes post). The app builds it in the
-browser (`taskMessageTemplate` / `milestoneMessageTemplate` in
-`genos-frontend/src/features/tasks/utils/TaskMessageTemplate.ts`) and sends it
-after the task PUT. A task made any other way (MCP, the in-app agent, the
-public REST API) has no browser to do that, so `task_card_post` builds the same
-card here.
+disabled there; only task lifecycle writes post). `task_card_post` builds it here
+for every create and refresh, whatever made the write (MIP-2483). The app's own
+template (`taskMessageTemplate` / `milestoneMessageTemplate` in
+`genos-frontend/src/features/tasks/utils/TaskMessageTemplate.ts`) has the same
+shape; what it sends to a project chat is no longer stored.
 
 The body mirrors the live shape byte-for-byte (no block ids, a heading without
 `isToggleable`) so a server-made card cannot be told from a client-made one.
 This module is the single definition: `demo_seeder` imports it for the cards it
 seeds, so the demo and the live paths cannot drift apart.
 
-Labels are English unless the caller passes a table. The server-written card
-(`task_card_post`) passes the table of its sender's language (`card_language`,
-`card_labels`; MIP-1744): the field names are baked into the stored message as
-text, so one language has to be chosen when it is written, and the app rewrites
-it in the editor's language the next time the task's metadata is saved in the
-browser (`PATCH /api/v3/tasks/{id}/card-message/`).
+Labels are English unless the caller passes a table. `task_card_post` passes the
+table of the card sender's language (`card_language`, `card_labels`; MIP-1744):
+the field names are baked into the stored message as text, so one language has to
+be chosen when it is written.
 """
 
 from __future__ import annotations
@@ -348,3 +345,35 @@ def milestone_card_body(
         _due_row(labels, due_date),
         _blank_row(),
     ]
+
+
+_UNASSIGNED_WORDS = frozenset(table["unassigned"] for table in _LABELS_BY_LANGUAGE.values())
+
+
+def card_values(body) -> list[list[str]]:
+    """What a card SAYS, block by block, with its field names and wording language left out: the
+    heading, each chip, each mentioned person and each date. Two cards of the same row read the
+    same here whoever wrote them (the app's browser, in its viewer's language, or this module)."""
+    rows = []
+    for block in body if isinstance(body, list) else []:
+        values = []
+        content = block.get("content") if isinstance(block, dict) else None
+        for item in content if isinstance(content, list) else []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "mention":
+                values.append(f"user:{(item.get('props') or {}).get('userId')}")
+                continue
+            styles = item.get("styles") or {}
+            if styles == {"bold": True}:  # a field name
+                continue
+            text = str(item.get("text", "")).strip()
+            # "Unassigned" and "Deleted user" in whatever language. The server writes them in
+            # muted italic; the app's own task card writes "Unassigned" in plain text.
+            if styles.get("italic") or (not styles and text in _UNASSIGNED_WORDS):
+                values.append("none")
+            elif text and text != ",":
+                values.append(text)
+        if values:
+            rows.append(values)
+    return rows
