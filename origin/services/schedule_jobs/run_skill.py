@@ -21,7 +21,8 @@ WHAT IT COSTS. The owner's AI credits, as `surface="schedule"` (the surface the 
 report already use, `billable_surfaces` in `credit_policy.yaml`), under one metered request whose id
 goes on the Inbox item's cost block (`Report.ai_request_id`). At zero credits nothing is called: the
 report is one line saying so (`Report.ai_skipped`), the run counts as a success and the schedule
-keeps its time, so it runs again when credits are back. The loop also stops itself mid-run when the
+keeps its time, so it runs again when credits are back. A reached monthly spend limit
+(`spend_limits`) does the same. The loop also stops itself mid-run when the
 balance is spent (`credit_budget_usd_micro`), and the partial answer is kept.
 
 WHERE IT GOES. The owner's Inbox (the cost is on the Inbox item), or a chat the owner is ALONE in
@@ -77,6 +78,10 @@ _SKIPPED = {
         "your credits are back."
     ),
 }
+_SKIPPED["monthly_limit"] = (
+    "Not run: Genos AI has reached its monthly limit. It runs again at its next time once the "
+    "limit resets."
+)
 _SKIPPED["demo_limit"] = (
     "Not run: the demo's AI is at its limit for today. Create a free account to keep using Genos AI."
 )
@@ -215,9 +220,9 @@ def _fail(message: str):
     return ScheduleRunError(message)
 
 
-def _skip_code(user_id: str, run_settings: Any) -> str:
+def _skip_code(user_id: str, run_settings: Any, team_id: str = "") -> str:
     """Why this run must not call a model, as the code a delivery files ("" = it may). In the order
-    a person can act on: the operator's switches, then the member's own credits."""
+    a person can act on: the operator's switches, then the monthly spend limits and the member's own credits."""
     from origin.services.report_ai import llm  # noqa: PLC0415
 
     if settings.SEARCH_ENGINE.get("AI_AGENT_KILL_SWITCH"):
@@ -229,7 +234,7 @@ def _skip_code(user_id: str, run_settings: Any) -> str:
         return llm.SKIP_METER_OFF
     if not llm.configured(run_settings.provider):
         return llm.SKIP_NOT_CONFIGURED
-    return llm.credit_block(user_id) or llm.demo_block(user_id)
+    return llm.credit_block(user_id, team_id) or llm.demo_block(user_id)
 
 
 def _credit_budget_usd_micro(user_id: str) -> int:
@@ -338,7 +343,7 @@ def run_for_answer(
     title = clip(resolved.title or resolved.slug, 120)
 
     run_settings = effort_mod.resolve(params.get(AI_EFFORT_KEY), effort_default, ctx.user_id)
-    skip = _skip_code(ctx.user_id, run_settings)
+    skip = _skip_code(ctx.user_id, run_settings, ctx.team_id)
     if skip:
         log.info("run_skill_skipped user=%s reason=%s", ctx.user_id, skip)
         return SkillAnswer(title=title, skipped=skip)

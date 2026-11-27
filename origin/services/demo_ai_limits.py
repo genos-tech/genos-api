@@ -22,8 +22,8 @@ the cache-miss path only (MIP-2364): thread and note summaries, scheduled report
 skill runs, and MCP `search_workspace` (which then runs plain). `/agent/decide/` resumes a run an
 ask already counted, and Spotlight typeahead only embeds a cached query, so neither counts.
 
-Not covered here: the monthly money ceilings (`AI_TEAM_MONTHLY_CEILING_USD`,
-`AI_MONTHLY_BUDGET_JPY`) stay the operator's switch.
+Not covered here: the monthly money limits (`AI_TEAM_MONTHLY_CEILING_USD`,
+`AI_MONTHLY_BUDGET_JPY`), which stop demo and real users alike (`search_engine.spend_limits`).
 """
 
 from __future__ import annotations

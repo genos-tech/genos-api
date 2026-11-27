@@ -750,11 +750,13 @@ class McpView(PublicApiView):
         #
         # MIP-1965: `search_workspace` is metered under the billable surface `mcp_search`, so its
         # rewrite and rerank are charged to the caller's AI credits. With no credits left it runs
-        # plain (no model call, metered under `mcp`, never charged) and says so.
+        # plain (no model call, metered under `mcp`, never charged) and says so. The same while a
+        # monthly spend limit is reached (MIP-2363).
         spend_surface = "mcp"
         if name == mcp_search_credits.SEARCH_TOOL:
-            if mcp_search_credits.out_of_credits(ctx.user_id) or _demo_search_capped(request):
-                ctx = dataclasses.replace(ctx, plain_search=True)
+            notice = mcp_search_credits.plain_notice(ctx.user_id, ctx.team_id)
+            if notice or _demo_search_capped(request):
+                ctx = dataclasses.replace(ctx, plain_search=True, plain_search_notice=notice)
             else:
                 spend_surface = mcp_search_credits.MCP_SEARCH_SURFACE
         with metered_request(surface=spend_surface, user_id=ctx.user_id, team_id=ctx.team_id):
