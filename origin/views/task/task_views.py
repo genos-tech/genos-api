@@ -36,7 +36,13 @@ from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.task.task_serializers import *
-from origin.services import realtime_push, task_ancestry, task_comment_reactions, unified_writer
+from origin.services import (
+    automation_engine,
+    realtime_push,
+    task_ancestry,
+    task_comment_reactions,
+    unified_writer,
+)
 from origin.services.activity_minimal_card import (
     activities_wire as activities_wire_for_recipients,
 )
@@ -1222,6 +1228,23 @@ class TaskMasterView(AuthenticatedAPIView):
             # only: the task notes whose author lost their Owner role because they are not on the
             # destination (a move back writes it again), and how many people who filed a task that
             # moved are not on the destination or its team (they keep reading what they filed).
+            # Automation rules run now, after every write of this save, so a later step of
+            # it cannot write over what a rule did and the answer shows the task as it is
+            # (MIP-2498). The other writers are covered at the end of their request.
+            before_rules = task.project_id
+            ruled = automation_engine.flush().get(task.task_id)
+            task_data, moved_from = serializer.data, old_project_id if project_changed else None
+            automation = {}
+            if ruled is not None:
+                automation = {"automation": {"ruleId": ruled.rule_id, "outcome": ruled.state}}
+                if ruled.destination_project_id and moved_from is None:
+                    moved_from = before_rules
+                # A rule may move the task somewhere the person saving cannot read: they
+                # keep what they saw, and `movedFromProjectId` makes the client re-pull.
+                if can_access_task(task.task_id, request.user.id):
+                    task.refresh_from_db()
+                    task_data = TaskMasterSerializer(task).data
+
             move_report = (
                 {
                     "notesNarrowed": notes_narrowed,
@@ -1233,6 +1256,7 @@ class TaskMasterView(AuthenticatedAPIView):
             return Response(
                 {
                     **move_report,
+                    **automation,
                     # Surface the computed `display_id` ("<code>-<n>")
                     # alongside the serialized fields. TaskMasterSerializer
                     # uses `fields="__all__"` on a ModelSerializer so it
@@ -1241,14 +1265,14 @@ class TaskMasterView(AuthenticatedAPIView):
                     # socket payloads (message / task_body_mention / etc.)
                     # so the live activity chip can render the friendly id
                     # without waiting for the next REST refetch.
-                    "task": {**serializer.data, "displayId": task.display_id},
+                    "task": {**task_data, "displayId": task.display_id},
                     # Set when this PUT MOVED the task between projects. Both
                     # projects' task lists changed by more than the one row
                     # the client sent — the whole sub-tree came along and
                     # every moved row was renumbered — and by the time the
                     # response is read, only the server still knows where the
                     # task came from. Clients use it to re-pull both.
-                    "movedFromProjectId": old_project_id if project_changed else None,
+                    "movedFromProjectId": moved_from,
                     "newly_mentioned_user_ids": newly_mentioned_user_ids,
                     "all_mentioned_user_ids": all_mentioned_user_ids,
                     "removed_user_ids": removed_user_ids,

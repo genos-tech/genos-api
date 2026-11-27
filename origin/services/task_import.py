@@ -44,6 +44,7 @@ from origin.models.task.task_import_models import TaskImportRow, TaskImportRun
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
+from origin.services.automation_engine import suppress_automation
 from origin.services.blind_index import USER_EMAIL
 from origin.services.member_roles import is_guest_role
 from origin.services.task_cache import invalidate_project_tasks_cache
@@ -682,6 +683,8 @@ def _create_order(rows: list[dict]) -> list[dict]:
     return ordered
 
 
+# An import loads existing work: it sets off no automation rule (MIP-2498).
+@suppress_automation()
 def commit(
     *,
     project,
@@ -921,6 +924,7 @@ def undo_plan(run: TaskImportRun) -> dict:
     return {"remove": remove, "kept": kept}
 
 
+@suppress_automation()
 def undo(run: TaskImportRun) -> dict:
     plan = undo_plan(run)
     live = [m.task_id for m in plan["remove"] if m.task.status != "Deleted"]

@@ -845,6 +845,40 @@ origin.ProjectSavedTaskFilter:
   created_by: none
   ts_created_at: none
   ts_updated_at: none
+origin.AutomationRule:
+  id: none
+  team: none
+  project: none
+  name: content
+  position: none
+  enabled: none
+  applies_to: none
+  trigger_type: none
+  trigger_value: content
+  conditions: content
+  moves_task: none
+  destination_project: none
+  set_status: none
+  set_custom_status: none
+  set_assignee: none
+  add_tag: content
+  owner: none
+  disabled_reason: none
+  created_by: none
+  ts_created_at: none
+  ts_updated_at: none
+origin.AutomationRun:
+  id: none
+  task: none
+  rule: none
+  source_project_id: none
+  destination_project_id: none
+  trigger_type: none
+  payload: content
+  state: none
+  reason: none
+  ts_created_at: none
+  ts_done_at: none
 origin.ProjectStatus:
   status_id: none
   team: none

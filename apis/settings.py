@@ -481,6 +481,7 @@ REST_FRAMEWORK = {
         "agent_summary": os.environ.get("THROTTLE_AGENT_SUMMARY", "60/min"),
         "agent_undo": os.environ.get("THROTTLE_AGENT_UNDO", "30/min"),
         "export": os.environ.get("THROTTLE_EXPORT", "5/hour"),
+        "automation_dry_run": os.environ.get("THROTTLE_AUTOMATION_DRY_RUN", "30/min"),
         # In addresses, not requests: one request can carry 50.
         "invite": os.environ.get("THROTTLE_INVITE", "200/hour"),
         "batch_read": os.environ.get("THROTTLE_BATCH_READ", "120/min"),

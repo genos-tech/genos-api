@@ -59,6 +59,10 @@ PUSH_IDLE_DAYS = 90
 OPS_ALERT_RESOLVED_GRACE_DAYS = 90
 
 
+# The record of what a rule did (MIP-2498); the task's own history keeps the lines.
+AUTOMATION_RUN_DAYS = 90
+
+
 def _days(n: int) -> timedelta:
     return timedelta(days=n)
 
@@ -152,6 +156,17 @@ def erasure_events(now) -> QuerySet:
     return ErasureEvent.objects.filter(erased_at__lt=now - _days(RETENTION_DAYS))
 
 
+def automation_runs(now) -> QuerySet:
+    from origin.models.task.automation_models import (  # noqa: PLC0415
+        AutomationRun,
+        AutomationRunState,
+    )
+
+    return AutomationRun.objects.filter(ts_done_at__lt=now - _days(AUTOMATION_RUN_DAYS)).exclude(
+        state=AutomationRunState.PENDING
+    )
+
+
 @dataclass(frozen=True)
 class PruneSet:
     name: str
@@ -169,6 +184,7 @@ SETS: tuple[PruneSet, ...] = (
     PruneSet("push_subscriptions", push_subscriptions),
     PruneSet("ops_alerts", ops_alerts),
     PruneSet("erasure_events", erasure_events),
+    PruneSet("automation_runs", automation_runs),
 )
 BY_NAME = {s.name: s for s in SETS}
 
