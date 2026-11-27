@@ -23,7 +23,7 @@ from django.test import SimpleTestCase
 
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
-from origin.services import dashboard_page, dashboard_strings, html_notes
+from origin.services import dashboard_links, dashboard_page, dashboard_strings, html_notes
 from origin.services.schedule_jobs import ai_dashboard, dashboard_blocks, skill_dashboard
 from origin.tests.test_schedule_jobs import JobBase
 
@@ -431,3 +431,25 @@ class SkillBlockTests(SimpleTestCase):
     def test_the_model_is_told_the_blocks_it_may_use(self):
         for kind in skill_dashboard.BLOCK_LIMITS:
             self.assertIn(f'"{kind}"', skill_dashboard.DIRECTIVE)
+
+    def test_an_attention_card_draws_three_rows_and_counts_the_rest(self):
+        rows = [{"text": f"task {n}"} for n in range(10)]
+        dash = self.parse([{"type": "attention", "groups": [{"title": "Overdue", "rows": rows}]}])
+        body = dashboard_page.render(dash)[0].split("</style>", 1)[1]
+        self.assertIn("task 2", body)
+        self.assertNotIn("task 3", body)
+        self.assertIn("+7 more", body)
+
+    def test_the_model_is_told_to_give_every_attention_row_not_three(self):
+        told = skill_dashboard.DIRECTIVE
+        self.assertIn(
+            f"give every row you read, up to {skill_dashboard.MAX_ROWS} per group: the page shows "
+            f"{dashboard_page.MAX_ATTENTION_ROWS} and counts the rest",
+            told,
+        )
+        self.assertNotIn("rows each", told)
+
+    def test_the_model_is_told_which_id_each_kind_of_ref_takes(self):
+        # A `list_milestones` row has a `task_id` too (its backing task): not the milestone's id.
+        for kind in dashboard_links.KINDS:
+            self.assertRegex(skill_dashboard.DIRECTIVE, rf'for "{kind}" its {kind}_id\b')
