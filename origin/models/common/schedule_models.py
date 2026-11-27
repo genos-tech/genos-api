@@ -128,9 +128,12 @@ class MemberSchedule(models.Model):
     # delivery hook and is not stored here.
     last_result = models.JSONField(default=dict, blank=True)
     consecutive_failures = models.PositiveSmallIntegerField(default=0)
-    # The tick's claim on a due run (see `services.schedules.run_due`); a claim older than
-    # the stale limit is taken over, so a crashed tick does not strand a schedule.
+    # The claim on a run, a tick's or a "Run now" (see `services.schedules`): one whose run is
+    # gone is taken over, so a crash does not strand a schedule.
     claimed_at = models.DateTimeField(null=True, blank=True)
+    # Refreshed while the run that holds `claimed_at` is alive (MIP-2457): one that stops means
+    # the run was killed, and the claim is taken over within about a minute.
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
     # Unused until the Inbox step: whether a run also sends a push.
     deliver_push = models.BooleanField(default=False)
     # Where the report goes (MIP-1420): null = the owner's Inbox (every schedule so far), else

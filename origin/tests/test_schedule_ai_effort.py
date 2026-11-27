@@ -133,7 +133,7 @@ class TestTheCatalog(Base):
 
     def test_the_cost_follows_the_catalog_prices(self):
         base = self.entry(AI_JOB)["effort_cost"]["levels"]["medium"]["usd_micro"]
-        price = settings.LLM_CATALOG.price_for("gemini-3.6-flash")
+        price = settings.LLM_CATALOG.price_for("gemini-4-hydrogen")
         doubled = type(price)(
             **{**price.__dict__, "input": price.input * 2, "output": price.output * 2}
         )

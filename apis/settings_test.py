@@ -114,6 +114,10 @@ SEARCH_ENGINE = {  # noqa: F405
 SEARCH_ENGINE = {**SEARCH_ENGINE, "EMBEDDING_PROVIDER": "openai"}  # noqa: F405
 # Tests never start a child process to index a team (MIP-2374); they call the pieces directly.
 SEARCH_TEAM_REINDEX_MODE = "off"
+# Nor one to run a schedule (MIP-2457): "Run now" runs in the call unless a test asks otherwise,
+# and no heartbeat thread starts (its own connection cannot see a test's uncommitted rows).
+SCHEDULE_RUN_NOW_MODE = "sync"
+SCHEDULE_HEARTBEAT_EVERY_SECONDS = 0
 
 # Speed up user-creation-heavy tests.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]

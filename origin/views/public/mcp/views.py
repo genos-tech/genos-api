@@ -8,10 +8,12 @@ the caller.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import logging
 import uuid
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlparse
 
@@ -23,6 +25,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.llm import spend as llm_spend
+from origin.search_engine.llm.choice import (
+    reset_llm_choice,
+    resolve_user_choice,
+    set_llm_choice,
+)
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
 from origin.services import (
@@ -63,6 +70,22 @@ def _demo_search_capped(request: Any) -> bool:
     from origin.services.demo_ai_limits import check_demo_ask  # noqa: PLC0415
 
     return check_demo_ask(request, getattr(request, "user", None)) is not None
+
+
+@contextlib.contextmanager
+def _server_default_models(tool_name: str) -> Iterator[None]:
+    """MIP-2371: a connected app picks no model, so without a bound choice the search's rerank
+    (and rewrite, when asked for) inherits the server's answer model with thinking on. Binding the
+    server's default provider lets the catalog's `subprocesses` pins apply, as they do in the app.
+    """
+    if tool_name != mcp_search_credits.SEARCH_TOOL:
+        yield
+        return
+    token = set_llm_choice(resolve_user_choice(None, None))
+    try:
+        yield
+    finally:
+        reset_llm_choice(token)
 
 
 def _limit_category(refusal: Any) -> str:
@@ -759,7 +782,10 @@ class McpView(PublicApiView):
                 ctx = dataclasses.replace(ctx, plain_search=True, plain_search_notice=notice)
             else:
                 spend_surface = mcp_search_credits.MCP_SEARCH_SURFACE
-        with metered_request(surface=spend_surface, user_id=ctx.user_id, team_id=ctx.team_id):
+        with (
+            _server_default_models(name),
+            metered_request(surface=spend_surface, user_id=ctx.user_id, team_id=ctx.team_id),
+        ):
             if trace is not None and spend_surface != "mcp":
                 # A billable surface: the log copies what the credit engine charged for this call.
                 spend_ctx = llm_spend.current_context()

@@ -477,6 +477,7 @@ origin.MemberSchedule:
   last_result: none
   consecutive_failures: none
   claimed_at: none
+  heartbeat_at: none
   deliver_push: none
   deliver_channel: none
   output: none

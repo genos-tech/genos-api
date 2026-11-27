@@ -19,12 +19,13 @@ import json
 from datetime import timedelta
 from unittest import mock
 
+from django.test import override_settings
 from django.utils import timezone
 
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
 from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
-from origin.services import schedule_delivery, schedule_text, schedules
+from origin.services import schedule_delivery, schedule_runner, schedule_text, schedules
 from origin.services.schedule_jobs import JOBS, Job
 from origin.tests.test_mcp_endpoint import McpBase
 
@@ -398,6 +399,21 @@ class TestRunNow(ScheduleToolBase):
         row = self.ok("list_my_schedules")["schedules"][0]
         self.assertEqual(row["last_status"], "ok")
         self.assertEqual(row["last_result"], {"title": "Your day (today)", "items": 2})
+
+    def test_a_slow_job_is_answered_started_and_does_not_run_in_the_call(self):
+        """MIP-2457."""
+        job = Job("fake_day", "x", "y", mock.Mock(), {}, unwrapped=True)
+        with (
+            override_settings(SCHEDULE_RUN_NOW_MODE="subprocess"),
+            mock.patch.dict(JOBS, {"fake_day": job}),
+            mock.patch.object(schedule_runner, "start") as start,
+        ):
+            text, is_error = self.text("run_my_schedule", schedule_id=self.sid)
+        self.assertFalse(is_error, text)
+        self.assertIn("Started: the report arrives", text)
+        self.assertNotIn("failed", text)
+        start.assert_called_once()
+        job.run.assert_not_called()
 
     def test_it_does_not_move_the_next_run(self):
         before = MemberSchedule.objects.get(pk=self.sid).next_run_at
