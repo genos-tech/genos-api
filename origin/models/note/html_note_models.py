@@ -27,6 +27,10 @@ class NoteHtmlRevision(models.Model):
     size = models.IntegerField()
     # What the scan found, `[{"code", "message", "fix"}]`: kept so a later view can show it.
     warnings = models.JSONField(blank=True, default=list)
+    # True only for a page the SERVER drew itself (a dashboard, MIP-2417): the page route then lets a
+    # click on one of its in-app links reach the viewer. Per revision, so any other save of the page
+    # (which adds a revision) is without it. Never taken from a caller's input.
+    server_rendered = models.BooleanField(default=False, db_default=False)
     created_by = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
