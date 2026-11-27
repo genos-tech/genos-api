@@ -1,9 +1,6 @@
 """Per-reader projections of roster fields — the one place a "who may see
 this field" rule for a member row lives, so the several roster-building
 views can't drift on it.
-
-Sibling in spirit to `_without_phone` in team_views: both narrow what a
-built member row discloses to a particular reader.
 """
 
 

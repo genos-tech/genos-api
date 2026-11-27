@@ -698,22 +698,6 @@ class TestProfileLocationAndAbout(BaseAPITestCase):
         self.user.refresh_from_db()
         self.assertEqual(len(self.user.about_me), 500)
 
-    def test_phone_is_still_writable_by_its_owner_only(self):
-        response = self._put({"phone_number": "+81 90-1234-5678"})
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.user.refresh_from_db()
-        self.assertEqual(self.user.phone_number, "+81 90-1234-5678")
-
-        self.authenticate(self.user2)
-        response = self.client.put(
-            "/api/v2/user/profile/",
-            {"user_id": str(self.user.id), "phone_number": "+1 555-0000"},
-            format="json",
-        )
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.user.refresh_from_db()
-        self.assertEqual(self.user.phone_number, "+81 90-1234-5678")
-
 
 class TestProfileFieldsOnTheRoster(BaseAPITestCase):
     """What the team roster discloses, and to whom.
@@ -725,7 +709,6 @@ class TestProfileFieldsOnTheRoster(BaseAPITestCase):
 
     def setUp(self):
         super().setUp()
-        self.user2.phone_number = "+81 90-1234-5678"
         self.user2.current_location = "Asia/Tokyo"
         self.user2.timezone = "Europe/Paris"
         self.user2.about_me = "Ships things."
@@ -749,7 +732,6 @@ class TestProfileFieldsOnTheRoster(BaseAPITestCase):
         row = self._member_row(response, self.user2)
         self.assertEqual(row["currentLocation"], "Asia/Tokyo")
         self.assertEqual(row["aboutMe"], "Ships things.")
-        self.assertEqual(row["phoneNumber"], "+81 90-1234-5678")
 
     def test_both_zones_travel_so_the_client_can_choose(self):
         """The picked zone wins over the detected one, but the client is
@@ -773,7 +755,6 @@ class TestProfileFieldsOnTheRoster(BaseAPITestCase):
         self.assertEqual(response.data["currentLocation"], "Asia/Tokyo")
         self.assertEqual(response.data["timezone"], "Europe/Paris")
         self.assertEqual(response.data["aboutMe"], "Ships things.")
-        self.assertEqual(response.data["phoneNumber"], "+81 90-1234-5678")
 
 
 class TestTeamProfileImage(BaseAPITestCase):

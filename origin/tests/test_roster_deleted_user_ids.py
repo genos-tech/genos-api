@@ -193,7 +193,6 @@ class DeletedUserIdsTests(BaseAPITestCase):
                     "isOfflineForced",
                     "role",
                     "memberRole",
-                    "phoneNumber",
                     "currentLocation",
                     "timezone",
                     "aboutMe",

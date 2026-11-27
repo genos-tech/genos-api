@@ -609,7 +609,6 @@ def build_export(user) -> dict:
             "user_id": str(user.id),
             "email": user.email,
             "username": user.username,
-            "phone_number": user.phone_number,
             "job_title": user.role,
             "custom_status": user.custom_status,
             "current_location": user.current_location,
