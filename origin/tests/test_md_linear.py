@@ -20,7 +20,9 @@ Two things are pinned:
 
 from __future__ import annotations
 
+import gc
 import itertools
+import math
 import random
 import re
 import time
@@ -219,6 +221,8 @@ class TheCostIsLinear(SimpleTestCase):
     CEILING_CPU_SECONDS = 5.0
     GROWTH_LIMIT = 9.0  # 4x the input: linear is ~4x, quadratic ~16x
     RUNS = 3
+    GROWTH_RUNS = 5
+    SAMPLE_CPU_SECONDS = 0.02  # a growth sample repeats the small scan up to about this
 
     def _cpu(self, fn, text: str) -> float:
         started = time.process_time()
@@ -227,6 +231,32 @@ class TheCostIsLinear(SimpleTestCase):
 
     def _best(self, fn, text: str) -> float:
         return min(self._cpu(fn, text) for _ in range(self.RUNS))
+
+    def _growth(self, fn, small: str, large: str) -> float:
+        """How many times the CPU of `small` one pass over `large` costs.
+
+        Steady on a loaded machine (MIP-2435): a scan of a few milliseconds is repeated until a
+        sample is long enough to time, the two sizes take turns so a slow spell reaches both, and
+        the collector is off (as in `timeit`), or a full collection of the suite's heap lands in
+        whichever sample allocates enough to start one.
+        """
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            repeats = max(1, math.ceil(self.SAMPLE_CPU_SECONDS / max(self._cpu(fn, small), 1e-6)))
+
+            def many(text: str) -> None:
+                for _ in range(repeats):
+                    fn(text)
+
+            samples = [
+                (self._cpu(many, small), self._cpu(many, large)) for _ in range(self.GROWTH_RUNS)
+            ]
+        finally:
+            if enabled:
+                gc.enable()
+        smalls, larges = zip(*samples)
+        return min(larges) / min(smalls)
 
     def _inputs(self, size: int):
         return {
@@ -262,8 +292,7 @@ class TheCostIsLinear(SimpleTestCase):
         for name, small in self._inputs(self.SIZE).items():
             with self.subTest(name):
                 large = self._inputs(self.SIZE * 4)[name]
-                base = max(self._best(self._scan, small), 0.002)  # below that, noise
-                self.assertLess(self._best(self._scan, large) / base, self.GROWTH_LIMIT)
+                self.assertLess(self._growth(self._scan, small, large), self.GROWTH_LIMIT)
 
     def test_the_converter_survives_a_hostile_body(self):
         """What the webhook text, a note and a comment reach: the whole of `markdown_to_blocks`."""
