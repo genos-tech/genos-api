@@ -1,6 +1,13 @@
 from django.urls import path
 
 from origin.views.project.archive_views import ProjectArchiveView, ProjectRestoreView
+from origin.views.project.automation_views import (
+    AutomationRuleDetailView,
+    AutomationRuleDryRunView,
+    AutomationRuleListView,
+    AutomationRuleOrderView,
+    AutomationRuleRunsView,
+)
 from origin.views.project.change_views import ProjectChangesView
 from origin.views.project.prj_views import *
 
@@ -84,6 +91,32 @@ urlpatterns = [
         "api/v2/projects/<int:project_id>/statuses/<int:status_id>/",
         ProjectStatusDetailView.as_view(),
         name="project_status_detail",
+    ),
+    # A project's automation rules (MIP-2498).
+    path(
+        "api/v2/projects/<int:project_id>/automation-rules/",
+        AutomationRuleListView.as_view(),
+        name="automation_rules",
+    ),
+    path(
+        "api/v2/projects/<int:project_id>/automation-rules/order/",
+        AutomationRuleOrderView.as_view(),
+        name="automation_rule_order",
+    ),
+    path(
+        "api/v2/projects/<int:project_id>/automation-rules/dry-run/",
+        AutomationRuleDryRunView.as_view(),
+        name="automation_rule_dry_run",
+    ),
+    path(
+        "api/v2/projects/<int:project_id>/automation-rules/<int:rule_id>/",
+        AutomationRuleDetailView.as_view(),
+        name="automation_rule_detail",
+    ),
+    path(
+        "api/v2/projects/<int:project_id>/automation-rules/<int:rule_id>/runs/",
+        AutomationRuleRunsView.as_view(),
+        name="automation_rule_runs",
     ),
     path(
         "api/v2/project/profile/",

@@ -755,6 +755,11 @@ REGISTRY = {
     "origin.views.project.prj_views.ProjectProfileImageView": checked("can_manage"),
     "origin.views.project.prj_views.ProjectSavedTaskFilterView": checked("_is_member"),
     "origin.views.project.prj_views.ProjectTagsView": checked("require_project_member_or_response"),
+    "origin.views.project.automation_views.AutomationRuleDetailView": checked("_project"),
+    "origin.views.project.automation_views.AutomationRuleDryRunView": checked("_project"),
+    "origin.views.project.automation_views.AutomationRuleListView": checked("_project"),
+    "origin.views.project.automation_views.AutomationRuleOrderView": checked("_project"),
+    "origin.views.project.automation_views.AutomationRuleRunsView": checked("_project"),
     "origin.views.project.change_views.ProjectChangesView": checked(
         "require_project_member_or_response"
     ),
