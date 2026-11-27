@@ -4,7 +4,10 @@ The skill reads the owner's data with the same read-only tools "Run a skill" has
 DATA, never markup: one JSON object in the shape of `services/dashboard_page.Dashboard`. The
 server cleans every field and draws the page itself (`dashboard_page.render`: all text escaped, no
 script, no network). So a model that read the owner's data, and any text in that data, can only
-ever put words and numbers on the page; it cannot add a link, a script or a style.
+ever put words and numbers on the page; it cannot add an address, a script or a style. It may
+say WHICH task, milestone, project or note a row is about, by the id it read (`ref`, MIP-2417);
+the server then decides whether that becomes a link and writes the link itself
+(`services/dashboard_links`).
 
 `DIRECTIVE` is what the model is told about the answer. `parse_dashboard` turns the answer into a
 `Dashboard` or refuses it in words; the caller then keeps the previous page.
@@ -16,6 +19,7 @@ import json
 import re
 from typing import Any
 
+from origin.services import dashboard_links
 from origin.services.dashboard_page import Dashboard
 
 MAX_STATS = 8
@@ -35,8 +39,13 @@ DIRECTIVE = (
     f'optional "series" (at most {MAX_SERIES} objects {{"label": a date or period, '
     '"closed": integer, "created": integer}); '
     f'optional "lists" (at most {MAX_LISTS} objects {{"heading": string, "rows": a list of at most '
-    f'{MAX_ROWS} short strings}}); optional "narrative" (one to three plain sentences); optional '
-    '"note" (what the page leaves out, in words). Plain text only in every string.'
+    f'{MAX_ROWS} rows}}); optional "narrative" (one to three plain sentences); optional '
+    '"note" (what the page leaves out, in words). A row is a short string, or {"text": string, '
+    '"ref": {"kind": "task", "milestone", "project" or "note", "id": number}} when it is about '
+    "one thing you read: copy its numeric id from the tool result (task_id, not the display id), "
+    'and for a note add "note_type" to the ref. Give a ref wherever you have the id; a stat may '
+    'have one too, and a top-level "ref" says what the whole page is about. Never write a URL, a '
+    "path or a link. Plain text only in every string."
 )
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏‪-‮⁠-⁤﻿]")
@@ -95,13 +104,32 @@ def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _with_ref(out: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    """`out` with the source's `ref` when it is a well-formed one. Nothing else of the source is
+    carried over, so an `href` or a URL the model wrote never reaches the page."""
+    if (ref := dashboard_links.clean_ref(source.get("ref"))) is not None:
+        out["ref"] = dashboard_links.as_dict(ref)
+    return out
+
+
+def _row(value: Any) -> str | dict[str, Any]:
+    """A list row: words, or words about one thing (`{"text", "ref"}`); "" when there are none."""
+    if not isinstance(value, dict):
+        return _text(value, 240)
+    text = _text(value.get("text"), 240)
+    if not text:
+        return ""
+    row = _with_ref({"text": text}, value)
+    return row if "ref" in row else text
+
+
 def parse_dashboard(answer: str, *, default_title: str) -> Dashboard:
     """The `Dashboard` the answer describes, every field cleaned and cut to what the page draws;
     `DashboardAnswerError` when there is nothing to draw. Unknown keys are ignored: only the keys
     below are ever read."""
     data = _json_object(answer)
     stats = [
-        {"label": _text(s.get("label"), 40), "value": _text(s.get("value"), 20)}
+        _with_ref({"label": _text(s.get("label"), 40), "value": _text(s.get("value"), 20)}, s)
         for s in _list(data.get("stats"))[:MAX_STATS]
         if isinstance(s, dict) and _text(s.get("label"), 40) and _text(s.get("value"), 20)
     ]
@@ -124,7 +152,7 @@ def parse_dashboard(answer: str, *, default_title: str) -> Dashboard:
     for block in _list(data.get("lists"))[:MAX_LISTS]:
         if not isinstance(block, dict):
             continue
-        rows = [r for r in (_text(x, 240) for x in _list(block.get("rows"))[:MAX_ROWS]) if r]
+        rows = [r for r in (_row(x) for x in _list(block.get("rows"))[:MAX_ROWS]) if r]
         heading = _text(block.get("heading"), 80)
         if heading and rows:
             lists.append({"heading": heading, "rows": rows})
@@ -142,6 +170,8 @@ def parse_dashboard(answer: str, *, default_title: str) -> Dashboard:
     }
     if breakdown:
         dashboard["breakdown"] = breakdown
+    if "ref" in (subject := _with_ref({}, data)):
+        dashboard["subject"] = subject
     if narrative := _text(data.get("narrative"), MAX_NARRATIVE):
         dashboard["narrative"] = narrative
     if note := _text(data.get("note"), 300):

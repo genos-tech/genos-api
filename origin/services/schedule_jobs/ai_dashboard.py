@@ -43,8 +43,8 @@ from origin.search_engine.agent.tools.get_my_throughput import GET_MY_THROUGHPUT
 from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUMMARY
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
-from origin.services import schedule_audience
-from origin.services.dashboard_page import Dashboard, DashPoint
+from origin.services import dashboard_links, schedule_audience
+from origin.services.dashboard_page import Dashboard, DashPoint, DashRow, row_text
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.report_ai.llm import DASHBOARD_PURPOSE
 from origin.services.schedule_jobs import AUDIENCE_KEY, Job, Report, register_job
@@ -167,9 +167,17 @@ def _series(task_ids, since, period: str) -> list[DashPoint]:
     ]
 
 
+def _task_row(display_id: Any, title: Any, task_id: Any) -> DashRow:
+    """One named task: its words, and what it is (the link is added by `link_page`)."""
+    return {
+        "text": f"{display_id} · {plain(title) or 'untitled'}",
+        "ref": {"kind": dashboard_links.KIND_TASK, "id": task_id},
+    }
+
+
 def _recently_closed(
     ctx: ToolContext, task_ids, since, readers: set[str] | None = None
-) -> list[str]:
+) -> list[DashRow]:
     rows = list(
         TaskActivity.objects.filter(CLOSE_Q, task_id__in=task_ids, ts_created_at__gte=since)
         .order_by("-ts_created_at")
@@ -181,7 +189,7 @@ def _recently_closed(
             seen.append(task_id)
     readable = visible_tasks(ctx, seen, readers)
     shown = [readable[i] for i in seen if i in readable][:MAX_LIST]
-    return [f"{t.display_id} · {plain(t.title) or 'untitled'}" for t in shown]
+    return [_task_row(t.display_id, t.title, t.task_id) for t in shown]
 
 
 def _focus(params: dict[str, Any]) -> str:
@@ -245,7 +253,7 @@ def _mine(ctx: ToolContext, days: int, bucket: str, readers: set[str]) -> dict[s
         "net": (totals["created"] or 0) - (totals["closed"] or 0),
         "buckets": buckets,
         "recently_closed": [
-            {"display_id": readable[i].display_id, "title": readable[i].title or ""}
+            {"task_id": i, "display_id": readable[i].display_id, "title": readable[i].title or ""}
             for i in ids
             if i in readable
         ][:MAX_LIST],
@@ -264,6 +272,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     focus = _focus(params)
     lists: list[dict[str, Any]] = []
     note = ""
+    subject: dict[str, Any] | None = None
 
     try:
         if kind == "milestone":
@@ -274,6 +283,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
             work = TaskMaster.objects.filter(milestone_work_q(milestone)).values("task_id")
             name = summary.get("title") or "Milestone"
             title = f"Milestone dashboard: {name}"
+            subject = {"kind": dashboard_links.KIND_MILESTONE, "id": milestone.milestone_id}
             stats, breakdown = _stand(summary)
             if summary.get("due_date"):
                 stats.append({"label": "due", "value": str(summary["due_date"])})
@@ -291,7 +301,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
                         {
                             "heading": heading,
                             "rows": [
-                                f"{r.get('display_id')} · {plain(r.get('title')) or 'untitled'}"
+                                _task_row(r.get("display_id"), r.get("title"), r["task_id"])
                                 for r in rows[:MAX_LIST]
                             ],
                         }
@@ -309,6 +319,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 is_milestone=False,
             ).values("task_id")
             title = f"Project dashboard: {summary.get('project_name') or 'Project'}"
+            subject = {"kind": dashboard_links.KIND_PROJECT, "id": summary["project_id"]}
             stats, breakdown = _stand(summary)
         else:
             summary = _mine(ctx, days, "day" if period in _DAILY else "week", readers)
@@ -342,7 +353,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
             if b.get("bucket_start")
         ]
         closed_rows = [
-            f"{r['display_id']} · {plain(r['title']) or 'untitled'}"
+            _task_row(r["display_id"], r["title"], r.get("task_id"))
             for r in summary.get("recently_closed", [])
         ]
     if closed_rows:
@@ -363,6 +374,9 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
         dashboard["focus"] = focus
     if note:
         dashboard["note"] = note
+    if subject:
+        dashboard["subject"] = {"ref": subject}
+    dashboard_links.link_page(dashboard, ctx, readers)
 
     return report_of(dashboard)
 
@@ -381,7 +395,11 @@ def report_of(dashboard: Dashboard) -> Report:
     ]
     for block in dashboard.get("lists") or []:
         sections.append(
-            {"heading": block["heading"], "key": "items", "items": [item(r) for r in block["rows"]]}
+            {
+                "heading": block["heading"],
+                "key": "items",
+                "items": [item(row_text(r)) for r in block["rows"]],
+            }
         )
     return {
         "title": title,
@@ -392,13 +410,24 @@ def report_of(dashboard: Dashboard) -> Report:
     }
 
 
+def _words_only(value: Any) -> Any:
+    """The page's data without references and links: what a reader sees. A row that had one is
+    the plain string it was, so adding links (MIP-2417) moved no stored fingerprint."""
+    if isinstance(value, list):
+        return [_words_only(v) for v in value]
+    if not isinstance(value, dict):
+        return value
+    kept = {k: _words_only(v) for k, v in value.items() if k not in ("ref", "href")}
+    return kept["text"] if list(kept) == ["text"] else kept
+
+
 def data_fingerprint(dashboard: Dashboard) -> str:
     """A hash of what the page SHOWS (numbers, series, lists, the focus), not of the date line.
 
     The summary is cached on it (MIP-2359): a dashboard whose data did not move since the last run
     reuses the last summary and makes no model call. The title is in it (another milestone is
     another page); the subtitle is not (it holds today's date)."""
-    shown = {k: dashboard.get(k) for k in _FINGERPRINT_KEYS}
+    shown = {k: _words_only(dashboard.get(k)) for k in _FINGERPRINT_KEYS}
     raw = json.dumps(shown, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -414,10 +443,12 @@ def _run_from_skill(ctx: ToolContext, params: dict[str, Any]) -> Report:
     readers = audience(ctx, params)
     if (why := audience_problem(params, readers, ctx.team_id)) is not None:
         raise _public(why)
+    seen: set[dashboard_links.Ref] = set()
     got = run_skill.run_for_answer(
         ctx,
         params,
         answer_rules=f"{run_skill.UNATTENDED_RULES} {skill_dashboard.DIRECTIVE}",
+        on_tool_result=lambda name, out: dashboard_links.refs_in_result(name, out, seen),
     )
     if got.skipped:
         return run_skill.skipped_report(got)
@@ -434,6 +465,9 @@ def _run_from_skill(ctx: ToolContext, params: dict[str, Any]) -> Report:
     if not dashboard["subtitle"]:
         today = timezone.now().astimezone(zone_for_user_id(ctx.user_id)).date()
         dashboard["subtitle"] = f"As of {today.isoformat()}"
+    # A link only to something this run read AND the owner (the page's one reader) may open.
+    dashboard_links.keep_seen(dashboard, seen)
+    dashboard_links.link_page(dashboard, ctx, readers)
     report = report_of(dashboard)
     report["ai_request_id"] = got.request_id
     return report
