@@ -792,7 +792,8 @@ def _timeline(page: _Page, block: dict[str, Any]) -> str:
     def line(index: int, row: dict[str, Any], due: date) -> str:
         late = due < page.today
         status = str(row.get("status") or "")
-        css = "s-blocked" if late else _STATUS_CLASS.get(status, "s-open")
+        # The dot is the status only, as the legend says; the red words say it is late (MIP-2458).
+        css = _STATUS_CLASS.get(status, "s-open")
         when = page.say("days_late", n=(page.today - due).days) if late else page.day(due)
         state = f" · {page.status(status)}" if status in STATUSES else ""
         return (

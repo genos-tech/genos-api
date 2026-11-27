@@ -2033,6 +2033,13 @@ SEARCH_ENGINE["AGENT_INAPP_NOTE_COMMENT_TOOL"] = (
     os.environ.get("AGENT_INAPP_NOTE_COMMENT_TOOL", "false").lower() == "true"
 )
 
+# MIP-2456 (model-visible, dark-shipped OFF): `list_uncompleted_todos` takes `days_ahead`, in the app and over MCP, so
+# a to-do dated tomorrow or later can be listed. OFF = the declarations are byte-identical to before, the list stops at
+# today and a `days_ahead` that arrives anyway is ignored. Not measured by an eval. Rollback: unset or `false`.
+SEARCH_ENGINE["AGENT_TODO_DAYS_AHEAD"] = (
+    os.environ.get("AGENT_TODO_DAYS_AHEAD", "false").lower() == "true"
+)
+
 # MIP-977 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), measured by the grouped eval arm `t977`):
 # a run resumed after an approve or reject keeps the prompt context its first leg
 # had (the thread / note summary of "Ask about this ...", the @/# references block,
