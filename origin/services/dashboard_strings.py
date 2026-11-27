@@ -438,9 +438,19 @@ _AR = {
     "done_of": "المكتمل: {done} من {total}",
     "due": "الاستحقاق: {date}",
     "no_due": "بلا تاريخ استحقاق",
-    "days_left": "الأيام المتبقية: {n}",
+    # Said as a phrase, so each Arabic plural form has its own words (MIP-2467); the plain key is
+    # the 11 to 99 form. Neutral in gender: it follows a task, a milestone or a project.
+    "days_left": "متبقٍ {n} يومًا",
+    "days_left_one": "متبقٍ يوم واحد",
+    "days_left_two": "متبقٍ يومان",
+    "days_left_few": "متبقٍ {n} أيام",
+    "days_left_other": "متبقٍ {n} يوم",
     "due_today": "تستحق اليوم",
-    "days_late": "أيام التأخير: {n}",
+    "days_late": "تأخير {n} يومًا",
+    "days_late_one": "تأخير يوم واحد",
+    "days_late_two": "تأخير يومين",
+    "days_late_few": "تأخير {n} أيام",
+    "days_late_other": "تأخير {n} يوم",
     "verdict_past": "تجاوز الموعد · المتبقي: {n}",
     "verdict_ontrack": "على المسار",
     "verdict_tight": "الوقت ضيّق",
@@ -605,13 +615,28 @@ def locale_of(value: object) -> str:
     return normalize_locale(value) or DEFAULT_LOCALE
 
 
+def _form(locale: str, n: object) -> str:
+    """The key suffix of the plural form `n` takes. Arabic has more than one and many (CLDR's rule);
+    its "many" form (11 to 99) is the key itself."""
+    if n == 1:
+        return "_one"
+    if locale != "ar" or not isinstance(n, int):
+        return ""
+    if n == 2:
+        return "_two"
+    if 3 <= n % 100 <= 10:
+        return "_few"
+    return "" if n % 100 >= 11 else "_other"
+
+
 def text(locale: str, key: str, **values: object) -> str:
-    """The page's own words for `key`, with `{name}` filled in. `n == 1` takes the `_one` form
-    where the language has one."""
+    """The page's own words for `key`, with `{name}` filled in. A language that has a form of its
+    own for `n` (`_one`; Arabic also `_two`, `_few`, `_other`) uses it."""
     table = STRINGS.get(locale, _EN)
-    if values.get("n") == 1 and f"{key}_one" in table:
-        key = f"{key}_one"
-    return table.get(key, _EN[key]).format(**values)
+    form = _form(locale, values.get("n"))
+    if form and f"{key}{form}" in table:
+        key = f"{key}{form}"
+    return (table[key] if key in table else _EN[key]).format(**values)
 
 
 def day(locale: str, value: date, today: date | None = None) -> str:

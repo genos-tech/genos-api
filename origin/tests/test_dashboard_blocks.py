@@ -294,7 +294,14 @@ class RenderTests(SimpleTestCase):
         for locale, table in dashboard_strings.STRINGS.items():
             missing = {k for k in english - set(table) if not k.endswith("_one")}
             self.assertEqual(missing, set(), locale)
-            self.assertEqual(set(table) - english, set(), locale)
+            extra = set(table) - english
+            if locale == "ar":
+                # Arabic's own plural forms of an English word (MIP-2467).
+                forms = ("_two", "_few", "_other")
+                extra = {
+                    k for k in extra if not (k.endswith(forms) and k.rsplit("_", 1)[0] in english)
+                }
+            self.assertEqual(extra, set(), locale)
             for key in table:
                 dashboard_strings.text(
                     locale, key, n=2, days=3, date="d", done=1, total=2, text="t"
