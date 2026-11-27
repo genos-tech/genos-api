@@ -620,7 +620,13 @@ register_job(
         agent_note=(
             "`kind` is `milestone`, `project` or `mine`; give `milestone_id` (from `list_milestones`) "
             "or `project_id` (from `list_projects`) with it. `period` is a data window, not how "
-            "often it runs. The note is made by the server on the first run."
+            "often it runs. For a page made by one of the member's skills, give `source` `skill` and "
+            "`skill_id` (a skill's `id` from `list_my_skills`), plus `input` if the skill needs words, "
+            "and no `kind`, `milestone_id`, `project_id`, `period`, `focus` or `ai_sentences`; "
+            "skills made for this carry the `dashboard` tag in Genos (`list_my_skills` shows no "
+            "tags, so choose by description), but an untagged one is accepted too. Only the member "
+            "may read such a page (keep it where nobody else reads), and every run uses their AI "
+            "credits. The note is made by the server on the first run."
         ),
         run=run,
         share_project=_share_project,
