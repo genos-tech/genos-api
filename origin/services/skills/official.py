@@ -138,7 +138,8 @@ def load_catalog(directory: Path | None = None) -> list[Spec]:
                 slug=slug,
                 title=text.clean_title(row.get("title")),
                 description=text.clean_description(row.get("description")),
-                # Every official skill is a template (MIP-2398), first, then the pack tag it had.
+                # Every official skill is a template (MIP-2398), first, then the manifest's own: the
+                # pack tag, and `dashboard` on those that can make a dashboard (MIP-2418).
                 tags=text.clean_tags([text.TEMPLATE_TAG, *(row.get("tags") or [])]),
                 icon=str(row.get("icon") or "")[:16],
                 tool_level=tool_level,
