@@ -34,7 +34,9 @@ belongs to and checked against that object's existing ACL.
 
     task_attachments/<task_id>/…      → can_access_task
     tasks/<task_id>/…                 → can_access_task   (task body)
-    chats/<channel_uuid>/messages/…   → active ChannelMember
+    chats/<channel_uuid>/messages/…   → active ChannelMember of the chat the
+                                        message is in NOW (a moved task takes
+                                        its thread along, MIP-2505)
     chats/<channel_uuid>/inline/…     → active ChannelMember
     notes/personal|task|chat/<id>/…   → note_role.get_effective_role
 
@@ -184,6 +186,7 @@ def _may_read_media(clean: str, user_id) -> bool:
     at URLconf load, and the app registry is not guaranteed ready then.
     `scope_guards.can_access_task` defers its import for the same reason.
     """
+    from origin.models.chat.unified_models import Message  # noqa: PLC0415
     from origin.services.channel_scope import is_chat_member  # noqa: PLC0415
     from origin.views.utils.note_role import (  # noqa: PLC0415
         NOTE_TYPE_CHAT,
@@ -216,6 +219,18 @@ def _may_read_media(clean: str, user_id) -> bool:
     # it is only visible in the production media tree.
     if segments[0] == "chats" and len(segments) >= 4 and segments[2] in ("messages", "inline"):
         channel_id = _uuid_or_none(segments[1])
+        # The path names the chat the file was sent in; the message may have moved since (a
+        # task's thread goes with it to another project, MIP-2505), and its file is as visible as
+        # the message is now. A directory belongs to exactly one message.
+        if segments[2] == "messages" and len(segments) >= 5:
+            message_id = _uuid_or_none(segments[3])
+            if message_id is not None:
+                current = (
+                    Message.objects.filter(id=message_id)
+                    .values_list("channel_id", flat=True)
+                    .first()
+                )
+                channel_id = current or channel_id
         return channel_id is not None and is_chat_member(channel_id, user_id)
 
     # Notes carry a real ACL of their own (explicit grants, project/chat
