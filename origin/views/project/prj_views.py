@@ -50,6 +50,16 @@ from origin.services.project_manage import (
     set_project_code,
     set_project_name,
 )
+from origin.services.project_statuses import (
+    StatusError,
+    create_status,
+    delete_status,
+    ensure_project_statuses,
+    list_statuses,
+    reorder_statuses,
+    serialize_status,
+    update_status,
+)
 from origin.services.security_events import record_security_event, user_label
 from origin.services.workspace_changes import record as record_workspace_change
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -2139,6 +2149,112 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
         # Task rows keep their (now orphaned) values — see the class
         # docstring. No task-table walk, ever.
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class _ProjectStatusBase(AuthenticatedAPIView):
+    """Shared gates of the project status endpoints (MIP-2492): any member reads; the owner or
+    an editor changes; a project the caller is not on answers as a missing one."""
+
+    def _project(self, request, project_id, *, write: bool):
+        """`(project, None)` or `(None, response)`."""
+        if not is_project_member(project_id, request.user.id, live_only=True):
+            return None, Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        project = ProjectMaster.objects.get(project_id=project_id)
+        if write:
+            if not can_manage(resolve_project_role(project, request.user.id)):
+                return None, Response(
+                    {"error": "Only the project owner or an editor can manage statuses."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if res := archived_project_response(project.project_id):
+                return None, res
+        return project, None
+
+    def _list(self, request, project, *, code=status.HTTP_200_OK):
+        return Response(
+            {
+                "statuses": [serialize_status(r) for r in list_statuses(project)],
+                "canManage": can_manage(resolve_project_role(project, request.user.id)),
+            },
+            status=code,
+        )
+
+    @staticmethod
+    def _refusal(exc: StatusError):
+        return Response({"error": exc.message, "code": exc.code, **exc.extra}, status=exc.status)
+
+
+class ProjectStatusListView(_ProjectStatusBase):
+    """`projects/<id>/statuses/`: list (writing the built-in rows the first time), add one,
+    reorder."""
+
+    def get(self, request, project_id: int):
+        project, err = self._project(request, project_id, write=False)
+        if err:
+            return err
+        # An archived project is read-only: one that was never opened keeps an empty list.
+        if project.archived_at is None:
+            ensure_project_statuses(project)
+        return self._list(request, project)
+
+    def post(self, request, project_id: int):
+        project, err = self._project(request, project_id, write=True)
+        if err:
+            return err
+        try:
+            row = create_status(
+                project,
+                name=request.data.get("name"),
+                category=request.data.get("category"),
+                color=request.data.get("color"),
+                is_default=request.data.get("is_default", False),
+                actor=request.user,
+            )
+        except StatusError as exc:
+            return self._refusal(exc)
+        return Response(serialize_status(row), status=status.HTTP_201_CREATED)
+
+    def put(self, request, project_id: int):
+        project, err = self._project(request, project_id, write=True)
+        if err:
+            return err
+        try:
+            ensure_project_statuses(project)
+            reorder_statuses(project, request.data.get("order"))
+        except StatusError as exc:
+            return self._refusal(exc)
+        return self._list(request, project)
+
+
+class ProjectStatusDetailView(_ProjectStatusBase):
+    """`projects/<id>/statuses/<status_id>/`: rename, recolour, set the default, turn off or on
+    (`archived`), delete. Each answers with the whole list, as one change can move the default
+    off another row."""
+
+    def patch(self, request, project_id: int, status_id: int):
+        project, err = self._project(request, project_id, write=True)
+        if err:
+            return err
+        allowed = ("name", "color", "is_default", "archived", "category")
+        changes = {key: request.data.get(key) for key in allowed if key in request.data}
+        try:
+            update_status(project, status_id, changes)
+        except StatusError as exc:
+            return self._refusal(exc)
+        return self._list(request, project)
+
+    def delete(self, request, project_id: int, status_id: int):
+        project, err = self._project(request, project_id, write=True)
+        if err:
+            return err
+        replacement = request.data.get("replacement_status_id") or request.GET.get(
+            "replacement_status_id"
+        )
+        try:
+            delete_status(project, status_id, replacement_id=replacement)
+        except StatusError as exc:
+            return self._refusal(exc)
+        return self._list(request, project)
 
 
 class ProjectProfileImageView(AuthenticatedAPIView):

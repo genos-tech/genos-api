@@ -46,6 +46,7 @@ from origin.models.common.webhook_models import (
     WebhookDelivery,
     WebhookEndpoint,
 )
+from origin.services.project_statuses import custom_status_ref
 
 log = logging.getLogger("origin.webhooks")
 
@@ -88,6 +89,8 @@ def task_payload(task) -> dict:
         "display_id": task.display_id,
         "title": task.title,
         "status": task.status,
+        # The project's own label for `status`, `{id, name, category}` or null (MIP-2492).
+        "custom_status": custom_status_ref(task),
         "priority": task.priority,
         "project_id": task.project_id,
         "team_id": str(task.team_id) if task.team_id else None,

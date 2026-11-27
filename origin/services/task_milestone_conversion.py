@@ -106,6 +106,7 @@ def convert_task_to_milestone(task_id: int) -> MilestoneMaster:
             # milestone's copy starts from it.
             description=row.content,
             status=row.status or "Open",
+            custom_status_id=row.custom_status_id,
             status_code=row.status_code,
             priority=row.priority,
             priority_code=row.priority_code,

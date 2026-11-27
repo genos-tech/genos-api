@@ -70,6 +70,7 @@ def ensure_backing_task(milestone: MilestoneMaster) -> TaskMaster:
         title=milestone.title or "Untitled milestone",
         content=milestone.description,
         status=milestone.status or "Open",
+        custom_status_id=milestone.custom_status_id,
         status_code=milestone.status_code,
         priority=milestone.priority,
         priority_code=milestone.priority_code,
@@ -98,6 +99,7 @@ def sync_backing_task(milestone: MilestoneMaster) -> None:
     backing.title = milestone.title or backing.title
     backing.content = milestone.description
     backing.status = milestone.status or backing.status
+    backing.custom_status_id = milestone.custom_status_id
     backing.status_code = milestone.status_code
     backing.priority = milestone.priority
     backing.priority_code = milestone.priority_code
@@ -194,6 +196,7 @@ def create_milestone(
     links=None,
     assignee_ids=(),
     folder=None,
+    custom_status=None,
 ) -> MilestoneMaster:
     """Create a milestone with its backing task and assignee rows.
 
@@ -212,6 +215,7 @@ def create_milestone(
         title=title,
         description=description_blocks,
         status=status or "Open",
+        custom_status=custom_status,
         status_code=status_code,
         priority=priority,
         priority_code=priority_code,
