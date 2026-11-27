@@ -46,7 +46,7 @@ def remove_rejected(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0299_task_number_alias_mip2497"),
+        ("origin", "0300_message_moved_away_mip2516"),
     ]
 
     operations = [migrations.RunPython(add_rejected, remove_rejected)]
