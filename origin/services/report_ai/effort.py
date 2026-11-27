@@ -9,7 +9,7 @@ What the level changes for a report (and nothing else, so the cost follows from 
 
     level     model rung (Gemini)         thinking budget   why
     low       gemini-3.5-flash-lite       0                 a short factual sentence needs no thinking
-    medium    gemini-3.6-flash            0                 a stronger reader; thinking still off
+    medium    gemini-4-hydrogen           0                 a stronger reader; thinking at its lowest
     high      gemini-3.1-pro-preview      512               the top rung; a small thinking budget
 
 The thinking budget is explicit because the models' default is dynamic thinking, billed at the

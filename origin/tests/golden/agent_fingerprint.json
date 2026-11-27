@@ -2,7 +2,7 @@
   "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py record_agent_goldens` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
   "states": {
     "flags_off": {
-      "all": "efe7954c3309e7b09248821206eb66f646cff06ae45f60e4d355bc2350a574f5",
+      "all": "5039024ea9f6ee477080acfa04e526aae88cecc39e2322d8c1c67a435a72478d",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27488,
@@ -161,12 +161,12 @@
           "sha256": "8e13606641ff139a3d960122cd4ed2180e1b7a6c72107e656e299d89d9c0952f"
         },
         "tools.gemini.full": {
-          "bytes": 133935,
-          "sha256": "9fdcd6adf4759a1941b60400f5a777acd0d355e576008f599dc65d99a4bb6cfc"
+          "bytes": 133972,
+          "sha256": "8d07ccb49753f1d8c05e13e95757f2cc92f971766aac5e4ba79385c92064b9db"
         },
         "tools.gemini.read": {
-          "bytes": 60551,
-          "sha256": "4c9a1a825fff926026219365b5f3e1a24ac56e4050b41ef3bbe518608badf20e"
+          "bytes": 60588,
+          "sha256": "d4e4694c02a704a67bebcf03aaca24af086f7561118fc17ae77db0b58abe7b2e"
         },
         "tools.neutral.full": {
           "bytes": 122159,
@@ -187,7 +187,7 @@
       }
     },
     "production": {
-      "all": "eac520c4fc5ecab629ceb0011aaed9bc2c49c8f2449a54148abc33be0661608e",
+      "all": "505d63a4e2bdeb17ed6db51cf3ed6112252e22cb471eb55696cd1f214974b083",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 28028,
@@ -346,12 +346,12 @@
           "sha256": "f43c9eb7c8484647976f1fa4e698472339ee744c32e2459b35c82addacac1ed2"
         },
         "tools.gemini.full": {
-          "bytes": 148340,
-          "sha256": "f5778bcbd44d86cb69ca34f849069fc34219f1933076effb0be41e6437b3760c"
+          "bytes": 148377,
+          "sha256": "c25c395d32e41f2440b11287c9738818d586198051ced83de40e7a4e2004c6cf"
         },
         "tools.gemini.read": {
-          "bytes": 68322,
-          "sha256": "eab20cba29d2278789b5f63cc51274e4e0573fff79bf7218fe28883bb521f464"
+          "bytes": 68359,
+          "sha256": "3cc668f6be6b1a1f965c3b0c7268c8be57ab6b98c5a114f2cc04b486873310c6"
         },
         "tools.neutral.full": {
           "bytes": 135592,
