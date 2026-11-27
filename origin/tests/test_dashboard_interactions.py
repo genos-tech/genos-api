@@ -34,9 +34,31 @@ from origin.services.schedule_jobs import ai_dashboard, skill_dashboard
 from origin.tests.test_schedule_jobs import JobBase
 
 TODAY = date(2026, 11, 27)
-SCRIPT = re.compile(r"<script[^>]*>(.*?)</script>", re.DOTALL)
 TEMPLATE = re.compile(r"<template[^>]*>.*?</template>", re.DOTALL)
 HOSTILE = "\"><script>alert(1)</script> __proto__ ' onmouseover=x"
+
+
+class Scripts(HTMLParser):
+    """The text of every script element, as a parser reads the page."""
+
+    def __init__(self, html):
+        super().__init__()
+        self.found = []
+        self._inside = False
+        self.feed(html)
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script":
+            self._inside = True
+            self.found.append("")
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self._inside = False
+
+    def handle_data(self, data):
+        if self._inside:
+            self.found[-1] += data
 
 
 def render(blocks, **extra):
@@ -88,7 +110,7 @@ class Tags(HTMLParser):
 
 class ScriptTests(SimpleTestCase):
     def scripts(self, html):
-        return SCRIPT.findall(html_note_pages.document(html, "ab" * 16, "cd" * 16))
+        return Scripts(html_note_pages.document(html, "ab" * 16, "cd" * 16)).found
 
     def test_the_script_is_one_fixed_text_on_every_page_and_holds_no_data(self):
         hostile = render(
@@ -136,7 +158,7 @@ class ScriptTests(SimpleTestCase):
 
     def test_a_page_that_is_not_the_servers_gets_no_script_of_ours_but_the_sentinel(self):
         doc = html_note_pages.document("<!doctype html><p data-gd-fold>x</p>", "ab" * 16)
-        self.assertEqual(len(SCRIPT.findall(doc)), 1)
+        self.assertEqual(len(Scripts(doc).found), 1)
         self.assertNotIn(html_note_pages.DASHBOARD_UI, doc)
 
     def test_hostile_words_stay_attribute_values(self):
