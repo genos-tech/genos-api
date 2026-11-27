@@ -554,6 +554,22 @@ class ShippedRateCardTests(SimpleTestCase):
             f"call they serve would be silently dropped from cost totals",
         )
 
+    def test_openai_rungs_match_openais_pricing_page(self):
+        """https://developers.openai.com/api/docs/pricing, Standard tier,
+        read 2026-11-27 (MIP-2372). Sol's was promotional until 11-30."""
+        pinned = {
+            "gpt-5.6-luna": ((0.20, 1.20, 0.02, 0.25), (0.40, 1.80, 0.04, 0.50)),
+            "gpt-5.6-terra": ((2.00, 12.00, 0.20, 2.50), (4.00, 18.00, 0.40, 5.00)),
+            "gpt-5.6-sol": ((4.00, 20.00, 0.40, 5.00), (8.00, 30.00, 0.80, 10.00)),
+        }
+        for model, (short, long) in pinned.items():
+            with self.subTest(model=model):
+                p = self.cat.price_for(model)
+                self.assertEqual((p.input, p.output, p.cached_input, p.cache_write), short)
+                self.assertEqual(p.long_prompt_above, 272_000)
+                lp = p.long_prompt
+                self.assertEqual((lp.input, lp.output, lp.cached_input, lp.cache_write), long)
+
     def test_every_model_declares_all_four_rates(self):
         for entry in self.cat.catalog:
             p = self.cat.price_for(entry["model"])
