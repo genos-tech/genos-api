@@ -183,16 +183,16 @@ header+section{margin-top:0}
 .face{flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--track);font-size:11px;font-weight:600}
 .people .stack{background:transparent;border-radius:3px}
 .count{text-align:end;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
-.axis{position:relative;height:18px;margin-inline-end:68px;font-size:11px;color:var(--muted)}
+.axis{position:relative;height:18px;margin-inline-end:84px;font-size:11px;color:var(--muted)}
 .axis span{position:absolute;white-space:nowrap}
 .timeline li{padding:5px 0}
-.track{position:relative;height:14px;margin-top:2px;margin-inline-end:68px}
+.track{position:relative;height:14px;margin-top:2px;margin-inline-end:84px}
 .track::before{content:"";position:absolute;inset-inline:0;top:6px;height:2px;border-radius:1px;background:var(--track)}
 .track .now,.track .goal{position:absolute;top:-2px;bottom:-2px;width:0}
 .track .now{border-inline-start:2px solid var(--accent)}
 .track .goal{border-inline-start:2px dashed var(--muted)}
 .track .dot{position:absolute;top:2px;width:10px;height:10px;margin-inline-start:-5px;border-radius:50%;background:var(--c);box-shadow:0 0 0 2px var(--bg)}
-.track .when{position:absolute;inset-inline-end:-68px;width:62px;text-align:end;top:-2px;font-size:11px;color:var(--muted);white-space:nowrap}
+.track .when{position:absolute;inset-inline-end:-84px;width:80px;text-align:end;top:-2px;font-size:11px;color:var(--muted);white-space:nowrap}
 .track .when.bad{color:var(--bad);font-weight:600}
 @media (min-width:640px){
 .timeline li{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);column-gap:16px;align-items:center;padding:4px 0}
