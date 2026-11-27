@@ -55,6 +55,10 @@ EFFORTS = ("low", "medium", "high")
 # from EFFORTS above: that is Genos's own low/medium/high user ladder.
 REQUEST_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
+# Gemini `thinking_level` values a catalog entry may declare. MINIMAL is a 400
+# on Gemini 4, and XHIGH is not in the SDK we pin.
+THINKING_LEVELS = ("low", "medium", "high")
+
 # Marker for a tier that gets no per-model caps at all.
 UNLIMITED = "unlimited"
 
@@ -256,6 +260,12 @@ class LlmCatalog:
         """
         models = self._provider_models.get(provider, ())
         if model not in models:
+            # A swapped-out id that its successor names in `replaces` keeps
+            # that successor's effort, so a saved choice does not drop to low.
+            model = next(
+                (m for m in models if model in (self.by_model[m].get("replaces") or ())), ""
+            )
+        if not model:
             return None
         return EFFORTS[min(models.index(model), len(EFFORTS) - 1)]
 
@@ -302,6 +312,23 @@ class LlmCatalog:
         if entry is None:
             return True
         return bool(entry.get("supports_temperature", True))
+
+    def thinking_level(self, model: str) -> str | None:
+        """The Gemini `thinking_level` this model is called with.
+
+        None (the default, and any model outside the catalog) means the
+        older request shape, `thinking_budget` included. A value means the
+        model rejects `thinking_budget` and cannot turn thinking off.
+        """
+        return (self.by_model.get(model) or {}).get("thinking_level") or None
+
+    def supports_explicit_cache(self, model: str) -> bool:
+        """False for models with no Gemini explicit context cache."""
+        return bool((self.by_model.get(model) or {}).get("explicit_cache", True))
+
+    def group_parallel_calls(self, model: str) -> bool:
+        """True when one parallel turn's calls must be replayed as one turn."""
+        return bool((self.by_model.get(model) or {}).get("group_parallel_calls", False))
 
     def request_effort(self, model: str) -> str | None:
         """The Anthropic `output_config.effort` this model is called with.
@@ -619,6 +646,20 @@ def load_llm_catalog(path: str | Path) -> LlmCatalog:
                     f"{model!r}: `effort` must be one of {REQUEST_EFFORTS} "
                     f"(or omitted), got {request_effort!r}"
                 )
+
+            level = entry.get("thinking_level")
+            if level is not None and level not in THINKING_LEVELS:
+                _fail(
+                    f"{model!r}: `thinking_level` must be one of {THINKING_LEVELS} "
+                    f"(or omitted), got {level!r}"
+                )
+            for key in ("explicit_cache", "group_parallel_calls"):
+                if key in entry and not isinstance(entry[key], bool):
+                    _fail(f"{model!r}: `{key}` must be true or false, got {entry[key]!r}")
+
+            replaced = entry.get("replaces", [])
+            if not isinstance(replaced, list) or not all(isinstance(r, str) for r in replaced):
+                _fail(f"{model!r}: `replaces` must be a list of model ids")
 
             by_model[model] = entry
             prices[model] = _parse_price(provider, entry)

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from typing import Any, Iterator
 
 from django.conf import settings
@@ -43,6 +44,11 @@ from origin.search_engine.llm.types import (
 log = logging.getLogger(__name__)
 
 _client: genai.Client | None = None
+
+# Added to a caller's output cap on a model that cannot turn thinking off
+# (catalog `thinking_level`): thinking is spent from the same cap, so a cap
+# sized for the answer alone would cut the answer. A ceiling, not a spend.
+_THINKING_HEADROOM_TOKENS = 4096
 
 
 def _retry_http_options(cfg: Any):
@@ -153,9 +159,12 @@ class GeminiClient:
         """
         from google.genai import types  # noqa: PLC0415
 
-        sdk_messages = [_message_to_sdk(m, types) for m in messages]
-        sdk_tools = _tools_to_sdk(tools, types) if tools else None
         model = model_override or settings.SEARCH_ENGINE["GEMINI_MODEL"]
+        sdk_messages = _messages_to_sdk(
+            messages, types, group=settings.LLM_CATALOG.group_parallel_calls(model)
+        )
+        sdk_tools = _tools_to_sdk(tools, types) if tools else None
+        level = settings.LLM_CATALOG.thinking_level(model)
 
         # Gemini has NO env-configured output cap (server-side default
         # applies), so the config kwarg is added only when a per-call
@@ -174,12 +183,22 @@ class GeminiClient:
         # models keep the exact request they always got.
         if settings.LLM_CATALOG.supports_temperature(model):
             config_kwargs["temperature"] = 0.2
-        if params and params.max_output_tokens:
-            config_kwargs["max_output_tokens"] = params.max_output_tokens
+        output_cap = (params.max_output_tokens if params else None) or 0
+        if output_cap and level:
+            output_cap += _THINKING_HEADROOM_TOKENS
+        if output_cap:
+            config_kwargs["max_output_tokens"] = output_cap
         # Thinking bills at the OUTPUT rate ($7.50/1M on 3.6-flash) and
         # is uncontrolled by default. `is not None` matters: 0 is a real
         # value ("thinking off"), absence means the model's own default.
-        if params and params.thinking_budget is not None:
+        if level:
+            # No `thinking_budget` on these models (400) and no "off": a caller
+            # that bounded thinking at all gets the lowest level.
+            asked = params is not None and params.thinking_budget is not None
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_level="LOW" if asked else level.upper()
+            )
+        elif params and params.thinking_budget is not None:
             config_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=params.thinking_budget
             )
@@ -199,6 +218,7 @@ class GeminiClient:
         if (
             sdk_tools
             and settings.SEARCH_ENGINE.get("GEMINI_EXPLICIT_CACHE")
+            and settings.LLM_CATALOG.supports_explicit_cache(model)
             and not gemini_cache.history_outgrew_prefix(system_instruction, tools, messages)
         ):
             cached_name = gemini_cache.prefix_cache_name(
@@ -230,7 +250,7 @@ class GeminiClient:
         sink.provider = "gemini"
         sink.model = model
         # 0 = no cap sent: the model's own maximum applies (and thinking shares it).
-        sink.output_cap = (params.max_output_tokens if params else None) or 0
+        sink.output_cap = output_cap
         last_usage_metadata: Any = None
         started = time.monotonic()
         call_error = ""
@@ -445,6 +465,47 @@ def _fill_usage_sink(sink: CallUsage, usage: Any, model: str) -> None:
 # --------------------------------------------------------------------------- #
 # Translation helpers — neutral types <-> google-genai SDK types              #
 # --------------------------------------------------------------------------- #
+
+
+def _messages_to_sdk(messages: list[AgentMessage], types: Any, *, group: bool) -> list:
+    """Translate the history; with `group`, rebuild each parallel turn.
+
+    The loop keeps parallel calls as (call, result), (call, result) pairs, each
+    call carrying the first one's thought signature (see the back-fill in
+    `generate_step`). Gemini 4 rejects both the interleaving and the copied
+    signature, so consecutive pairs with the SAME signature (only a copy can be
+    identical) become one model turn with all the calls, the signature on the
+    first only, then one user turn with all the results in the same order.
+    """
+    if not group:
+        return [_message_to_sdk(m, types) for m in messages]
+
+    def signature(i: int) -> bytes | None:
+        """The signature of the (call, result) pair starting at `i`, or None."""
+        if i + 1 >= len(messages) or messages[i + 1].role != "tool_response":
+            return None
+        call = messages[i].function_call if messages[i].role == "assistant" else None
+        return call.thought_signature if call is not None else None
+
+    out: list = []
+    i = 0
+    while i < len(messages):
+        head = signature(i)
+        if head is None:
+            out.append(_message_to_sdk(messages[i], types))
+            i += 1
+            continue
+        calls = [_message_to_sdk(messages[i], types).parts[0]]
+        results = [_message_to_sdk(messages[i + 1], types).parts[0]]
+        i += 2
+        while signature(i) == head:
+            follower = replace(messages[i].function_call, thought_signature=None)
+            calls.append(_message_to_sdk(replace(messages[i], function_call=follower), types).parts[0])
+            results.append(_message_to_sdk(messages[i + 1], types).parts[0])
+            i += 2
+        out.append(types.Content(role="model", parts=calls))
+        out.append(types.Content(role="user", parts=results))
+    return out
 
 
 def _message_to_sdk(msg: AgentMessage, types: Any):
