@@ -39,7 +39,7 @@ One JSON object and nothing else: no words before or after it. The server draws 
 - "narrative" (optional): one or two sentences about what the blocks cannot show.
 - "note" (optional): what the page leaves out.
 
-Block types. The number is how many rows or points one block shows.
+Block types. The number is how many rows or points one block takes.
 
 - "hero", one progress ring: "done", "total", optional "due".
 - "status": "counts" with any of Open, WIP, Blocked, Pending, Closed.
@@ -48,7 +48,7 @@ Block types. The number is how many rows or points one block shows.
 - "meters": "rows" of {"text", "done", "total", optional "due"}, at most 8.
 - "workload": "rows" of {"name", "Open", "WIP", "Blocked", "Pending"}, at most 6 people.
 - "timeline": "rows" of {"text", "due", optional "status"}, at most 8.
-- "attention": at most 3 "groups" of {"title", "tone", "rows"}; "tone" is "overdue", "blocked" or "unowned"; each row is {"text", optional "note"}, 3 per group.
+- "attention": at most 3 "groups" of {"title", "tone", "rows"}; "tone" is "overdue", "blocked" or "unowned"; each row is {"text", optional "note"}. Give every row you read, at most 15 per group: the page shows 3 and counts the rest. If a group has more than you give, say so in the page's own "note", not a row's.
 - "table": "columns" (at most 4) and "rows" (at most 12 lists of cells).
 - "list": "rows", at most 8, only when no other block fits.
 - "text": "text", at most two sentences.
@@ -57,7 +57,7 @@ Rules.
 
 - Dates are YYYY-MM-DD. Counts are whole numbers. Write headings and labels in the person's language.
 - Plain text only. Never write a URL, a path, a link or any markup: the server drops them.
-- A row about one thing you read may carry "ref": {"kind": "task", "milestone", "project" or "note", "id": number}. Copy the numeric id from a tool result, never the display id: for a task its task_id, for a milestone its milestone_id (not the task_id on the same row), for a project its project_id. A note also needs "note_type". The server makes the link.
+- A row about one thing you read may carry "ref": {"kind": "task", "milestone", "project" or "note", "id": number}. Copy the numeric id from a tool result, never the display id: for a task its task_id, for a milestone its milestone_id (not the task_id on the same row), for a project its project_id, for a note its note_id. A note also needs "note_type". The server makes the link.
 - Never invent a number or a name. Leave out a block you have no data for.
 
 Example. Its numbers and ids are made up: yours come from this run.
