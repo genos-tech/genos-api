@@ -35,6 +35,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
+from origin.services.user_time import zone_for_user_id
 
 _MAX_DAYS = 365
 _DEFAULT_DAYS = 7
@@ -92,8 +93,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if bucket is not None:
         trunc = TruncDay if bucket == "day" else TruncWeek
+        # The member's own days and weeks, not UTC's (MIP-2438).
+        zone = zone_for_user_id(ctx.user_id)
         rows = (
-            base_qs.annotate(bucket_start=trunc("ts_created_at"))
+            base_qs.annotate(bucket_start=trunc("ts_created_at", tzinfo=zone))
             .values("bucket_start")
             .annotate(created=created_expr, closed=closed_expr)
             .order_by("bucket_start")
