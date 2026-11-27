@@ -23,6 +23,7 @@ from origin.search_engine.agent.tools import search_kb
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.types import CallUsage
 from origin.search_engine.models import AiCreditEntry, AiRequestCost
+from origin.tests.spend_limit_support import over_the_monthly_budget, over_the_team_ceiling
 from origin.views.public.mcp import mcp_search_credits
 
 from .test_mcp_endpoint import McpBase
@@ -139,6 +140,28 @@ class NoCreditsTests(_Base):
         self.assertEqual(AiCreditEntry.objects.filter(entry_type="charge").count(), before)
         self.assertFalse(AiRequestCost.objects.filter(surface="mcp_search").exists())
         self.assertIn("T1", text, "the matches still come back")
+
+    def test_a_reached_monthly_limit_runs_a_plain_search_with_its_own_notice(self):
+        for credits_mode in (AUTHORITATIVE, SHADOW_ONLY):
+            calls: list = []
+            with override_settings(SEARCH_ENGINE=_se(**credits_mode)), over_the_monthly_budget():
+                text, is_error = self.search(calls)
+            self.assertFalse(is_error)
+            self.assertIs(calls[0]["rewrite"], False)
+            self.assertIs(calls[0]["overlays"], False)
+            self.assertIn(mcp_search_credits.MONTHLY_LIMIT_NOTICE, text)
+            self.assertNotIn(mcp_search_credits.NOTICE, text)
+            self.assertIn("T1", text, "the matches still come back")
+        self.assertEqual(AiCreditEntry.objects.filter(entry_type="charge").count(), 0)
+        self.assertFalse(AiRequestCost.objects.filter(surface="mcp_search").exists())
+
+    def test_the_team_ceiling_reaches_the_search(self):
+        calls: list = []
+        with override_settings(SEARCH_ENGINE=_se(**AUTHORITATIVE)):
+            with over_the_team_ceiling(self.team.pk):
+                text, _ = self.search(calls)
+        self.assertIs(calls[0]["rewrite"], False)
+        self.assertIn(mcp_search_credits.MONTHLY_LIMIT_NOTICE, text)
 
     def test_with_credits_the_default_call_is_untouched(self):
         with override_settings(SEARCH_ENGINE=_se(**AUTHORITATIVE)):

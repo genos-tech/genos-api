@@ -89,7 +89,7 @@ def _ai_credits_out(user_id: Any) -> bool:
     (`credit_block` fails open)."""
     from origin.services.report_ai import llm  # noqa: PLC0415
 
-    return llm.credit_block(str(user_id)) == llm.SKIP_NO_CREDITS
+    return llm.credit_block(str(user_id), monthly=False) == llm.SKIP_NO_CREDITS
 
 
 def _row(sched, zone, readable_chats: set[Any] | None = None) -> dict[str, Any]:

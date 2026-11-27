@@ -457,6 +457,8 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         summary += f" {verdict.quieted} quieted by you."
     if ai_sentences_on(params) and ai.skipped == report_ai.llm.SKIP_NO_CREDITS:
         summary += " AI notes were left out: you have no AI credits left this month."
+    if ai_sentences_on(params) and ai.skipped == report_ai.llm.SKIP_MONTHLY_LIMIT:
+        summary += " AI notes were left out: Genos AI has reached its monthly limit."
     sections = dedupe_tasks(sections, _ONE_LINE_PER_TASK)
     # A headline chip is named by the section it counts (the card reads the name off the section's
     # heading). When every task of a section is already listed under "Start with", the section is

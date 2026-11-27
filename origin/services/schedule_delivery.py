@@ -711,9 +711,9 @@ def deliver(
         # The job says it spent nothing this time, and why (a code, never text a person
         # wrote): filed plain, with no cost block, and the run's result says so.
         result["ai_skipped"] = skipped
-        if report["ai_skipped"] == llm.SKIP_NO_CREDITS:
+        if report["ai_skipped"] in llm.SKIPS_LIMITED:
             # The card says why there is no AI part, in the member's language (MIP-1960).
-            optionals["ai_skipped"] = llm.SKIP_NO_CREDITS
+            optionals["ai_skipped"] = report["ai_skipped"]
 
     with transaction.atomic():
         # Lock the schedule row: of two deliveries of one run (a taken-over claim), the second

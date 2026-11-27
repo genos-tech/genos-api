@@ -165,7 +165,8 @@ class Source:
     # Whether this item spent AI usage (MIP-1234): a digest always did; a report did when it
     # carries its cost block. The card says "No AI used" when False. Never decides the source.
     used_ai: bool = False
-    # Why a report that could use AI did not (MIP-1960): only "no_credits" is ever carried.
+    # Why a report that could use AI did not (MIP-1960): only "no_credits" or "monthly_limit"
+    # (MIP-2363) is ever carried.
     ai_skipped: str = ""
 
     def public(self) -> dict[str, Any]:
@@ -214,8 +215,8 @@ def sources_for(user, items: list) -> dict[int, Source]:
             if _UUID.match(sid):
                 used = ai is not None and ai["producer"] == PRODUCER_SCHEDULE
                 wanted[item.item_id] = (PRODUCER_SCHEDULE, sid, used)
-                if optionals.get("ai_skipped") == "no_credits":
-                    skipped[item.item_id] = "no_credits"
+                if optionals.get("ai_skipped") in ("no_credits", "monthly_limit"):
+                    skipped[item.item_id] = optionals["ai_skipped"]
     schedules = {
         str(s.id): s
         for s in MemberSchedule.objects.filter(
