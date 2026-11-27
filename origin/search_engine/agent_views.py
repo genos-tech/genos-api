@@ -195,6 +195,11 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
+from origin.search_engine.spend_limits import (
+    MONTHLY_LIMIT_MESSAGE,
+    month_spend_usd_micro,
+    monthly_limit_reached,
+)
 from origin.services.demo_ai_limits import (
     DEMO_AI_MAX_EFFORT,
     DEMO_AI_PROVIDER,
@@ -753,8 +758,9 @@ def _credits_authoritative() -> bool:
     return credit_ledger.credits_authoritative()
 
 
-def _credit_gate(user_id: str, plan: str) -> Response | None:
-    """Refuse an ask only when the balance is actually spent.
+def _credit_gate(user_id: str, plan: str, team_id: str = "") -> Response | None:
+    """Refuse an ask only when the balance is actually spent, or while a monthly spend limit is
+    reached (`spend_limits`, MIP-2363: asked first, and with credits on or off).
 
     ANY positive balance may start a request. The earlier rule — refuse
     unless the balance covers the whole quoted maximum — made the last
@@ -779,6 +785,8 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
     `open_request` either way — flipping this flag changes what we DO
     about that verdict, never how it is measured.
     """
+    if monthly_limit_reached(team_id):
+        return Response(_MONTHLY_LIMIT_RESPONSE, status=status.HTTP_429_TOO_MANY_REQUESTS)
     if not _credits_authoritative():
         return None
     try:
@@ -951,7 +959,7 @@ def _period_end_iso() -> str:
     return nxt.isoformat()
 
 
-def _billable_surface_gate(user_id: str, chosen: LlmChoice) -> Response | None:
+def _billable_surface_gate(user_id: str, chosen: LlmChoice, team_id: str = "") -> Response | None:
     """The customer's limit for a NON-STREAMING billable surface.
 
     Both summary endpoints charge for a regeneration, so whatever is
@@ -963,7 +971,7 @@ def _billable_surface_gate(user_id: str, chosen: LlmChoice) -> Response | None:
     around the same decision and needs the pieces separately.
     """
     plan = get_effective_tier(str(user_id))
-    credit_block = _credit_gate(user_id, plan)
+    credit_block = _credit_gate(user_id, plan, team_id)
     if credit_block is not None:
         return credit_block
     if _credits_authoritative():
@@ -994,33 +1002,13 @@ def _billable_surface_gate(user_id: str, chosen: LlmChoice) -> Response | None:
     return None
 
 
-def _month_spend_usd_micro(*, user_id: str = "", team_id: str = "") -> int:
-    """This UTC month's ledger spend for one user OR one team, in
-    micro-USD. Cached for 5 minutes — the ceiling drifts by at most a
-    few asks, which is fine for a monthly number. Raises on cache/DB
-    trouble; callers fail open.
-
-    USD because the ceiling it feeds is a COST ceiling and cost arrives
-    in dollars. A ceiling denominated in yen would have tightened or
-    loosened itself every time the exchange rate moved, which is not a
-    thing a circuit breaker should do.
-    """
-    from django.core.cache import cache  # noqa: PLC0415
-    from django.db.models import Sum  # noqa: PLC0415
-
-    from origin.search_engine.models import AiSpendEvent  # noqa: PLC0415
-
-    key_id = f"u:{user_id}" if user_id else f"t:{team_id}"
-    cache_key = f"ai_spend_month_usd:{key_id}:{timezone.now():%Y%m}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return int(cached)
-    since = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    qs = AiSpendEvent.objects.filter(created_at__gte=since)
-    qs = qs.filter(user_id=str(user_id)) if user_id else qs.filter(team_id=str(team_id))
-    spent = int(qs.aggregate(s=Sum("cost_usd_micro"))["s"] or 0)
-    cache.set(cache_key, spent, 300)
-    return spent
+# 429 payload while a monthly spend limit is reached (`spend_limits`, MIP-2363): the zero-credit
+# refusal's way out, with its own words and no credit figures.
+_MONTHLY_LIMIT_RESPONSE = {
+    "error": MONTHLY_LIMIT_MESSAGE,
+    "limit_reached": True,
+    "category": "ai_monthly_limit",
+}
 
 
 # 429 payload for a ceiling-driven pause. The copy deliberately says
@@ -1046,6 +1034,8 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
     to alert-only:
 
       1. ALWAYS: over the ceiling logs a WARNING. Observation is free.
+         (The product budget and the TEAM ceiling also stop AI, softly: `spend_limits`, asked
+         by `_credit_gate` before an ask gets here. The grades below are the per-USER ones.)
       2. `AI_CEILING_ROUTE_CHEAPEST`: a non-light model steps down to
          the cheapest same-provider rung with quota headroom, reusing
          the quota-fallback plumbing and its `model_fallback` note —
@@ -1070,16 +1060,15 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
         if policy is None or not user_id:
             return None, None, chosen
 
-        # Per-workspace ceiling: alert-only in v1 (a team is a report
-        # dimension, and blocking N users over one member's spend needs
-        # a human decision). Opt-in via a single global env value.
+        # Per-workspace ceiling, opt-in via a single global env value. This is the alert; the
+        # soft stop for the same value is `spend_limits.monthly_limit_reached` (MIP-2363).
         team_ceiling_usd = float(settings.SEARCH_ENGINE.get("AI_TEAM_MONTHLY_CEILING_USD", 0) or 0)
         if team_ceiling_usd > 0 and team_id:
-            team_spent = _month_spend_usd_micro(team_id=str(team_id))
+            team_spent = month_spend_usd_micro(team_id=str(team_id))
             if team_spent >= team_ceiling_usd * 1_000_000:
                 log.warning(
                     "Team %s is over the monthly AI cost ceiling: $%.2f of $%.2f. "
-                    "Alert only — see `ai_cost_report` for the member breakdown.",
+                    "See `ai_cost_report` for the member breakdown.",
                     team_id,
                     team_spent / 1_000_000,
                     team_ceiling_usd,
@@ -1089,7 +1078,7 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
         if ceiling_usd is None:  # unlimited (enterprise)
             return None, None, chosen
 
-        spent_usd_micro = _month_spend_usd_micro(user_id=str(user_id))
+        spent_usd_micro = month_spend_usd_micro(user_id=str(user_id))
         if spent_usd_micro < ceiling_usd * 1_000_000:
             return None, None, chosen
 
@@ -1425,7 +1414,7 @@ class AgentAskView(AuthenticatedAPIView):
         # ask count is not consulted at all (except the OPT-IN Free abuse
         # breaker below, off by default). Flag off -> the legacy daily
         # gate, unchanged.
-        credit_block = _credit_gate(user_id, plan)
+        credit_block = _credit_gate(user_id, plan, team_id)
         if credit_block is not None:
             return credit_block
 
@@ -3503,7 +3492,7 @@ class NoteSummaryView(AuthenticatedAPIView):
         # ask path: credits when authoritative, the legacy daily counts
         # otherwise. This surface is billable, so it must be gated by
         # whatever is actually charging for it.
-        limit_block = _billable_surface_gate(user_id, chosen)
+        limit_block = _billable_surface_gate(user_id, chosen, team_id)
         if limit_block is not None:
             return limit_block
 
@@ -3689,7 +3678,7 @@ class ThreadSummaryView(AuthenticatedAPIView):
         # ask path: credits when authoritative, the legacy daily counts
         # otherwise. This surface is billable, so it must be gated by
         # whatever is actually charging for it.
-        limit_block = _billable_surface_gate(user_id, chosen)
+        limit_block = _billable_surface_gate(user_id, chosen, team_id)
         if limit_block is not None:
             return limit_block
 

@@ -23,6 +23,7 @@ from origin.search_engine import credit_ledger, quota
 from origin.search_engine.models import AiCreditEntry
 from origin.services import schedules
 from origin.tests import test_report_ai_sentences as ai_tests
+from origin.tests.spend_limit_support import over_the_monthly_budget, over_the_team_ceiling
 from origin.tests.test_schedules import ScheduleBase
 from origin.tests.test_webhooks import WEBHOOKS, WebhookApiBase
 
@@ -327,6 +328,35 @@ class ScheduleCreditTests(ai_tests.AiBase):
         self.assertEqual(report["ai_skipped"], "no_credits")
         self.assertIn("no AI credits left", report["summary"])
         self.assertEqual(self.charges().count(), 0)
+
+    def test_a_reached_monthly_limit_runs_without_ai_and_says_so(self):
+        with with_credits(CREDITS_SHADOW), over_the_monthly_budget():
+            report = self.run_ai()
+        self.assertEqual(self.model.calls, [])
+        self.assertEqual(report["ai_skipped"], "monthly_limit")
+        self.assertIn("monthly limit", report["summary"])
+        self.assertNotIn("no AI credits left", report["summary"])
+        self.assertEqual(self.charges().count(), 0)
+
+    def test_the_team_ceiling_reaches_the_sentences(self):
+        with with_credits(CREDITS_SHADOW), over_the_team_ceiling(self.team.pk):
+            report = self.run_ai()
+        self.assertEqual(self.model.calls, [])
+        self.assertEqual(report["ai_skipped"], "monthly_limit")
+
+    def test_the_inbox_card_carries_a_monthly_limit(self):
+        from origin.services import inbox_ai  # noqa: PLC0415
+
+        item = mock.Mock(
+            item_id=1,
+            item_type=inbox_ai.ITEM_TYPE_REPORT,
+            item_optionals={
+                "schedule_id": "00000000-0000-0000-0000-000000000001",
+                "ai_skipped": "monthly_limit",
+            },
+        )
+        source = inbox_ai.sources_for(self.user, [item])[1]
+        self.assertEqual(source.public()["ai_skipped"], "monthly_limit")
 
     def test_shadow_only_never_blocks(self):
         with (

@@ -382,7 +382,7 @@ class Command(BaseCommand):
             # not billable by construction), and the member's balance does not gate it, so it also
             # measures a member who has none left.
             mock.patch.object(llm, "SURFACE", OPS_SURFACE),
-            mock.patch.object(llm, "credit_block", lambda user_id: ""),
+            mock.patch.object(llm, "credit_block", lambda *a, **k: ""),
         ):
             out = sentences.sentences_for(
                 ctx,
