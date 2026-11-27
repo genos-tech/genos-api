@@ -246,6 +246,15 @@ class LabelAccess:
 
     # ---- projects ------------------------------------------------------
 
+    def project_readable(self, project: Any) -> bool:
+        """A member of the project, or its owner while on the team (MIP-1609), inside the
+        caller's team, and the project is not deleted."""
+        if not self.usable or project.is_deleted:
+            return False
+        if str(project.team_id or "") != self.team_id:
+            return False
+        return project.project_id in self._projects() or self._owns_project(project)
+
     def project_name(self, raw: Any) -> str | None:
         """`list_projects`' rule: a member, in this team, project not deleted."""
         pid = _as_int(raw)

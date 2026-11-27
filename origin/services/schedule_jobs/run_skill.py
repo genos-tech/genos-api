@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 import re
 import textwrap
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -285,11 +286,13 @@ def run_for_answer(
     *,
     answer_rules: str = UNATTENDED,
     effort_default: str = EFFORT_DEFAULT,
+    on_tool_result: Callable[[str, Any], None] | None = None,
 ) -> SkillAnswer:
     """Run the pinned skill read only, as its owner, and return what it said (MIP-2045). The one
     place a scheduled skill's model loop lives: "Run a skill" files the answer as a report, a
     dashboard made by a skill (MIP-2399) turns it into data. `answer_rules` is what the model is
-    told about the run and the shape of its answer, after the skill's own text."""
+    told about the run and the shape of its answer, after the skill's own text. `on_tool_result` is
+    called with the name and result of every tool the run used (a dashboard's links, MIP-2417)."""
     from origin.models.common.user_models import CustomUser  # noqa: PLC0415
     from origin.models.skills.skill_models import TOOL_LEVEL_READ  # noqa: PLC0415
     from origin.search_engine.agent import controller  # noqa: PLC0415 - search_engine is heavy
@@ -375,6 +378,11 @@ def run_for_answer(
                         events.append,
                         disabled_tools=_disabled_tools(ctx.user_id, resolved),
                         system_extra=f"{skill_run.build_block(resolved)}\n\n{answer_rules}",
+                        trace_hook=(
+                            None
+                            if on_tool_result is None
+                            else lambda name, _args, out: on_tool_result(name, out)
+                        ),
                     )
             except Exception as exc:  # noqa: BLE001 - one skill's failure is that schedule's
                 log.warning("run_skill_failed user=%s error=%s", ctx.user_id, type(exc).__name__)

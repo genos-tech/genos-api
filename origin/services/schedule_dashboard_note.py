@@ -111,7 +111,8 @@ def deliver_note(
 
                 args.update(placement(sched.params or {}))
             try:
-                saved = html_notes.save_page(args, ctx)
+                # The page is ours, so a click on one of its links may reach the viewer.
+                saved = html_notes.save_page(args, ctx, server_rendered=True)
             except (ToolError, ToolForbidden) as exc:
                 # The service's sentences say which limit (plan, count, rate, size) and name no content.
                 raise ScheduleRunError(str(exc)[:200]) from None
