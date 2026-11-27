@@ -556,7 +556,9 @@ class MessagesDeltaView(AuthenticatedAPIView):
     Incremental sync of top-level messages (NOT thread replies — those
     have their own endpoint). The contract:
 
-    - First load (no `since`): all non-deleted top-level messages.
+    - First load (no `since`): the newest `MAX_MESSAGES_PER_DELTA` (500)
+      non-deleted top-level messages, not the whole channel. There is no
+      cursor for older ones.
     - Incremental (`since=<ts>`): rows updated since `since`, INCLUDING
       soft-deleted rows (so the client can apply tombstones). Plus any
       messages whose reactions changed (so the reaction chip refreshes
@@ -565,9 +567,10 @@ class MessagesDeltaView(AuthenticatedAPIView):
       load AND set `force_full_reload=true` so the client clears its
       IDB store before applying.
     - Row-count cap (`MAX_MESSAGES_PER_DELTA`): if the row count of any
-      of the above branches exceeds the cap, slice to the most recent N
-      and set `force_full_reload=true`. Bounds wire / parse cost for
-      very active channels even when the client's checkpoint is fresh.
+      of the above branches (the first load included) exceeds the cap,
+      slice to the most recent N and set `force_full_reload=true`. Bounds
+      wire / parse cost for long channels, and for very active ones even
+      when the client's checkpoint is fresh.
     """
 
     def get(self, request, channel_id):
