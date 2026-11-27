@@ -39,6 +39,12 @@ from origin.search_engine.agent.tools.list_calendar_events import (
     FOLLOWUPS_ACCOUNT_DESCRIPTION as _ALL_ACCOUNTS_DESCRIPTION,
 )
 from origin.search_engine.agent.tools.list_calendars import PARITY_PROPERTIES as _CALENDARS_ACCOUNT
+from origin.search_engine.agent.tools.list_uncompleted_todos import (
+    DAYS_AHEAD_FLAG as _DAYS_AHEAD_FLAG,
+)
+from origin.search_engine.agent.tools.list_uncompleted_todos import (
+    DAYS_AHEAD_PROPERTIES as _DAYS_AHEAD_PROPERTIES,
+)
 from origin.search_engine.agent.tools.milestone_convert import (
     PARITY_DESCRIPTIONS as _MILESTONE_DESCRIPTIONS,
 )
@@ -136,6 +142,8 @@ ADDITIONS: tuple[ParamAddition, ...] = (
     ),
     # MIP-1656 (AGENT_INAPP_NOTE_BLOCK_TOOL): `fetch_note` lists a note's blocks, for `edit_note_block`.
     ParamAddition("fetch_note", _BLOCKS_FLAG, properties=_BLOCKS_PROPERTIES),
+    # MIP-2456 (AGENT_TODO_DAYS_AHEAD): to-dos dated after today.
+    ParamAddition("list_uncompleted_todos", _DAYS_AHEAD_FLAG, properties=_DAYS_AHEAD_PROPERTIES),
 )
 
 
