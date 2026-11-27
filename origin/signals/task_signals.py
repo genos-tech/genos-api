@@ -89,7 +89,9 @@ _TRACKED_TASK_FIELDS = (
 # What a task's chat card shows (`task_card.task_card_body`). A change to any of these, made
 # with no browser to rewrite the card, leaves the chat stale (MIP-1460). A milestone's backing
 # task also carries its sprint, which its card names.
-_CARD_FIELDS = frozenset({"title", "status", "priority", "effort_level", "assignee_id", "due_date"})
+_CARD_FIELDS = frozenset(
+    {"title", "status", "priority", "effort_level", "assignee_id", "reporter_id", "due_date"}
+)
 
 
 _FIELD_TO_ACTION = {
@@ -573,6 +575,13 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
                 _record(
                     task=task, **{**change, "metadata": {**change["metadata"], "cascade": cascade}}
                 )
+    # A queryset update fires no signal, so a cascade that wrote a field the chat card shows
+    # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483).
+    if _CARD_FIELDS.intersection(tracked):
+        for pk in ids:
+            row = before.get(pk)
+            if row is not None and not row["is_init_task"]:
+                _schedule_card_refresh(task_id=pk)
     return count
 
 
@@ -755,18 +764,15 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
     _schedule_task_webhook(instance, created=False, status_changed_to=new_status)
 
     if card_changed:
-        _schedule_card_refresh(
-            task_id=instance.task_id,
-            derived=bool(getattr(instance, "_derived_blocked_sync", False)),
-        )
+        _schedule_card_refresh(task_id=instance.task_id)
 
 
-def _schedule_card_refresh(*, task_id=None, milestone_id=None, derived: bool = False) -> None:
+def _schedule_card_refresh(*, task_id=None, milestone_id=None) -> None:
     """Bring the chat card up to date once the write commits (MIP-1460); see
-    `task_card_post.schedule_refresh`, which owns the rule for which writes qualify."""
+    `task_card_post.schedule_refresh`."""
     from origin.services.task_card_post import schedule_refresh  # noqa: PLC0415
 
-    schedule_refresh(task_id=task_id, milestone_id=milestone_id, derived=derived)
+    schedule_refresh(task_id=task_id, milestone_id=milestone_id)
 
 
 def _schedule_task_webhook(instance, *, created: bool, status_changed_to=None) -> None:

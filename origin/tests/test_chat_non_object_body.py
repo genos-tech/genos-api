@@ -466,7 +466,10 @@ class TaskCardBodyShapeTests(_MissingFieldAnswers, _ChatClient):
         )
         self.assertEqual(resp.status_code, 200)
         self.card.refresh_from_db()
-        self.assertEqual((self.card.body, self.card.metadata), (new, {"k": 1}))
+        # The card is rebuilt from the row (MIP-2483); what was sent is not stored.
+        self.assertNotEqual(self.card.body, new)
+        self.assertEqual(self.card.metadata["taskId"], self.task.task_id)
+        self.assertNotIn("k", self.card.metadata)
 
 
 # --------------------------------------------------------------------------- #
