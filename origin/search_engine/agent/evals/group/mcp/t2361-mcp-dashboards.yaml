@@ -120,6 +120,28 @@
         params.kind: "^mine$"
         params.period: "^year$"
 
+- id: t2361.create-skill.en
+  lang: en
+  tags: [eval-mcp-dashboards, t2361, kind-create]
+  plant: v1-skill
+  note: >-
+      Positive (MIP-2427): a page made by the member's skill is `source` `skill` with the `skill_id` that
+      `list_my_skills` returns (not the name, not invented), and no built-in `kind`. The skill carries no
+      `dashboard` tag: the model must still use it.
+  query: "Every Friday at 17:00, make a dashboard page with my skill 'Weekly numbers'."
+  expect:
+    proposed_write:
+      tool: create_my_schedule
+      args_match:
+        job: "^ai_dashboard$"
+        frequency: "^weekly$"
+        params.source: "^skill$"
+        params.skill_id: "^[0-9a-f-]{8,}$"
+      args_absent: [params.kind, params.project_id, params.milestone_id, params.period]
+  plants:
+    - skill_title: "Weekly numbers"
+      published: true
+
 - id: t2361.chat-notice.en
   lang: en
   tags: [eval-mcp-dashboards, t2361, kind-chat]

@@ -29,6 +29,14 @@ minted the URL; the served document carries it only inside the sentinel script (
 page's own script can read its URL, so without single use it could hand that URL to a server of its
 own, read the nonce out of the sentinel there and have a look-alike page confirm itself. With single
 use the URL is already spent when any script runs, so the nonce is learned by the viewer alone.
+
+LINKS (MIP-2417). Only for a revision the SERVER drew (`NoteHtmlRevision.server_rendered`, a
+dashboard): the sentinel also catches a click on an in-app link (`href` starting `/workspace/`),
+cancels the navigation and posts the path to the viewer with the same nonce; the viewer checks it
+again and opens it in the app. Nothing is added to the sandbox (no popups, no top navigation), and
+such a page's policy is stricter than the others': only a script carrying this load's CSP nonce
+runs, so even a flaw in the page's own escaping could not add one. Every other page is served
+exactly as before, and the viewer takes no link from it.
 """
 
 from __future__ import annotations
@@ -52,9 +60,12 @@ TOKEN_SECONDS = 600
 
 _TOKEN_SALT = "origin.html_note_page.token"
 _NONCE_SALT = "origin.html_note_page.nonce"
+_SCRIPT_SALT = "origin.html_note_page.script"
 
 #: The key the page's first script posts to the viewer (the same one the viewer waits for).
 LOADED_KEY = "genosHtmlNoteLoaded"
+#: The key a server-drawn page's click posts with: the in-app path the member chose.
+OPEN_KEY = "genosHtmlNoteOpen"
 
 #: Where the route lives, relative to the API host. The app's own `frame-src` names this prefix.
 PAGE_PATH_PREFIX = "/h/"
@@ -102,6 +113,11 @@ def nonce_for(token: str) -> str:
     return salted_hmac(_NONCE_SALT, token).hexdigest()[:32]
 
 
+def script_nonce_for(token: str) -> str:
+    """The CSP nonce of the one script of a server-drawn page. Not the sentinel's secret."""
+    return salted_hmac(_SCRIPT_SALT, token).hexdigest()[:32]
+
+
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?")
 
 
@@ -128,16 +144,18 @@ def _frame_origins() -> list[str]:
     return out
 
 
-def content_security_policy() -> str:
-    """The header policy. Keep it equal to `pageCsp` in genos-frontend's
+def content_security_policy(script_nonce: str = "") -> str:
+    """The header policy. With `script_nonce` (a server-drawn page) only the script that carries
+    it runs; without, the page's own inline scripts run. Keep it equal to `pageCsp` in genos-frontend's
     `src/__tests__/htmlNoteProductionCspMIP2228.test.ts` apart from `frame-ancestors`: that test runs
     a page under it inside the production app's own CSP, in Chrome."""
     ancestors = " ".join(_frame_origins()) or "'none'"
+    scripts = f"'nonce-{script_nonce}'" if script_nonce else "'unsafe-inline'"
     return "; ".join(
         [
             "sandbox allow-scripts",
             "default-src 'none'",
-            "script-src 'unsafe-inline'",
+            f"script-src {scripts}",
             "style-src 'unsafe-inline'",
             "img-src data: blob:",
             "font-src data:",
@@ -179,7 +197,25 @@ def strip_leading_doctype(text: str) -> str:
     return text if close == -1 else text[close + 1 :]
 
 
-def _sentinel(nonce: str) -> str:
+def _js(value: str) -> str:
+    """A JSON string with `<` escaped: whatever the value, it cannot close the script element."""
+    return json.dumps(value).replace("<", "\\u003c")
+
+
+# The link half of the sentinel (server-drawn pages only). It shares the first half's `p` (the
+# parent, taken before any markup) and `n` (the nonce). Only a browser-made click counts.
+_LINKS = (
+    'document.addEventListener("click",function(e){'
+    "if(!e.isTrusted)return;var t=e.target;"
+    "var a=t&&t.closest?t.closest('a'):null;if(!a)return;"
+    'var h=a.getAttribute("href")||"";'
+    'if(h.indexOf("/workspace/")!==0)return;'
+    "e.preventDefault();"
+    "try{p.postMessage({" + OPEN_KEY + ':h,nonce:n},"*")}catch(x){}},true);'
+)
+
+
+def _sentinel(nonce: str, script_nonce: str = "") -> str:
     """The one script of ours in the page, right before any author markup.
 
     It catches a page that navigates ITSELF while it is still being parsed: such a page replaces its own
@@ -197,23 +233,26 @@ def _sentinel(nonce: str) -> str:
     markup. And a script can dispatch a `load` event itself while the page is still parsing, so only
     a browser-made (`isTrusted`) one counts.
     """
+    opening = f'<script nonce="{script_nonce}">' if script_nonce else "<script>"
     return (
-        "<script>(function(n){var s=document.currentScript;"
+        opening + "(function(n){var s=document.currentScript;"
         "if(s&&s.parentNode)s.parentNode.removeChild(s);var p=parent;"
         'addEventListener("load",function(e){if(!e.isTrusted)return;try{p.postMessage({'
         + LOADED_KEY
         + ":n},"
         + json.dumps("*")
-        + ")}catch(x){}})})("
-        # a JSON string with `<` escaped: whatever the value, it cannot close the script element
-        + json.dumps(nonce).replace("<", "\\u003c")
+        + ")}catch(x){}});"
+        + (_LINKS if script_nonce else "")
+        + "})("
+        + _js(nonce)
         + ")</script>"
     )
 
 
-def document(html: str, nonce: str) -> str:
+def document(html: str, nonce: str, script_nonce: str = "") -> str:
     """The page as served: our doctype and sentinel first, then the author's page without its own
     doctype (ours keeps it in standards mode). The header policy is in force before byte one, so
     unlike the old `<meta>` policy no author markup can run ahead of it."""
     without_bom = html[1:] if html[:1] == "﻿" else html
-    return "<!doctype html>" + _sentinel(nonce) + strip_leading_doctype(without_bom)
+    sentinel = _sentinel(nonce, script_nonce)
+    return "<!doctype html>" + sentinel + strip_leading_doctype(without_bom)

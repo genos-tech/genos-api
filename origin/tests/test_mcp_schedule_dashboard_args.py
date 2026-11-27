@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from unittest import mock
 
+from django.test import override_settings
+
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.models.common.schedule_models import MemberSchedule
@@ -22,6 +24,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY
 from origin.services.collab_push import PushOutcome
+from origin.services.skills import service as skill_service
 from origin.tests.test_mcp_schedule_tools import ScheduleToolBase
 
 TIER_PATH = "origin.search_engine.quota.get_effective_tier"
@@ -152,6 +155,71 @@ class TestCreate(DashboardArgsBase):
             properties = tool.parameters_schema["properties"]
             for arg in ("deliver_chat_id", "save_to", "folder_id"):
                 self.assertIn(arg, properties)
+
+
+@override_settings(GENOS_SKILLS=True)
+class TestCreateFromASkill(DashboardArgsBase):
+    """A page made by a skill, as an AI app makes it (MIP-2427)."""
+
+    def skill(self):
+        return skill_service.create(
+            self.user,
+            self.team.team_id,
+            skill_service.Fields(
+                title="Weekly numbers",
+                slug="weekly-numbers",
+                description="Count the week.",
+                tags=["reports"],  # no `dashboard` tag: suggested, never required
+                body_markdown="Count what was closed this week.",
+                visibility="team",
+            ),
+        )
+
+    def skill_dash(self, **params):
+        skill = self.skill()
+        return skill, self.dash(params={"source": "skill", "skill_id": str(skill.id), **params})
+
+    def test_an_untagged_skill_makes_a_dashboard_and_its_version_is_pinned(self):
+        skill, args = self.skill_dash(input="this team")
+        row = self.ok("create_my_schedule", **args)["schedule"]
+        self.assertEqual(row["job"], "ai_dashboard")
+        self.assertEqual(row["params"]["source"], "skill")
+        self.assertEqual(row["params"]["skill_id"], str(skill.id))
+        self.assertEqual(row["params"]["version_no"], skill.published_version_no)
+        self.assertEqual(row["params"]["input"], "this team")
+        self.assertNotIn("kind", row["params"])
+
+    def test_a_built_in_kind_may_not_come_with_the_skill(self):
+        _skill, args = self.skill_dash(kind="mine")
+        self.assertIn("kind", self.refused("create_my_schedule", **args))
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+
+    def test_a_place_other_people_read_is_refused(self):
+        _skill, args = self.skill_dash()
+        folder = self.folder(PersonalNoteFolder.VISIBILITY_PUBLIC)
+        text = self.refused(
+            "create_my_schedule", **args, save_to="team_folder", folder_id=folder.folder_id
+        )
+        self.assertIn("only you may read it", text)
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+
+    def test_the_jobs_entry_explains_the_skill_source(self):
+        jobs = {j["job"]: j for j in self.ok("list_my_schedules")["jobs"]}
+        note = jobs["ai_dashboard"]["agent_note"]
+        for words in (
+            "`source` `skill`",
+            "`skill_id`",
+            "`list_my_skills`",
+            "no `kind`",
+            "`dashboard`",
+            "untagged one is accepted",
+            "Only the member may read",
+            "AI credits",
+        ):
+            self.assertIn(words, note)
+        # What the note tells the app to give is what the job takes.
+        for name in ("source", "skill_id", "input"):
+            self.assertIn(name, jobs["ai_dashboard"]["params"])
 
 
 class TestUpdate(DashboardArgsBase):

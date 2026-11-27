@@ -6,6 +6,10 @@ through `html.escape`; the page has no script, no network, no external font, and
 stylesheet that follows the reader's light or dark setting. The charts are inline SVG with an
 `aria-label` that says what they show, so the page is readable without seeing the picture.
 
+Things on the page are links into the app (MIP-2417) where `services/dashboard_links` gave them
+an `href`; the renderer writes only one of the app's own paths (`is_app_path`), whatever the data
+holds. A link works through the note viewer: the page has no script of its own.
+
 `render(dashboard)` returns `(html, title, summary)`. The summary is the plain sentence the note
 viewer and search show; it never contains markup.
 """
@@ -14,6 +18,8 @@ from __future__ import annotations
 
 from html import escape
 from typing import Any, NotRequired, TypedDict
+
+from origin.services.dashboard_links import is_app_path
 
 MAX_ROWS = 15
 MAX_SERIES = 53  # a year of weekly buckets, plus one
@@ -28,9 +34,19 @@ _STATUS_COLORS = {
 }
 
 
-class DashStat(TypedDict):
+class DashLinked(TypedDict, total=False):
+    # What this part of the page is about, and the app path `dashboard_links.link_page` gave it.
+    ref: dict[str, Any]
+    href: str
+
+
+class DashStat(DashLinked):
     label: str
     value: str
+
+
+class DashRow(DashLinked):
+    text: str
 
 
 class DashCount(TypedDict):
@@ -46,7 +62,8 @@ class DashPoint(TypedDict):
 
 class DashList(TypedDict):
     heading: str
-    rows: list[str]
+    # A plain string is a row with no link.
+    rows: list[str | DashRow]
 
 
 class Dashboard(TypedDict):
@@ -56,6 +73,8 @@ class Dashboard(TypedDict):
     # One line under the title, e.g. "Last 30 days, as of 2026-11-25".
     subtitle: str
     stats: list[DashStat]
+    # What the whole page is about (its milestone or project): the title is then a link.
+    subject: NotRequired[DashLinked]
     breakdown: NotRequired[list[DashCount]]
     series: NotRequired[list[DashPoint]]
     lists: NotRequired[list[DashList]]
@@ -84,6 +103,11 @@ svg{width:100%;height:auto;display:block}
 svg text{fill:var(--fg);font:12px system-ui,sans-serif}
 ul.rows{margin:0;padding-left:20px}
 ul.rows li{margin:3px 0;overflow-wrap:anywhere}
+a{color:var(--bar);text-decoration:underline;text-underline-offset:2px}
+a:hover{text-decoration-thickness:2px}
+h1 a{color:inherit}
+.stats a{display:block;color:inherit;text-decoration:none}
+.stats a span{text-decoration:underline;text-underline-offset:2px}
 .note{color:var(--muted);font-size:.85rem;margin-top:24px}
 """
 
@@ -94,6 +118,21 @@ def _t(value: Any, limit: int = MAX_LABEL) -> str:
     if len(text) > limit:
         text = text[: limit - 1].rstrip() + "…"
     return escape(text, quote=True)
+
+
+def row_text(row: Any) -> str:
+    """A list row's words, whether it is a plain string or a row with a reference."""
+    if isinstance(row, dict):
+        return str(row.get("text") or "")
+    return str(row)
+
+
+def _link(inner: str, part: Any) -> str:
+    """`inner` (already escaped) as a link when `part` has one of the app's paths."""
+    href = part.get("href") if isinstance(part, dict) else None
+    if not is_app_path(href):
+        return inner
+    return f'<a href="{escape(href, quote=True)}">{inner}</a>'
 
 
 def _bars(breakdown: list[DashCount]) -> str:
@@ -163,7 +202,7 @@ def render(dash: Dashboard) -> tuple[str, str, str]:
         '<!doctype html><html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width,initial-scale=1">',
         f"<title>{_t(title, 200)}</title><style>{_CSS}</style></head><body><main>",
-        f"<h1>{_t(title, 200)}</h1>",
+        f"<h1>{_link(_t(title, 200), dash.get('subject'))}</h1>",
         f'<p class="sub">{_t(dash["subtitle"], 200)}</p>',
     ]
     if dash.get("narrative"):
@@ -177,7 +216,9 @@ def render(dash: Dashboard) -> tuple[str, str, str]:
         parts.append(
             '<ul class="stats">'
             + "".join(
-                f"<li><b>{_t(s['value'], 20)}</b><span>{_t(s['label'], 40)}</span></li>"
+                "<li>"
+                + _link(f"<b>{_t(s['value'], 20)}</b><span>{_t(s['label'], 40)}</span>", s)
+                + "</li>"
                 for s in dash["stats"]
             )
             + "</ul>"
@@ -187,11 +228,11 @@ def render(dash: Dashboard) -> tuple[str, str, str]:
     if chart := _columns(dash.get("series") or []):
         parts.append(f"<h2>Closed and created</h2>{chart}")
     for block in dash.get("lists") or []:
-        rows = [r for r in block["rows"] if str(r).strip()][:MAX_ROWS]
+        rows = [r for r in block["rows"] if row_text(r).strip()][:MAX_ROWS]
         if rows:
             parts.append(
                 f'<h2>{_t(block["heading"], 80)}</h2><ul class="rows">'
-                + "".join(f"<li>{_t(r, 240)}</li>" for r in rows)
+                + "".join(f"<li>{_link(_t(row_text(r), 240), r)}</li>" for r in rows)
                 + "</ul>"
             )
     if dash.get("note"):
