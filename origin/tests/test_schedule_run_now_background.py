@@ -52,10 +52,7 @@ class BackgroundBase(ScheduleBase):
         patcher = mock.patch.object(schedule_runner, "_spawn_process", spawn)
         patcher.start()
         self.addCleanup(patcher.stop)
-        running = mock.patch.object(schedule_runner, "_RUNNING", set())
-        running.start()
-        self.addCleanup(running.stop)
-        # The reaper thread frees the child's place; here the test says when.
+        # No reaper thread: there is no real child to wait for.
         reaper = mock.patch.object(schedule_runner.threading, "Thread")
         reaper.start()
         self.addCleanup(reaper.stop)
@@ -112,16 +109,44 @@ class SlowRunsLeaveTheRequestTests(BackgroundBase):
     def test_a_child_whose_claim_is_gone_runs_nothing(self):
         sched = self.once()
         schedules.run_now(self.ctx, sched.pk, now=NOW)
-        schedules.set_enabled(self.ctx, sched.pk, False)  # the member paused it meanwhile
+        MemberSchedule.objects.filter(pk=sched.pk).update(claimed_at=None, heartbeat_at=None)
         self.run_child()
         self.assertEqual(self.calls, [])
         sched.refresh_from_db()
         self.assertEqual(sched.last_status, "")
 
-    def test_an_edit_during_a_run_releases_the_claim_and_its_heartbeat(self):
+    def test_an_edit_or_pause_during_a_run_does_not_let_a_second_one_start(self):
         sched = self.once()
         schedules.run_now(self.ctx, sched.pk, now=NOW)
-        schedules.update(self.ctx, sched.pk, name="Renamed")
+        later = NOW + seconds(20)
+        schedules.update(self.ctx, sched.pk, name="Renamed", now=later)
+        schedules.set_enabled(self.ctx, sched.pk, False, now=later)
+        with self.assertRaises(schedules.ScheduleError):
+            schedules.run_now(self.ctx, sched.pk, now=later)
+        self.assertEqual(len(self.spawned), 1)
+        self.run_child()
+        sched.refresh_from_db()
+        self.assertEqual((sched.name, sched.enabled), ("Renamed", False))
+        self.assertEqual((sched.last_status, sched.claimed_at), ("ok", None))
+
+    def test_a_time_set_during_a_one_time_run_is_kept(self):
+        sched = self.once()
+
+        def job(ctx, params):
+            schedules.update(self.ctx, sched.pk, time_of_day="23:00", now=NOW)
+            return self._ok(ctx, params)
+
+        JOBS["slow"] = Job("slow", "Slow", "x", job, unwrapped=True)
+        schedules.run_now(self.ctx, sched.pk, now=NOW)
+        self.run_child()
+        sched.refresh_from_db()
+        self.assertEqual(sched.next_run_at, utc(2026, 11, 9, 14))  # 23:00 JST
+        self.assertEqual((sched.last_status, sched.claimed_at), ("ok", None))
+
+    def test_an_edit_after_the_run_died_frees_the_claim(self):
+        sched = self.once()
+        schedules.run_now(self.ctx, sched.pk, now=NOW)
+        schedules.update(self.ctx, sched.pk, name="Renamed", now=NOW + seconds(61))
         sched.refresh_from_db()
         self.assertEqual((sched.claimed_at, sched.heartbeat_at), (None, None))
 
@@ -235,6 +260,13 @@ class StartingTheChildTests(BackgroundBase):
         second.refresh_from_db()
         self.assertIsNone(second.claimed_at)
 
+    @override_settings(SCHEDULE_RUN_NOW_MAX_PROCS=1)
+    def test_a_dead_run_does_not_fill_the_cap(self):
+        first, second = self.once(), self.once(name="Two")
+        schedules.run_now(self.ctx, first.pk, now=NOW)
+        later = NOW + seconds(61)
+        self.assertEqual(schedules.run_now(self.ctx, second.pk, now=later)["status"], "started")
+
     def test_a_child_that_cannot_start_leaves_nothing_claimed(self):
         sched = self.once()
         with mock.patch.object(schedule_runner, "_spawn_process", side_effect=OSError("no")):
@@ -295,6 +327,16 @@ class RunRightAwayInTheBackgroundTests(BackgroundBase):
         second, _ = self.go(now=NOW + seconds(200))
         self.assertEqual(list(MemberSchedule.objects.values_list("pk", flat=True)), [second.pk])
         self.assertNotEqual(first.pk, second.pk)
+
+    def test_a_paused_schedule_or_another_report_of_that_name_is_not_replaced(self):
+        register_job(Job("other", "Other", "x", self._ok, unwrapped=True))
+        first, _ = self.go()
+        failed = {"claimed_at": None, "heartbeat_at": None, "last_status": "failed"}
+        for change, job in (({"enabled": False}, "slow"), ({"enabled": True}, "other")):
+            MemberSchedule.objects.filter(pk=first.pk).update(**failed, **change)
+            with self.assertRaises(schedules.ScheduleError):
+                self.go(now=NOW + seconds(200), job=job)
+            self.assertTrue(MemberSchedule.objects.filter(pk=first.pk).exists())
 
     def test_one_that_ever_made_a_report_is_not_replaced(self):
         first, _ = self.go()

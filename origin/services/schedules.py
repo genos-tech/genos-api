@@ -681,7 +681,7 @@ def create(
         # Two creates at once must not both slip under the cap: take the member's row.
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         if immediate:
-            _drop_failed_right_away(ctx, clean)
+            _drop_failed_right_away(ctx, clean, job, cleaned_params)
         cap = schedule_limit(user.pk)
         used = MemberSchedule.objects.filter(user_id=user.pk).count()
         if used >= cap:
@@ -713,20 +713,24 @@ def create(
         )
 
 
-def _drop_failed_right_away(ctx: ToolContext, name: str) -> None:
+def _drop_failed_right_away(ctx: ToolContext, name: str, job: str, params: dict[str, Any]) -> None:
     """Remove the rows "Run right away" left behind for a background run that failed and made
     nothing, under this name: otherwise trying again would be refused as a duplicate name
-    (MIP-2457). A row that ever produced a report or a page is kept."""
+    (MIP-2457). Only a try again of the SAME report (job and parameters) replaces one; a paused
+    schedule, and a row that ever produced a report or a page, are kept."""
     key = _name_key(name)
     for row in MemberSchedule.objects.filter(
         user_id=ctx.user_id,
         team_id=ctx.team_id,
         frequency=FREQ_ONCE,
+        job=job,
+        enabled=True,
         next_run_at__isnull=True,
         claimed_at__isnull=True,
         last_status=STATUS_FAILED,
     ):
-        if _name_key(row.name) == key and not row.last_result and not row.output:
+        same = all((row.params or {}).get(k) == v for k, v in params.items())
+        if same and _name_key(row.name) == key and not row.last_result and not row.output:
             row.delete()
 
 
@@ -793,6 +797,7 @@ def update(
         # would each make the same schedule must not both pass the duplicate check.
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         sched = _get(ctx, schedule_id, lock=True)
+        keep_claim = _held_by_hand_run(sched, now)  # asked before the edit moves the next run
         was_name = _name_key(sched.name)
         was_content = (
             sched.job,
@@ -870,10 +875,14 @@ def update(
             check_name=_name_key(sched.name) != was_name,
             check_content=content != was_content,
         )
-        # An edit takes over a run in progress: the tick's own write-back is conditional on
-        # its claim, so it will find the claim gone and leave the member's edit alone.
-        sched.claimed_at = None
-        sched.heartbeat_at = None
+        # An edit takes over a TICK's run in progress: the tick's own write-back is conditional
+        # on its claim, so it will find the claim gone and leave the member's edit alone. A live
+        # "Run now" keeps its claim (MIP-2457): freeing it would let a second, billed run start.
+        if keep_claim:
+            dirty = [name for name in dirty if name not in ("claimed_at", "heartbeat_at")]
+        else:
+            sched.claimed_at = None
+            sched.heartbeat_at = None
         sched.save(update_fields=sorted(set(dirty)))
         return sched
 
@@ -889,6 +898,7 @@ def set_enabled(
         _require_plan(user)  # pausing is always allowed; turning one on is a Core feature
     with transaction.atomic():
         sched = _get(ctx, schedule_id, lock=True)
+        keep_claim = _held_by_hand_run(sched, now)
         if enabled:
             zone = user_zone(user)
             sched.next_run_at = _first_run(_recurrence_of(sched), zone, now)
@@ -903,8 +913,9 @@ def set_enabled(
             sched.enabled = False
             sched.paused_reason = PAUSE_MANUAL
             sched.next_run_at = None
-        sched.claimed_at = None
-        sched.heartbeat_at = None
+        if not keep_claim:  # as in `update`: a live "Run now" keeps its claim
+            sched.claimed_at = None
+            sched.heartbeat_at = None
         sched.save()
         return sched
 
@@ -1086,6 +1097,25 @@ def running_since(sched: MemberSchedule, now: datetime | None = None) -> datetim
     return sched.claimed_at if alive else None
 
 
+def _held_by_hand_run(sched: MemberSchedule, now: datetime) -> bool:
+    """Whether a live "Run now" holds the row. A tick's claim is on a DUE row; any other is a
+    hand run's."""
+    if sched.next_run_at is not None and sched.next_run_at <= now:
+        return False
+    return running_since(sched, now) is not None
+
+
+def _other_background_runs(pk: Any, now: datetime) -> int:
+    """How many other hand runs are alive in a child process. Counted in the database, so a web
+    worker that was recycled still knows about the children its predecessor started."""
+    live = MemberSchedule.objects.filter(
+        Q(next_run_at__isnull=True) | Q(next_run_at__gt=now),
+        claimed_at__isnull=False,
+        heartbeat_at__gte=now - HEARTBEAT_STALE,
+    ).exclude(pk=pk)
+    return sum(1 for row in live if runs_in_background(row))
+
+
 def _busy_sentence(sched: MemberSchedule) -> str:
     """Why a claimed schedule cannot be run now, saying only what is known."""
     if sched.claimed_at is None:  # released between our try and this read
@@ -1161,9 +1191,12 @@ def _record_hand_run(sched: MemberSchedule, claim: datetime, status: str, error:
         "ts_updated_at": timezone.now(),
     }
     if sched.frequency == FREQ_ONCE:
+        # Written only while our claim stands. A time the member set during the run is kept:
+        # the next run is cleared only if it is still the one this run started with.
         if status == STATUS_OK:
-            fields["next_run_at"] = None
-        # Written only while our claim stands: one the member edited or deleted meanwhile wins.
+            MemberSchedule.objects.filter(
+                pk=sched.pk, claimed_at=claim, next_run_at=sched.next_run_at
+            ).update(next_run_at=None)
         MemberSchedule.objects.filter(pk=sched.pk, claimed_at=claim).update(
             claimed_at=None, heartbeat_at=None, **fields
         )
@@ -1230,6 +1263,11 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
         raise ScheduleError(_busy_sentence(_get(ctx, schedule_id)))
     out: dict[str, Any] = {"status": STATUS_STARTED, "error": "", "title": "", "items": 0}
     if runs_in_background(sched):
+        if _other_background_runs(sched.pk, now) >= getattr(
+            settings, "SCHEDULE_RUN_NOW_MAX_PROCS", 2
+        ):
+            _release(sched.pk, now)
+            raise ScheduleError(schedule_runner.BUSY_SENTENCE)
         try:
             schedule_runner.start(sched.pk, now)
         except schedule_runner.RunnerUnavailable as exc:

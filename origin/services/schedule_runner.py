@@ -25,8 +25,6 @@ from django.conf import settings
 
 log = logging.getLogger("origin.schedules")
 
-_LOCK = threading.Lock()
-_RUNNING: set[subprocess.Popen] = set()
 # The child stops itself at the time limit; the reaper kills one that did not, this much later.
 _KILL_GRACE_S = 60
 
@@ -57,34 +55,25 @@ def _spawn_process(schedule_id: str, claim: str) -> subprocess.Popen:
 
 
 def start(schedule_id: Any, claim: datetime) -> None:
-    """Start the child for one claimed schedule and return at once."""
+    """Start the child for one claimed schedule and return at once. How many may run at once is
+    the caller's to decide (`schedules.run_now` counts them in the database)."""
     sid = str(uuid.UUID(str(schedule_id)))
-    with _LOCK:
-        if len(_RUNNING) >= int(getattr(settings, "SCHEDULE_RUN_NOW_MAX_PROCS", 2)):
-            raise RunnerUnavailable(BUSY_SENTENCE)
-        try:
-            proc = _spawn_process(sid, claim.isoformat())
-        except Exception as exc:  # noqa: BLE001 - e.g. no memory for another process
-            log.warning(
-                "schedule_run_now_not_started schedule=%s error=%s", sid, type(exc).__name__
-            )
-            raise RunnerUnavailable(FAILED_TO_START_SENTENCE) from None
-        _RUNNING.add(proc)
+    try:
+        proc = _spawn_process(sid, claim.isoformat())
+    except Exception as exc:  # noqa: BLE001 - e.g. no memory for another process
+        log.warning("schedule_run_now_not_started schedule=%s error=%s", sid, type(exc).__name__)
+        raise RunnerUnavailable(FAILED_TO_START_SENTENCE) from None
     threading.Thread(target=_reap, args=(sid, proc), daemon=True, name="schedule-reaper").start()
 
 
 def _reap(schedule_id: str, proc: subprocess.Popen) -> None:
-    """Wait for the child so it leaves no zombie, and free its place."""
+    """Wait for the child so it leaves no zombie."""
     limit = int(getattr(settings, "SCHEDULE_RUN_NOW_TIMEOUT_S", 900)) + _KILL_GRACE_S
     try:
-        try:
-            code = proc.wait(timeout=limit)
-            if code:
-                log.warning("schedule_run_now_exit code=%s schedule=%s", code, schedule_id)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            log.warning("schedule_run_now_killed schedule=%s after=%ss", schedule_id, limit)
-    finally:
-        with _LOCK:
-            _RUNNING.discard(proc)
+        code = proc.wait(timeout=limit)
+        if code:
+            log.warning("schedule_run_now_exit code=%s schedule=%s", code, schedule_id)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        log.warning("schedule_run_now_killed schedule=%s after=%ss", schedule_id, limit)
