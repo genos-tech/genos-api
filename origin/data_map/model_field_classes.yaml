@@ -1123,6 +1123,12 @@ origin.TaskDependency:
   created_by: none
   ts_created_at: none
   ts_updated_at: none
+origin.TaskNumberAlias:
+  id: none
+  project: none
+  number: none
+  task: none
+  ts_created_at: none
 origin.TaskImportRow:
   id: none
   run: none
