@@ -27,7 +27,7 @@ from datetime import date
 from typing import Any
 
 from origin.services import dashboard_links
-from origin.services.dashboard_page import STATUSES, Dashboard
+from origin.services.dashboard_page import MAX_ATTENTION_ROWS, STATUSES, Dashboard
 
 MAX_STATS = 8
 MAX_BREAKDOWN = 12
@@ -84,18 +84,21 @@ DIRECTIVE = (
     f'"timeline" (what is due when: "rows" of {{"text", "due", optional "status"}}, at most '
     f"{MAX_BLOCK_ROWS}); "
     f'"attention" (cards for what needs a person: "groups" (at most {MAX_GROUPS}) of '
-    '{"title", "tone": "overdue", "blocked" or "unowned", "rows" of {"text", optional "note"}}, '
-    "3 rows each); "
+    '{"title", "tone": "overdue", "blocked" or "unowned", "rows" of {"text", optional "note"}}; '
+    f"give every row you read, up to {MAX_ROWS} per group: the page shows {MAX_ATTENTION_ROWS} "
+    'and counts the rest; if a group has more than you give, say so in the top-level "note"); '
     f'"table" ("columns" (at most {MAX_COLUMNS} short strings) and "rows" (at most '
     f"{MAX_TABLE_ROWS} lists of cells)); "
     f'"list" ("rows", at most {MAX_BLOCK_ROWS}, only when no other block fits); '
     '"text" ("text", at most two sentences). Dates are YYYY-MM-DD and counts are whole numbers. '
     'A row or a table cell is a short string, or {"text": string, "ref": {"kind": "task", '
     '"milestone", "project" or "note", "id": number}} when it is about one thing you read (a row '
-    'with other fields takes the "ref" beside them): copy its numeric id from the tool result '
-    '(task_id, not the display id), and for a note add "note_type" to the ref. Give a ref wherever '
-    'you have the id; a stat may have one too, and a top-level "ref" says what the whole page is '
-    "about. Never write a URL, a path or a link. Plain text only in every string."
+    'with other fields takes the "ref" beside them). Its "id" is the numeric id from the tool '
+    'result, never the display id: for "task" its task_id, for "milestone" its milestone_id (not '
+    'the task_id on the same row), for "project" its project_id, for "note" its note_id (and add '
+    '"note_type" to the ref). Give a ref wherever you have the id; a stat may have one too, and a '
+    'top-level "ref" says what the whole page is about. Never write a URL, a path or a link. Plain '
+    "text only in every string."
 )
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏‪-‮⁠-⁤﻿]")
@@ -285,7 +288,7 @@ def _attention(block: dict[str, Any]) -> dict[str, Any] | None:
                     # The card's colour only; its words are the title.
                     "reason": tone if tone in ("overdue", "blocked", "unowned") else "",
                     "count": len(rows),
-                    "rows": rows[:3],
+                    "rows": rows[:MAX_ATTENTION_ROWS],
                 }
             )
     return {"groups": groups} if groups else None
