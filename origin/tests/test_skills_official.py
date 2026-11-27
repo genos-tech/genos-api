@@ -287,6 +287,7 @@ class ReleaseUpdateTests(SyncBase):
     """A newer plugin release changes each text's closing "Source" line, so it is a new text."""
 
     def test_a_new_release_cuts_version_two_and_keeps_stars_and_installs(self):
+        committed = official.load_catalog()[0].release
         sync_command("--apply")
         skill = official_skills().get(slug=TRIAGE)
         SkillStar.objects.create(user=self.user, skill=skill)
@@ -310,9 +311,7 @@ class ReleaseUpdateTests(SyncBase):
         new = skill.versions.get(version_no=2)
         self.assertEqual(new.changelog, "Genos skills v9.9.9")
         self.assertIn("v9.9.9", new.body_markdown)
-        self.assertIn(
-            "v0.6.0", skill.versions.get(version_no=1).body_markdown
-        )  # the old text stays
+        self.assertIn(committed, skill.versions.get(version_no=1).body_markdown)  # old text stays
         self.assertEqual(skill.versions.count(), 2)
         self.assertEqual(Skill.objects.count(), self.catalog_count)
 

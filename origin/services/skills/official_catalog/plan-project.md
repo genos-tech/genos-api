@@ -85,4 +85,4 @@ After writing, read the graph again (`list_task_dependencies`, with `milestone_i
 
 Leave one comment on each task you create, or one on the parent for a batch: what it was linked to (parent, blocked by, blocks, with links), or why nothing blocks it ("starts at once: needs nothing first"; "blocks nothing: stands alone").
 
-Source: [Genos skills v0.6.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.6.0/plugins/genos/skills/plan-project/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.7.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.7.0/plugins/genos/skills/plan-project/SKILL.md), the runbook this skill was made from.

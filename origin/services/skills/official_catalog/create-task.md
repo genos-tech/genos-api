@@ -89,4 +89,4 @@ Why now, what it unblocks.
 
 A new task also gets a parent that will outlive it, and what blocks it and what it blocks.
 
-Source: [Genos skills v0.6.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.6.0/plugins/genos/skills/create-task/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.7.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.7.0/plugins/genos/skills/create-task/SKILL.md), the runbook this skill was made from.
