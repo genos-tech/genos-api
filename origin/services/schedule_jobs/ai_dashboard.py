@@ -43,11 +43,11 @@ from origin.search_engine.agent.tools.get_my_throughput import GET_MY_THROUGHPUT
 from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUMMARY
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
-from origin.services import dashboard_links, schedule_audience
+from origin.services import dashboard_links, dashboard_strings, schedule_audience
 from origin.services.dashboard_page import Dashboard, DashPoint, DashRow, row_text
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.report_ai.llm import DASHBOARD_PURPOSE
-from origin.services.schedule_jobs import AUDIENCE_KEY, Job, Report, register_job
+from origin.services.schedule_jobs import AUDIENCE_KEY, Job, Report, dashboard_blocks, register_job
 from origin.services.schedule_jobs.report_kit import (
     AI_SUMMARY_PARAM,
     SUMMARY_EFFORT_DEFAULT,
@@ -55,7 +55,6 @@ from origin.services.schedule_jobs.report_kit import (
     ai_sentences_on,
     clip,
     item,
-    plain,
 )
 from origin.services.user_time import zone_for_user_id
 
@@ -79,7 +78,17 @@ MAX_LIST = 10
 # A member keeps at most this many dashboard schedules (MIP-2359). Each run saves a note, and an AI
 # one spends credits; a schedule runs at most once a day (the recurrence has nothing finer).
 MAX_DASHBOARD_SCHEDULES = 10
-_FINGERPRINT_KEYS = ("title", "kind", "stats", "breakdown", "series", "lists", "focus", "note")
+_FINGERPRINT_KEYS = (
+    "title",
+    "kind",
+    "stats",
+    "breakdown",
+    "series",
+    "lists",
+    "blocks",
+    "focus",
+    "note",
+)
 # A week or a month is read per day, a quarter or a year per week.
 _DAILY = ("week", "month")
 
@@ -169,10 +178,15 @@ def _series(task_ids, since, period: str) -> list[DashPoint]:
 
 def _task_row(display_id: Any, title: Any, task_id: Any) -> DashRow:
     """One named task: its words, and what it is (the link is added by `link_page`)."""
-    return {
-        "text": f"{display_id} · {plain(title) or 'untitled'}",
-        "ref": {"kind": dashboard_links.KIND_TASK, "id": task_id},
-    }
+    return dashboard_blocks.row_of(display_id, title, task_id)  # type: ignore[return-value]
+
+
+def _locale(user_id: Any) -> str:
+    """The UI language of the schedule's owner: the page's own words are written in it."""
+    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+    value = CustomUser.objects.filter(pk=user_id).values_list("language", flat=True).first()
+    return dashboard_strings.locale_of(value)
 
 
 def _recently_closed(
@@ -271,8 +285,10 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     today: date = now.astimezone(zone_for_user_id(ctx.user_id)).date()
     focus = _focus(params)
     lists: list[dict[str, Any]] = []
-    note = ""
+    note = note_key = name = ""
     subject: dict[str, Any] | None = None
+    locale = _locale(ctx.user_id)
+    someone = dashboard_strings.text(locale, "someone")
 
     try:
         if kind == "milestone":
@@ -290,6 +306,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
             listed = [*summary.get("blocked", []), *summary.get("ready_now", [])]
             readable = visible_tasks(ctx, [r["task_id"] for r in listed], readers)
             if len(readable) < len(listed):
+                note_key = "note_hidden"
                 note = "Some tasks are not named here because not everyone can open them."
             for heading, key in (
                 ("Waiting on blockers", "blocked"),
@@ -318,12 +335,14 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 is_init_task=False,
                 is_milestone=False,
             ).values("task_id")
-            title = f"Project dashboard: {summary.get('project_name') or 'Project'}"
+            name = summary.get("project_name") or "Project"
+            title = f"Project dashboard: {name}"
             subject = {"kind": dashboard_links.KIND_PROJECT, "id": summary["project_id"]}
             stats, breakdown = _stand(summary)
         else:
             summary = _mine(ctx, days, "day" if period in _DAILY else "week", readers)
             if len(readers) > 1:
+                note_key = "note_common"
                 note = "Only projects everyone who reads this page is on are counted here."
             work = None
             title = "My progress"
@@ -359,6 +378,41 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     if closed_rows:
         lists.append({"heading": "Recently closed", "rows": closed_rows})
 
+    window = {"now": now, "since": since, "today": today, "days": days}
+    if kind == "milestone":
+        blocks = dashboard_blocks.milestone_layout(
+            ctx, summary, milestone, readers, closed_rows=closed_rows, someone=someone, **window
+        )
+    elif kind == "project":
+        blocks = dashboard_blocks.project_layout(
+            ctx,
+            summary,
+            work,
+            readers,
+            period=period,
+            series=series,
+            closed_rows=closed_rows,
+            someone=someone,
+            **window,
+        )
+    else:
+        projects = (
+            dashboard_blocks.member_projects(ctx)
+            if readers <= {str(ctx.user_id)}
+            else schedule_audience.common_project_ids(readers, ctx.team_id)
+        )
+        del window["now"]
+        blocks = dashboard_blocks.mine_layout(
+            ctx,
+            summary,
+            projects,
+            readers,
+            period=period,
+            series=series,
+            closed_rows=closed_rows,
+            **window,
+        )
+
     subtitle = f"Last {days} days, as of {today.isoformat()}"
     dashboard: Dashboard = {
         "title": title,
@@ -367,7 +421,15 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
         "stats": stats,
         "series": series,
         "lists": lists,
+        "blocks": blocks,
+        "locale": locale,
+        "today": today.isoformat(),
+        "days": days,
     }
+    if name:
+        dashboard["name"] = name
+    if note_key:
+        dashboard["note_key"] = note_key
     if breakdown:
         dashboard["breakdown"] = breakdown
     if focus:
@@ -462,8 +524,10 @@ def _run_from_skill(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 "Your AI credits ran out before the page was finished, so it was not changed."
             ) from None
         raise _public(f"{exc} The page was not changed.") from None
+    today = timezone.now().astimezone(zone_for_user_id(ctx.user_id)).date()
+    # The page's own words (status names, "days left") are in the owner's language.
+    dashboard["locale"], dashboard["today"] = _locale(ctx.user_id), today.isoformat()
     if not dashboard["subtitle"]:
-        today = timezone.now().astimezone(zone_for_user_id(ctx.user_id)).date()
         dashboard["subtitle"] = f"As of {today.isoformat()}"
     # A link only to something this run read AND the owner (the page's one reader) may open.
     dashboard_links.keep_seen(dashboard, seen)
