@@ -27,8 +27,19 @@ or None when there is none. The wall-clock time is read in `zone`:
 ## What the tick promises
 
 - A due run happens at most once. The claim is one UPDATE (`claimed_at`); a second tick that
-  loses it moves on. A claim older than `STALE_CLAIM` is taken over (a crashed tick must
-  not strand a schedule), so a job may, rarely, run twice after a crash: jobs only read.
+  loses it moves on. While the run is alive it refreshes `heartbeat_at` (`_heartbeat`); a claim
+  whose heartbeat is older than `HEARTBEAT_STALE` is taken over (a killed run must not strand a
+  schedule), so a job may, rarely, run twice after a crash: jobs only read.
+
+## "Run now" (MIP-2457)
+
+A job that can be slow (`runs_in_background`: a long model loop, a dashboard page, anything
+that spends AI usage) NEVER runs inside the web request: gunicorn kills a worker past its
+timeout, and a killed worker records nothing. `run_now` claims the row and hands it to a child
+process (`schedule_runner`), and answers `started`. A plain report still runs in the request.
+A child that dies (a deploy, out of memory) leaves a claim that goes stale within about a
+minute; `fail_stale_hand_runs` then records the failure. Nothing is retried: it may have
+spent AI usage already.
 - A run later than `LATE_GRACE` after its time is skipped and recorded: a "what to do
   today" report at 22:00 is wrong, not late. A long outage yields one recorded outcome per
   schedule, then the schedule moves to its next future time. Missed runs are never replayed.
@@ -53,17 +64,20 @@ import calendar
 import json
 import logging
 import re
+import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from datetime import timezone as dt_timezone
 from typing import Any
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -90,7 +104,7 @@ from origin.models.common.schedule_models import (
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedule_audience, schedule_delivery, schedule_text
+from origin.services import schedule_audience, schedule_delivery, schedule_runner, schedule_text
 from origin.services.mcp_oauth import clean_name
 from origin.services.schedule_jobs import AI_EFFORT_KEY, AUDIENCE_KEY, JOBS, SHARED_KEY, Report
 from origin.services.user_time import user_zone
@@ -107,8 +121,19 @@ MAX_ERROR_CHARS = 200
 
 # A run later than this after its scheduled time is recorded as skipped, not run.
 LATE_GRACE = timedelta(hours=3)
-# A claim older than this is taken over. Well above the tick's own budget (4 minutes).
+# A claim that never had a heartbeat (made before `heartbeat_at` existed) is taken over after
+# this. Well above the tick's own budget (4 minutes).
 STALE_CLAIM = timedelta(minutes=15)
+# A live run refreshes its heartbeat this often, and one this old means the run is gone.
+HEARTBEAT_EVERY_SECONDS = 10
+HEARTBEAT_STALE = timedelta(seconds=60)
+# `run_now`'s answer for a run that goes on after the request. Never stored on the row.
+STATUS_STARTED = "started"
+RUN_STOPPED_SENTENCE = (
+    "The run stopped before it finished (the server may have restarted). It was not retried: "
+    "run it again."
+)
+RUN_TOO_LONG_SENTENCE = "The report took too long and was stopped. It was not retried."
 # Failures in a row before the schedule pauses itself.
 MAX_FAILURES = 3
 # "Run now" is a convenience, and it delivers a report each time: a second one this soon is
@@ -145,6 +170,11 @@ class ScheduleLimitReached(ScheduleError):
 class ScheduleNotFound(ScheduleError):
     """No such schedule for this member in this team. The same for an id that belongs to
     someone else, to another team, or that is not an id at all."""
+
+
+class RunTimedOut(BaseException):
+    """A background run passed its time limit. Not an `Exception`, so that no job's own
+    failure handling swallows it."""
 
 
 class ScheduleRunError(Exception):
@@ -650,6 +680,8 @@ def create(
     with transaction.atomic():
         # Two creates at once must not both slip under the cap: take the member's row.
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
+        if immediate:
+            _drop_failed_right_away(ctx, clean)
         cap = schedule_limit(user.pk)
         used = MemberSchedule.objects.filter(user_id=user.pk).count()
         if used >= cap:
@@ -681,6 +713,23 @@ def create(
         )
 
 
+def _drop_failed_right_away(ctx: ToolContext, name: str) -> None:
+    """Remove the rows "Run right away" left behind for a background run that failed and made
+    nothing, under this name: otherwise trying again would be refused as a duplicate name
+    (MIP-2457). A row that ever produced a report or a page is kept."""
+    key = _name_key(name)
+    for row in MemberSchedule.objects.filter(
+        user_id=ctx.user_id,
+        team_id=ctx.team_id,
+        frequency=FREQ_ONCE,
+        next_run_at__isnull=True,
+        claimed_at__isnull=True,
+        last_status=STATUS_FAILED,
+    ):
+        if _name_key(row.name) == key and not row.last_result and not row.output:
+            row.delete()
+
+
 def create_and_run(
     ctx: ToolContext, *, frequency: Any, now: datetime | None = None, **fields: Any
 ) -> tuple[MemberSchedule, dict[str, Any]]:
@@ -692,9 +741,11 @@ def create_and_run(
     one-time schedule, so the tick can never file it a second time (MIP-2403). It stays in the
     list as a finished one-time schedule, with its run time.
 
-    A run that failed leaves NO schedule behind and the sentence is the error: there is nothing
-    to wait for, and the form still holds what the member typed, so they can press again. A
-    report whose AI part was skipped (no credits) did not fail: it is the plain report.
+    A run that failed in the request leaves NO schedule behind and the sentence is the error:
+    there is nothing to wait for, and the form still holds what the member typed, so they can
+    press again. A report whose AI part was skipped (no credits) did not fail: it is the plain
+    report. A slow job answers `started` (MIP-2457) and the row stays: it is where the outcome
+    is written, and a failed one is replaced by the next try under the same name.
     Everything `create` refuses (the plan, the count, the checked parameters, a name or a
     content already used by another of the member's schedules) is refused here before anything
     runs. The finished row keeps its name, so the same report right away again needs another
@@ -719,7 +770,7 @@ def create_and_run(
     except ScheduleError:
         delete(ctx, sched.pk)
         raise
-    if out["status"] != STATUS_OK:
+    if out["status"] == STATUS_FAILED:
         delete(ctx, sched.pk)
         raise ScheduleError(out["error"] or "The report could not be made. Try again.")
     sched.refresh_from_db()
@@ -749,7 +800,7 @@ def update(
             _recurrence_of(sched),
             sched.deliver_channel_id,
         )
-        dirty = ["claimed_at", "ts_updated_at"]
+        dirty = ["claimed_at", "heartbeat_at", "ts_updated_at"]
         if "name" in changes:
             sched.name = _clean_name(changes["name"])
             dirty.append("name")
@@ -822,6 +873,7 @@ def update(
         # An edit takes over a run in progress: the tick's own write-back is conditional on
         # its claim, so it will find the claim gone and leave the member's edit alone.
         sched.claimed_at = None
+        sched.heartbeat_at = None
         sched.save(update_fields=sorted(set(dirty)))
         return sched
 
@@ -852,6 +904,7 @@ def set_enabled(
             sched.paused_reason = PAUSE_MANUAL
             sched.next_run_at = None
         sched.claimed_at = None
+        sched.heartbeat_at = None
         sched.save()
         return sched
 
@@ -1011,6 +1064,147 @@ def _require_ai_run_now_room(sched: MemberSchedule, now: datetime) -> None:
         )
 
 
+def runs_in_background(sched: MemberSchedule) -> bool:
+    """Whether "Run now" of this schedule must not run inside the web request (MIP-2457): a long
+    model loop, a dashboard page, or anything that spends AI usage. `SCHEDULE_RUN_NOW_MODE` =
+    `sync` is the rollback: everything runs in the request, as before."""
+    if getattr(settings, "SCHEDULE_RUN_NOW_MODE", "subprocess") == "sync":
+        return False
+    job = JOBS.get(sched.job)
+    return job is not None and (job.unwrapped or job.delivers_note or job.ai_applies(sched.params))
+
+
+def running_since(sched: MemberSchedule, now: datetime | None = None) -> datetime | None:
+    """When the run that holds this schedule started, or None when no live run holds it."""
+    if sched.claimed_at is None:
+        return None
+    now = now or timezone.now()
+    if sched.heartbeat_at is not None:
+        alive = sched.heartbeat_at >= now - HEARTBEAT_STALE
+    else:
+        alive = sched.claimed_at >= now - STALE_CLAIM
+    return sched.claimed_at if alive else None
+
+
+def _busy_sentence(sched: MemberSchedule) -> str:
+    """Why a claimed schedule cannot be run now, saying only what is known."""
+    if sched.claimed_at is None:  # released between our try and this read
+        return "This schedule is running right now. Try again in a minute."
+    zone = user_zone(sched.user)
+    started = sched.claimed_at.astimezone(zone).strftime("%H:%M")
+    if sched.heartbeat_at is None:
+        # No heartbeat to go by: only the time it will be taken over is known (rounded up).
+        again = (sched.claimed_at + STALE_CLAIM + timedelta(seconds=59)).astimezone(zone)
+        return (
+            f"This schedule is still marked as running: a run that started at {started} has not "
+            f"finished. You can run it again at {again:%H:%M}."
+        )
+    return (
+        f"This schedule is running: a run that started at {started} has not finished. Its "
+        "report arrives in your Inbox (or the chat) when it is done. If that run stopped, you "
+        "can run it again in about a minute."
+    )
+
+
+def _beat(pk: Any, claim: datetime) -> bool:
+    """Say that the run holding `claim` is alive. False when the claim is no longer ours."""
+    return bool(
+        MemberSchedule.objects.filter(pk=pk, claimed_at=claim).update(heartbeat_at=timezone.now())
+    )
+
+
+@contextmanager
+def _heartbeat(pk: Any, claim: datetime) -> Iterator[None]:
+    """Refresh the claim's heartbeat from a second thread while the run goes on. It has its own
+    database connection, so it writes whatever the run's transactions are doing."""
+    every = getattr(settings, "SCHEDULE_HEARTBEAT_EVERY_SECONDS", HEARTBEAT_EVERY_SECONDS)
+    if every <= 0:  # the tests: a second connection cannot see a test's uncommitted rows
+        yield
+        return
+    stop = threading.Event()
+
+    def beat() -> None:
+        try:
+            while not stop.wait(every):
+                try:
+                    if not _beat(pk, claim):
+                        return
+                except Exception as exc:  # noqa: BLE001 - try again at the next beat
+                    log.warning(
+                        "schedule_heartbeat_failed schedule=%s error=%s", pk, type(exc).__name__
+                    )
+                    connection.close()
+        finally:
+            connection.close()
+
+    thread = threading.Thread(target=beat, daemon=True, name="schedule-heartbeat")
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+
+
+def _release(pk: Any, claim: datetime) -> None:
+    MemberSchedule.objects.filter(pk=pk, claimed_at=claim).update(
+        claimed_at=None, heartbeat_at=None
+    )
+
+
+def _record_hand_run(sched: MemberSchedule, claim: datetime, status: str, error: str) -> None:
+    """Write what a hand run gave and let go of the claim. The run is dated when it started."""
+    fields: dict[str, Any] = {
+        "last_run_at": claim,
+        "last_status": status,
+        "last_error": error,
+        "ts_updated_at": timezone.now(),
+    }
+    if sched.frequency == FREQ_ONCE:
+        if status == STATUS_OK:
+            fields["next_run_at"] = None
+        # Written only while our claim stands: one the member edited or deleted meanwhile wins.
+        MemberSchedule.objects.filter(pk=sched.pk, claimed_at=claim).update(
+            claimed_at=None, heartbeat_at=None, **fields
+        )
+    else:
+        MemberSchedule.objects.filter(pk=sched.pk).update(**fields)
+        _release(sched.pk, claim)
+
+
+def _run_claimed(sched: MemberSchedule, claim: datetime) -> tuple[str, str]:
+    """Run a hand-claimed schedule and record it. The same in the request and in the child."""
+    status, error = STATUS_FAILED, ""
+    try:
+        with _heartbeat(sched.pk, claim):
+            status, error = _execute(sched)
+    except RunTimedOut:
+        error = RUN_TOO_LONG_SENTENCE
+    finally:
+        _record_hand_run(sched, claim, status, error)
+    if status == STATUS_FAILED:
+        log.warning(
+            "schedule_run_now_failed schedule=%s job=%s error=%s", sched.pk, sched.job, error
+        )
+    return status, error
+
+
+def run_claimed_by_id(schedule_id: Any, claim: datetime) -> bool:
+    """The child process's entry (`schedule_run_now`): run the schedule `run_now` claimed. False,
+    and nothing runs, when that claim no longer stands (edited, paused, deleted, taken over)."""
+    if not _beat(schedule_id, claim):
+        return False
+    sched = (
+        MemberSchedule.objects.select_related("user")
+        .filter(pk=schedule_id, claimed_at=claim)
+        .first()
+    )
+    if sched is None:
+        return False
+    _run_claimed(sched, claim)
+    return True
+
+
 def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) -> dict[str, Any]:
     """Run one of the member's schedules right now, whatever the clock says.
 
@@ -1019,8 +1213,11 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
 
     A one-time schedule is the exception (MIP-2403): its one run IS the report, so a run that
     went through ends it (no next run), and the tick never files the same report again at the
-    set time. The row is claimed for the run, as a tick would, so a tick that comes while the
-    job is going skips it. A run that failed leaves the set time standing.
+    set time. A run that failed leaves the set time standing.
+
+    The row is claimed for the run, as a tick would, so a tick that comes while the job is going
+    skips it and a second press is refused. A slow job (`runs_in_background`, MIP-2457) goes on
+    in a child process and the answer is `{"status": "started", "started_at": ...}`.
     """
     now = now or timezone.now()
     _require_plan(_require_member(ctx))
@@ -1029,42 +1226,47 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
         wait = int((RUN_NOW_COOLDOWN - (now - sched.last_run_at)).total_seconds()) + 1
         raise ScheduleError(f"This schedule ran a moment ago. Try again in {wait} seconds.")
     _require_ai_run_now_room(sched, now)
-    once = sched.frequency == FREQ_ONCE
-    if once and not _claim_for_run_now(sched.pk, now):
-        raise ScheduleError(
-            "This schedule is running right now. Try again in a minute, once its report is in."
-        )
-    status, error = STATUS_FAILED, ""
-    try:
-        status, error = _execute(sched)
-    finally:
-        fields: dict[str, Any] = {
-            "last_run_at": now,
-            "last_status": status,
-            "last_error": error,
-            "ts_updated_at": now,
-        }
-        if once:
-            fields["claimed_at"] = None
-            if status == STATUS_OK:
-                fields["next_run_at"] = None
-        # A one-time schedule is written only while our claim stands: one the member edited or
-        # deleted meanwhile wins.
-        rows = MemberSchedule.objects.filter(pk=sched.pk)
-        if once:
-            rows = rows.filter(claimed_at=now)
-        rows.update(**fields)
+    if not _claim_for_run_now(sched.pk, now):
+        raise ScheduleError(_busy_sentence(_get(ctx, schedule_id)))
+    out: dict[str, Any] = {"status": STATUS_STARTED, "error": "", "title": "", "items": 0}
+    if runs_in_background(sched):
+        try:
+            schedule_runner.start(sched.pk, now)
+        except schedule_runner.RunnerUnavailable as exc:
+            _release(sched.pk, now)
+            raise ScheduleError(str(exc)) from None
+        out["started_at"] = schedule_text.local_time(now, user_zone(sched.user))
+        return out
+    status, error = _run_claimed(sched, now)
     sched.refresh_from_db()
-    if status == STATUS_FAILED:
-        log.warning(
-            "schedule_run_now_failed schedule=%s job=%s error=%s", sched.id, sched.job, error
+    out.update(status=status, error=error)
+    if status == STATUS_OK:
+        out["title"] = (sched.last_result or {}).get("title", "")
+        out["items"] = (sched.last_result or {}).get("items", 0)
+    return out
+
+
+def fail_stale_hand_runs(now: datetime) -> int:
+    """Record the hand runs that died (their heartbeat stopped): the failure on the row, the claim
+    gone. A tick's own claim is on a DUE row, which the next tick takes over and runs; a row that
+    is not due was claimed by "Run now", which is never retried."""
+    gone = Q(claimed_at__isnull=False, heartbeat_at__lt=now - HEARTBEAT_STALE) & (
+        Q(next_run_at__isnull=True) | Q(next_run_at__gt=now)
+    )
+    count = 0
+    for pk, claim in list(MemberSchedule.objects.filter(gone).values_list("pk", "claimed_at")):
+        changed = MemberSchedule.objects.filter(gone, pk=pk, claimed_at=claim).update(
+            claimed_at=None,
+            heartbeat_at=None,
+            last_run_at=claim,
+            last_status=STATUS_FAILED,
+            last_error=RUN_STOPPED_SENTENCE,
+            ts_updated_at=now,
         )
-    return {
-        "status": status,
-        "error": error,
-        "title": (sched.last_result or {}).get("title", "") if status == STATUS_OK else "",
-        "items": (sched.last_result or {}).get("items", 0) if status == STATUS_OK else 0,
-    }
+        if changed:
+            log.warning("schedule_run_now_stopped schedule=%s", pk)
+        count += changed
+    return count
 
 
 # ── the tick ────────────────────────────────────────────────────────────
@@ -1086,7 +1288,11 @@ class RunSummary:
 
 
 def _unclaimed(now: datetime) -> Q:
-    return Q(claimed_at__isnull=True) | Q(claimed_at__lt=now - STALE_CLAIM)
+    return (
+        Q(claimed_at__isnull=True)
+        | Q(heartbeat_at__lt=now - HEARTBEAT_STALE)
+        | Q(heartbeat_at__isnull=True, claimed_at__lt=now - STALE_CLAIM)
+    )
 
 
 def due_schedules(*, now: datetime | None = None, limit: int = 200) -> list[MemberSchedule]:
@@ -1105,16 +1311,21 @@ def _claim(pk: Any, now: datetime) -> bool:
     return (
         MemberSchedule.objects.filter(
             _unclaimed(now), pk=pk, enabled=True, next_run_at__lte=now
-        ).update(claimed_at=now)
+        ).update(claimed_at=now, heartbeat_at=now)
         == 1
     )
 
 
 def _claim_for_run_now(pk: Any, now: datetime) -> bool:
-    """Take the row for a hand run of a one-time schedule, so no tick runs it meanwhile (and a
-    second press is refused). Like `_claim`, but it asks neither for a due time nor for the
-    schedule to be on: a paused one may be run by hand."""
-    return MemberSchedule.objects.filter(_unclaimed(now), pk=pk).update(claimed_at=now) == 1
+    """Take the row for a hand run, so no tick runs it meanwhile (and a second press is
+    refused). Like `_claim`, but it asks neither for a due time nor for the schedule to be on:
+    a paused one may be run by hand."""
+    return (
+        MemberSchedule.objects.filter(_unclaimed(now), pk=pk).update(
+            claimed_at=now, heartbeat_at=now
+        )
+        == 1
+    )
 
 
 def _advance(sched: MemberSchedule, now: datetime, zone) -> datetime | None:
@@ -1144,7 +1355,7 @@ def _finish(sched: MemberSchedule, claim: datetime, now: datetime, **fields: Any
     """Write the outcome, only while our claim still stands. False when the member edited or
     deleted the schedule meanwhile (or another tick took the claim over): their change wins."""
     done = MemberSchedule.objects.filter(pk=sched.pk, claimed_at=claim).update(
-        claimed_at=None, ts_updated_at=now, **fields
+        claimed_at=None, heartbeat_at=None, ts_updated_at=now, **fields
     )
     if not done:
         log.info("schedule_changed_during_run schedule=%s", sched.pk)
@@ -1163,6 +1374,8 @@ def _process(row: MemberSchedule, now: datetime, summary: RunSummary) -> None:
     if not _claim(row.pk, now):
         summary.claimed_elsewhere += 1
         return
+    # `now` is when the TICK began; date the heartbeat from when this row is taken.
+    _beat(row.pk, now)
     try:
         # Fresh after the claim: the member may have edited it since the tick listed it.
         sched = MemberSchedule.objects.select_related("user").get(pk=row.pk)
@@ -1218,7 +1431,8 @@ def _process(row: MemberSchedule, now: datetime, summary: RunSummary) -> None:
         return
 
     # `sched.next_run_at` is still the scheduled time here: `_finish` is what advances it.
-    status, error = _execute(sched, run_at=sched.next_run_at)
+    with _heartbeat(sched.pk, now):
+        status, error = _execute(sched, run_at=sched.next_run_at)
     fields: dict[str, Any] = {
         "last_run_at": now,
         "last_status": status,
@@ -1305,6 +1519,7 @@ def sync_plan(now: datetime | None = None, limit: int = 500, max_pages: int = 20
                 paused_reason=PAUSE_PLAN,
                 next_run_at=None,
                 claimed_at=None,
+                heartbeat_at=None,
                 ts_updated_at=now,
             )
             out.paused += changed
@@ -1342,6 +1557,10 @@ def run_due(
     the next tick)."""
     now = now or timezone.now()
     started = time.monotonic()
+    try:
+        fail_stale_hand_runs(now)
+    except Exception:  # noqa: BLE001 - never stops the due runs
+        log.exception("schedule_tick: could not record stopped runs")
     rows = due_schedules(now=now, limit=limit)
     summary = RunSummary(due=len(rows))
     if rows:
