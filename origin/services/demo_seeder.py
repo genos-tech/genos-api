@@ -3066,9 +3066,14 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         # ProjectMaster / TeamMaster below. Cascades on these deletes
         # take care of MessageReaction, MessageMention, MessageAttachment,
         # Flag, ChannelMember, ChannelDirectPair, Pin, and ReadCursor.
-        Message.objects.filter(channel__team=team_id).delete()
-        # No cascade reaches these (no constraint on `channel`).
+        # No cascade reaches the move records (no constraint on `channel`). By chat left and, before
+        # the messages go, by message: that chat may already be gone. Two queries, since one `OR`
+        # would inner-join the missing chat away.
         MessageMovedAway.objects.filter(channel__team=team_id).delete()
+        MessageMovedAway.objects.filter(
+            message_id__in=Message.objects.filter(channel__team=team_id).values("id")
+        ).delete()
+        Message.objects.filter(channel__team=team_id).delete()
         Channel.objects.filter(team=team_id).delete()
 
         # Per-user todo. ToDoGroup CASCADE removes its items; ToDoCategory

@@ -34,7 +34,12 @@ from origin.services.unified_writer import (
     write_task_comment_as_thread_reply,
 )
 from origin.views.common.media_views import _may_read_media
-from origin.views.utils.note_role import NOTE_TYPE_CHAT, ROLE_EDITOR, get_effective_role
+from origin.views.utils.note_role import (
+    NOTE_TYPE_CHAT,
+    ROLE_EDITOR,
+    ROLE_OWNER,
+    get_effective_role,
+)
 
 from .status_reason_support import with_reason
 from .test_task_card_post import CardPostBase
@@ -400,6 +405,33 @@ class LeftBehindTests(MoveBase):
         )
         for row in (note, child, under_it):
             self.assertIsNone(get_effective_role(self.user2.id, NOTE_TYPE_CHAT, row.note_id))
+
+    def test_moving_back_gives_the_author_their_note_again(self):
+        note = self._note()
+        NotePermissionMaster.objects.create(
+            team=self.team,
+            user=self.user2,
+            note_type=NOTE_TYPE_CHAT,
+            note_id=note.note_id,
+            role_id=ROLE_OWNER,
+        )
+
+        task = self._move(self.task)
+        self.assertIsNone(get_effective_role(self.user2.id, NOTE_TYPE_CHAT, note.note_id))
+        self._move(task, self.project)
+
+        self.assertEqual(
+            get_effective_role(self.user2.id, NOTE_TYPE_CHAT, note.note_id), ROLE_OWNER
+        )
+
+    def test_a_teardown_reaches_the_record_of_a_chat_already_deleted(self):
+        self._move(self.task)
+        Message.objects.filter(channel=self.channel).delete()
+        Channel.objects.filter(pk=self.channel.pk).delete()
+
+        delete_demo_team_data(self.team.team_id)
+
+        self.assertFalse(MessageMovedAway.objects.exists())
 
     def test_a_note_on_a_merged_thread_follows_to_the_card_that_stays(self):
         TaskMaster.objects.filter(pk=self.task.pk).update(project_id=self.destination.pk)

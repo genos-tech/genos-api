@@ -1,4 +1,10 @@
-"""What is left to do for messages that changed chat (`MessageMovedAway`, MIP-2516)."""
+"""What is left to do for messages that changed chat (`MessageMovedAway`, MIP-2516).
+
+Two limits on pasted images. One with a name the uploader did not generate (older uploads) stays
+with the chat it was uploaded in. And once a message showing a file has moved, only chat messages
+are looked at: the same URL copied into a note or a task body no longer opens for someone who is
+in none of the chats with such a message.
+"""
 
 from __future__ import annotations
 

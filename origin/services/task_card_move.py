@@ -43,6 +43,7 @@ from origin.models.chat.unified_models import (
     ReadCursor,
 )
 from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.acl_dirty import mark_channels_dirty
@@ -53,6 +54,7 @@ from origin.services import (
     thread_summary_cleanup,
 )
 from origin.services.chat_note_access import rederive_on_move
+from origin.views.utils.note_role import NOTE_TYPE_CHAT, ROLE_OWNER
 
 log = logging.getLogger(__name__)
 
@@ -233,6 +235,23 @@ def _move_thread_notes(source, old_root, destination, new_root) -> None:
         parent_note_id=None
     )
     rederive_on_move(moves=moves, target=destination)
+    # The author keeps no row on a note in a chat they are not in; a later move that brings it to
+    # one they are in writes it again, or a move back would leave them without their own note
+    # (as `restore_task_roles_on_move` does for task notes).
+    in_destination = set(
+        ProjectMembers.objects.filter(
+            project_id=destination.project_id,
+            attendee_id__in=[n.owner_id for n in notes.values() if n.owner_id],
+        ).values_list("attendee_id", flat=True)
+    )
+    for note in notes.values():
+        if note.owner_id in in_destination:
+            NotePermissionMaster.objects.get_or_create(
+                user_id=note.owner_id,
+                note_type=NOTE_TYPE_CHAT,
+                note_id=note.note_id,
+                defaults={"role_id": ROLE_OWNER, "team_id": destination.team_id},
+            )
     mark_channels_dirty([source.pk, destination.pk])
 
 
