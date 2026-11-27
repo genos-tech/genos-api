@@ -152,12 +152,13 @@ def _period_name(period: str) -> str:
     return {"week": "week", "month": "month", "quarter": "quarter", "year": "year"}[period]
 
 
-def _series(task_ids, since, period: str) -> list[DashPoint]:
-    """Closed and created tasks per day (week, month) or per week (quarter, year)."""
+def _series(task_ids, since, period: str, zone) -> list[DashPoint]:
+    """Closed and created tasks per day (week, month) or per week (quarter, year), the days and
+    weeks of `zone` (the schedule owner's, as the page's `today` is)."""
     trunc = TruncDay if period in _DAILY else TruncWeek
     rows = (
         TaskActivity.objects.filter(THROUGHPUT_Q, task_id__in=task_ids, ts_created_at__gte=since)
-        .annotate(bucket_start=trunc("ts_created_at"))
+        .annotate(bucket_start=trunc("ts_created_at", tzinfo=zone))
         .values("bucket_start")
         .annotate(
             created=Count(Case(When(CREATED_Q, then=1))),
@@ -247,7 +248,7 @@ def _mine(ctx: ToolContext, days: int, bucket: str, readers: set[str]) -> dict[s
             "created": r["created"] or 0,
             "closed": r["closed"] or 0,
         }
-        for r in base.annotate(b=trunc("ts_created_at"))
+        for r in base.annotate(b=trunc("ts_created_at", tzinfo=zone_for_user_id(ctx.user_id)))
         .values("b")
         .annotate(created=created, closed=closed)
         .order_by("b")
@@ -282,7 +283,8 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     days = PERIOD_DAYS[period]
     now = timezone.now()
     since = now - timedelta(days=days)
-    today: date = now.astimezone(zone_for_user_id(ctx.user_id)).date()
+    zone = zone_for_user_id(ctx.user_id)
+    today: date = now.astimezone(zone).date()
     focus = _focus(params)
     lists: list[dict[str, Any]] = []
     note = note_key = name = ""
@@ -357,7 +359,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
         raise _public(str(exc)[:200]) from None
 
     if work is not None:
-        series = _series(work, since, period)
+        series = _series(work, since, period, zone)
         closed_rows = _recently_closed(ctx, work, since, readers)
         stats.append(
             {
