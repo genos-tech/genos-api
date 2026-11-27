@@ -789,9 +789,8 @@ class TaskHistoryValueTests(BaseAPITestCase):
         self.assertEqual(self._entry(A.PARENT)["new_value"], "WEB-7")
 
     def test_a_relation_label_is_still_fenced(self):
-        from origin.models.task.task_activity_models import TaskActivityActionType as A
-
         from origin.models.task.sprint_models import Sprint
+        from origin.models.task.task_activity_models import TaskActivityActionType as A
 
         sprint = Sprint.objects.create(
             team=self.team,
