@@ -16,6 +16,7 @@
     var tip = null;
     var tipFor = null;
     var tipByKey = false;
+    var pointer = "mouse"; /* a `click` does not say, in every browser, what made it */
 
     function all(root, selector) {
         return Array.prototype.slice.call(root.querySelectorAll(selector));
@@ -237,13 +238,14 @@
                 line.hidden = !active && !open;
             });
             all(section, "button[data-gd-act=more]").forEach(function (b) {
-                if (attr(b, "aria-controls") === list.id) b.parentNode.hidden = active;
+                if (attr(b, "aria-controls") === list.id)
+                    (closest(b, "[data-gd-lead]") || b.parentNode).hidden = active;
             });
             var card = closest(list, ".card");
             if (card) card.hidden = filtering && !shown;
         });
         var none = section.querySelector("[data-gd-none]");
-        if (none) none.hidden = !(filtering && !total);
+        if (none) none.textContent = filtering && !total ? attr(none, "data-gd-none") : "";
         var clear = section.querySelector("button[data-gd-act=clear]");
         if (clear) clear.hidden = !filtering;
     }
@@ -411,11 +413,15 @@
             return;
         }
         var found = closest(event.target, "[data-gd-tip]") || nearTip(event.clientX, event.clientY);
-        if (!found || (found === tipFor && event.pointerType === "touch")) hideTip();
+        if (!found || (found === tipFor && pointer !== "mouse")) hideTip();
         else showTip(found, false);
+    });
+    document.addEventListener("pointerdown", function (event) {
+        pointer = event.pointerType || "mouse";
     });
     document.addEventListener("pointerover", function (event) {
         if (event.pointerType !== "mouse") return;
+        pointer = "mouse";
         var found = closest(event.target, "[data-gd-tip]");
         if (found && found !== tipFor) showTip(found, false);
     });

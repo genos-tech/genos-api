@@ -93,8 +93,9 @@ class Open:
         self.hidden = len(self.tasks) < len(ids)
         self.status = {i: statuses[i] for i in self.tasks}
         self.someone = someone
+        # Only a page that names people (a milestone's or a project's) reads their names.
         ids_of_people = {t.assignee_id for t in self.tasks.values() if t.assignee_id}
-        self.names = _names(ids_of_people, ctx.team_id)
+        self.names = _names(ids_of_people, ctx.team_id) if someone else {}
         # blocked task -> the open tasks it waits for, those every reader may open
         deps = list(
             TaskDependency.objects.filter(

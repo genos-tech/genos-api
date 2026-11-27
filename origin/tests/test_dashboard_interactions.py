@@ -288,6 +288,22 @@ class SavedPageTests(SimpleTestCase):
         self.assertEqual(found.attrs("data-gd-key"), ["due", "status"])
         self.assertEqual(found.attrs("data-gd-dim"), ["st", "st"])
 
+    def test_what_takes_the_keyboard_has_a_name(self):
+        body = body_of(
+            render(
+                [{"type": "hero", "done": 1, "total": 4}, timeline([row(1)], heading="Due soon")]
+            )
+        )
+        for tag, attrs in Tags(body).found:
+            if "data-gd-tips" in attrs:
+                self.assertTrue(attrs.get("aria-label"), tag)
+
+    def test_the_more_words_and_their_separator_hide_together(self):
+        block = timeline([row(n) for n in range(8)], [row(9)], more=1, undated=2)
+        body = body_of(render([block]))
+        self.assertIn("</span> · </span>2 more open with no due date", body)
+        self.assertEqual(body.count("<span data-gd-lead>"), 1)
+
     def test_a_task_in_two_cards_counts_once_for_its_person(self):
         both = [row(1), row(2, owner="Ben")]
         group = {"count": 2, "rows": both}

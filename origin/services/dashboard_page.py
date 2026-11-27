@@ -25,7 +25,8 @@ part of the script. Revisions saved earlier are served with today's script, so k
   the list's id, and `data-gd-less`) marks the "+N more" words that bring them out;
   `data-gd-rest` is the line for what is not on the page at all.
 * `<template data-gd-tools>`: sort and filter buttons (`data-gd-act`, `data-gd-key`,
-  `data-gd-dim`, `data-gd-val`); `data-gd-none` is the "nothing matches" line.
+  `data-gd-dim`, `data-gd-val`); `data-gd-none` holds the words of the "nothing matches" line.
+  `data-gd-lead` goes with a "+N more" and is hidden with it.
 * `data-gd-row`: a task row, with `data-gd-i` (its place), `-due`, `-st`, `-rank`, `-stn` (status
   word), `-who` (a token of this page for the person) and `-name`.
 * `data-gd-col`: a sortable table header.
@@ -532,7 +533,7 @@ def _tools(
     )
     return (
         f'<template data-gd-tools><div class="gd-tools">{"".join(groups)}{clear}</div>'
-        f'<p class="meta" role="status" data-gd-none hidden>{page.say("nothing_matches")}</p>'
+        f'<p class="meta" role="status" data-gd-none="{page.say("nothing_matches")}"></p>'
         "</template>"
     )
 
@@ -606,7 +607,7 @@ def _hero(page: _Page, block: dict[str, Any]) -> str:
     percent = math.floor(100 * done / total) if total else 0
     circle = '<circle cx="18" cy="18" r="15.5" fill="none" stroke-width="4" '
     said = page.say("done_of", done=done, total=total) if total else page.say("no_tasks")
-    hooks = f" data-gd-tips{_tip(said)}" if total else ""
+    hooks = f' role="group" aria-label="{said}" data-gd-tips{_tip(said)}' if total else ""
     ring = [
         f'<div class="ring"{hooks}><svg viewBox="0 0 36 36" role="img" aria-label="{said}">',
         circle + 'stroke="var(--track)"' + ("" if total else ' stroke-dasharray="2 2"') + "/>",
@@ -813,11 +814,17 @@ def _timeline(page: _Page, block: dict[str, Any]) -> str:
         foot.append(f"<span{hook}>{page.say('more', n=rest)}</span>")
     if undated:
         foot.append(page.say("undated", n=undated))
+        if rest:
+            # The "+N more" and its separator go together while a filter hides it.
+            foot = [f"<span data-gd-lead>{foot[0]} · </span>{foot[1]}"]
     used = [(s, 0) for s in _LOAD if any(str(r.get("status")) == s for r, _ in shown)]
+    # The list takes the keyboard for its tooltips, so it has a name.
+    name = _t(block["heading"], 80) if block.get("heading") else ""
+    name = name or page.say("sec_next" if block.get("mine") else "sec_timeline")
     body = (
         _tools(page, everything, people, sortable=True)
         + f'<div class="axis">{"".join(axis)}</div>'
-        + f'<ul class="timeline" id="{list_id}" data-gd-tips>{"".join(out)}</ul>'
+        + f'<ul class="timeline" id="{list_id}" aria-label="{name}" data-gd-tips>{"".join(out)}</ul>'
         + (_legend(page, used, values=False) if used else "")
         + (f'<p class="meta">{" · ".join(foot)}</p>' if foot else "")
     )
