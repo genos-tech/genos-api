@@ -27,8 +27,10 @@ from django.test import SimpleTestCase
 from origin.models.common.schedule_models import STATUS_FAILED, STATUS_OK, MemberSchedule
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.search_engine.agent import controller
 from origin.search_engine.agent.tools import app_write_tools
-from origin.services import dashboard_page, schedules
+from origin.search_engine.llm.choice import get_llm_choice
+from origin.services import dashboard_page, schedule_text, schedules
 from origin.services.collab_push import PushOutcome
 from origin.services.schedule_jobs import JOBS, ai_dashboard, run_skill, skill_dashboard
 from origin.tests.test_schedule_job_ai_dashboard import PUSH, TIER_PATH
@@ -213,6 +215,25 @@ class RunTests(DashBase):
         self.assertIn(skill_dashboard.DIRECTIVE, told)
         self.assertIn(run_skill.UNATTENDED_RULES, told)
         self.assertNotIn("Write the answer as a short report", told)
+
+    def test_the_run_uses_the_effort_the_schedule_reports(self):
+        # MIP-2423: with no level stored the form shows the job's default, so the run takes it too.
+        used = []
+
+        def agent(query, ctx, emit, **kwargs):
+            used.append(get_llm_choice().effort)
+            return self.agent(query, ctx, emit, **kwargs)
+
+        sched = self.dash(self.skill())
+        job = JOBS["ai_dashboard"]
+        with mock.patch.object(controller, "run_agent", agent):
+            for stored, level in (("", "low"), ("low", "low"), ("high", "high")):
+                with self.subTest(stored=stored):
+                    sched.ai_effort = stored
+                    sched.save()
+                    self.assertEqual(schedule_text.effective_effort(sched, job), level)
+                    self.assertEqual(schedules._execute(sched), (STATUS_OK, ""))
+                    self.assertEqual(used[-1], level)
 
     def test_the_run_only_reads_and_the_loop_is_in_no_savepoint(self):
         sched = self.dash(self.skill())

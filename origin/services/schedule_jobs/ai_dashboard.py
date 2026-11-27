@@ -418,6 +418,8 @@ def _run_from_skill(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ctx,
         params,
         answer_rules=f"{run_skill.UNATTENDED_RULES} {skill_dashboard.DIRECTIVE}",
+        # This job's default, not "Run a skill"'s: what the form and the catalog show is what runs.
+        effort_default=SUMMARY_EFFORT_DEFAULT,
     )
     if got.skipped:
         return run_skill.skipped_report(got)
