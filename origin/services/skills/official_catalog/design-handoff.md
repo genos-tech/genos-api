@@ -55,4 +55,4 @@ One or two sentences: who uses it and what they get.
 1. <question> (who can answer)
 ```
 
-Source: [Genos skills v0.6.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.6.0/plugins/genos-designer/skills/design-handoff/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.7.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.7.0/plugins/genos-designer/skills/design-handoff/SKILL.md), the runbook this skill was made from.

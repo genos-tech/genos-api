@@ -1,7 +1,7 @@
 {
-  "release": "v0.6.0",
+  "release": "v0.7.0",
   "source": "https://github.com/genos-tech/genos-claude-plugin",
-  "docs_ref": "80d8e99acec167d4e5a17182c4023ac4b31fc8f7",
+  "docs_ref": "4d077244b05c1d87bfac18def7eacc4409c0121d",
   "skills": [
     {
       "slug": "create-task",
@@ -14,6 +14,19 @@
       "tool_level": "act",
       "pack": "general",
       "source_path": "plugins/genos/skills/create-task/SKILL.md"
+    },
+    {
+      "slug": "dashboard-page",
+      "title": "Dashboard page",
+      "description": "A starting point for a dashboard made by a skill: your tasks, or one project or milestone you name, as headline numbers, charts and the tasks that need you. Copy it and change what it shows.",
+      "tags": [
+        "general",
+        "dashboard"
+      ],
+      "icon": "✨",
+      "tool_level": "read",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/dashboard-page/SKILL.md"
     },
     {
       "slug": "handoff",
