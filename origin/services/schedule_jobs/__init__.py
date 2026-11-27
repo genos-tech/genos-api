@@ -237,6 +237,14 @@ class Job:
     # note is saved (`schedule_audience.NOTE_KINDS`). The runner asks who reads that place before
     # every run and hands the job the readers under `AUDIENCE_KEY` (MIP-2354).
     note_target: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # True for a job that posts a message AS the schedule's owner into its chat, not a report
+    # (MIP-2482). It needs a chat (never the Inbox), `run` is not called, the chat rule is the
+    # one for sending a message (`schedule_audience.problem`), and only the app may make, change
+    # or run it: a connected AI app is not offered it.
+    posts_as_owner: bool = False
+    # The most bytes `params` may take, for a job whose parameters are content (a message). None =
+    # the registry's small default (`schedules.MAX_PARAMS_BYTES`).
+    max_params_bytes: int | None = None
 
     @property
     def shareable(self) -> bool:
@@ -288,6 +296,7 @@ from origin.services.schedule_jobs import (  # noqa: E402, F401
     milestone_updates,
     project_updates,
     run_skill,
+    scheduled_message,
     team_activity,
     what_is_left,
     what_to_do_today,

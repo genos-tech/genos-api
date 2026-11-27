@@ -5,20 +5,24 @@ from __future__ import annotations
 from typing import Any
 
 from origin.models.common.user_models import CustomUser
-from origin.search_engine.agent.tools import Tool, ToolContext
+from origin.search_engine.agent.tools import Tool, ToolContext, ToolError
 from origin.services import schedule_text, schedules
 from origin.services.user_time import user_zone
 from origin.views.public.mcp.secretary._schedule_args import (
     AI_EFFORT_PROPERTY,
+    APP_ONLY,
     PLACEMENT_PROPERTIES,
     RECURRENCE_PROPERTIES,
     guarded,
     job_params_schema,
     placement_args,
+    posts_as_owner,
 )
 
 
 def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if posts_as_owner(args.get("job")):
+        raise ToolError(APP_ONLY)
     place = placement_args(args)
     sched = guarded(
         lambda: schedules.create(

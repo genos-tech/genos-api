@@ -88,10 +88,16 @@ from urllib.parse import urlsplit
 from django.conf import settings
 from django.db import transaction
 
-from origin.models.chat.unified_models import Channel, Message
+from origin.models.chat.unified_models import Channel, Message, ReadCursor
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
-from origin.services import inbox_ai, realtime_push, report_memory, schedule_audience
+from origin.services import (
+    inbox_ai,
+    realtime_push,
+    report_memory,
+    schedule_audience,
+    schedule_message,
+)
 from origin.services.mcp_oauth import clean_name
 from origin.services.report_ai import llm
 from origin.services.report_memory import WHY_VALUES
@@ -434,6 +440,9 @@ def check_chat_target(schedule: MemberSchedule) -> Channel:
     channel = schedule_audience.load_target(
         schedule.user_id, schedule.team_id, schedule.deliver_channel_id
     )
+    job = JOBS.get(schedule.job)
+    if channel is None and job is not None and job.posts_as_owner:
+        raise ScheduleRunError(MESSAGE_CHAT_GONE)
     if channel is None:
         raise ScheduleRunError("The chat this report is posted in is no longer available to you.")
     why = schedule_audience.problem(
@@ -447,6 +456,99 @@ def check_chat_target(schedule: MemberSchedule) -> Channel:
         if note_id is not None and note_readers_missing(channel, schedule, note_id):
             raise ScheduleRunError(NOTE_NOT_SHARED)
     return channel
+
+
+MESSAGE_CHAT_GONE = "That chat is no longer available to you, so the message was not sent."
+
+
+def post_as_owner(schedule: MemberSchedule, *, run_at: datetime | None = None) -> Message | None:
+    """Send a `scheduled_message` schedule's message in its chat, as its owner (MIP-2482).
+
+    It is a hand send: the same function the REST send uses, so the message has the owner as its
+    sender, its mentions of people in the chat ring them (someone who has left the chat is not
+    told, as when typed by hand), the other members get the same activity rows, push and unread
+    count, and the outbound webhook fires. Then it is announced to the open apps, which the socket
+    handler does for a hand send. No Inbox item, no report, no AI.
+
+    The chat is asked again on every run (`check_chat_target`) and the stored body checked again;
+    either failing raises in words and nothing is posted. `run_at` keys a tick's run, so a repeat
+    after a crash posts once; "Run now" passes none and posts every time.
+    """
+    from origin.services.schedules import ScheduleRunError  # noqa: PLC0415 (import cycle)
+    from origin.views.chat.message_views import (  # noqa: PLC0415
+        _allocate_seq_and_create_message_with_activities,
+    )
+
+    if not schedule.deliver_channel_id:
+        raise ScheduleRunError(schedule_audience.MESSAGE_NEEDS_CHAT)
+    channel = check_chat_target(schedule)
+    try:
+        body = schedule_message.check_body((schedule.params or {}).get("body"))
+    except schedule_message.MessageProblem as exc:
+        raise ScheduleRunError(str(exc)) from None
+    first_line = schedule_message.preview(body)
+    result = {"title": first_line or schedule.name, "items": 1}
+    key = _chat_key(schedule, run_at) if run_at is not None else None
+    with transaction.atomic():
+        row = MemberSchedule.objects.select_for_update().filter(pk=schedule.pk).first()
+        if row is None:
+            log.info("schedule_delivery_skipped schedule=%s reason=deleted", schedule.id)
+            return None
+        # The chat's row lock, taken before "was the owner up to date?" is asked.
+        Channel.objects.select_for_update().filter(pk=channel.pk).first()
+        if key and Message.objects.filter(channel=channel, correlation_id=key).exists():
+            log.info("schedule_delivery_repeat schedule=%s", schedule.id)
+            return None
+        caught_up = _read_to_the_end(schedule.user_id, channel)
+        message, activities = _allocate_seq_and_create_message_with_activities(
+            channel=channel,
+            sender=schedule.user,
+            body=schedule_message.with_fresh_ids(body),
+            body_text=first_line,
+            parent_id=None,
+            metadata={},
+            correlation_id=key,
+        )
+        if caught_up:
+            # The app marks what a member sends as read; nobody is there to do it here, and the
+            # owner must not find their own message counted as unread once someone replies.
+            ReadCursor.objects.update_or_create(
+                user_id=schedule.user_id,
+                channel=channel,
+                thread_root=None,
+                defaults={"last_read_message": message},
+            )
+        MemberSchedule.objects.filter(pk=schedule.pk).update(last_result=result)
+    schedule.last_result = result
+    realtime_push.push_message(message, realtime_push.CREATED)
+    realtime_push.push_activities(activities)
+    log.info(
+        "schedule_posted_message schedule=%s user=%s channel=%s",
+        schedule.id,
+        schedule.user_id,
+        channel.id,
+    )
+    return message
+
+
+def _read_to_the_end(user_id: Any, channel: Channel) -> bool:
+    """Whether the member has read the chat's newest top-level message (true for an empty chat):
+    only then may their read mark move past a message posted for them, or unread messages would be
+    marked read unseen."""
+    newest = (
+        Message.objects.filter(channel=channel, is_thread_reply=False, deleted_at__isnull=True)
+        .order_by("-seq")
+        .values_list("seq", flat=True)
+        .first()
+    )
+    if newest is None:
+        return True
+    return ReadCursor.objects.filter(
+        user_id=user_id,
+        channel=channel,
+        thread_root__isnull=True,
+        last_read_message__seq__gte=newest,
+    ).exists()
 
 
 NOTE_NOT_SHARED = (

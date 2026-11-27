@@ -104,7 +104,13 @@ from origin.models.common.schedule_models import (
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedule_audience, schedule_delivery, schedule_runner, schedule_text
+from origin.services import (
+    schedule_audience,
+    schedule_delivery,
+    schedule_message,
+    schedule_runner,
+    schedule_text,
+)
 from origin.services.mcp_oauth import clean_name
 from origin.services.schedule_jobs import AI_EFFORT_KEY, AUDIENCE_KEY, JOBS, SHARED_KEY, Report
 from origin.services.user_time import user_zone
@@ -402,13 +408,14 @@ def _check_params_for_owner(
     job = JOBS.get(job_key)
     if job is None or job.check_params is None:
         return params
+    limit = job.max_params_bytes or MAX_PARAMS_BYTES
     checked = job.check_params(ctx, dict(params), schedule_id)
     try:
         size = len(json.dumps(checked, ensure_ascii=False).encode("utf-8"))
     except (TypeError, ValueError):
         raise ScheduleError("`params` must be plain JSON values.") from None
-    if size > MAX_PARAMS_BYTES:
-        raise ScheduleError(f"`params` is too large: at most {MAX_PARAMS_BYTES} bytes.")
+    if size > limit:
+        raise ScheduleError(f"`params` is too large: at most {limit} bytes.")
     return checked
 
 
@@ -428,8 +435,14 @@ def clean_params(job_key: str, params: Any) -> dict[str, Any]:
         size = len(json.dumps(params, ensure_ascii=False).encode("utf-8"))
     except (TypeError, ValueError):
         raise ScheduleError("`params` must be plain JSON values.") from None
-    if size > MAX_PARAMS_BYTES:
-        raise ScheduleError(f"`params` is too large: at most {MAX_PARAMS_BYTES} bytes.")
+    limit = job.max_params_bytes or MAX_PARAMS_BYTES
+    if size > limit:
+        # A message is the member's own text: say it in those words.
+        raise ScheduleError(
+            schedule_message.TOO_LONG
+            if job.posts_as_owner
+            else f"`params` is too large: at most {limit} bytes."
+        )
     schema = job.params_schema or {}
     properties = schema.get("properties") or {}
     for name in params:
@@ -586,6 +599,9 @@ def _clean_target(
     member cannot read, or one this report may not be posted in (who would read it, an AI part),
     is refused in words; see `schedule_audience`."""
     if value is None or value == "":
+        owner_posts = JOBS.get(job)
+        if owner_posts is not None and owner_posts.posts_as_owner:
+            raise ScheduleError(schedule_audience.MESSAGE_NEEDS_CHAT)
         return None
     channel = schedule_audience.load_target(ctx.user_id, ctx.team_id, value)
     if channel is None:
@@ -952,6 +968,11 @@ def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[
         return STATUS_FAILED, "That job no longer exists."
     ctx = ToolContext(team_id=str(sched.team_id), user_id=str(sched.user_id))
     try:
+        if job.posts_as_owner:
+            # A message, not a report (MIP-2482): nothing to run, it is posted as the owner.
+            with transaction.atomic():
+                schedule_delivery.post_as_owner(sched, run_at=run_at)
+            return STATUS_OK, ""
         if sched.deliver_channel_id and job.ai_applies(sched.params):
             # A report that spends AI usage and goes to a chat: ask the audience rule BEFORE the
             # model is called (MIP-2196). Someone added to the chat since the schedule was saved
