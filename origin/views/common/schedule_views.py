@@ -168,6 +168,9 @@ def _job(entry: dict[str, Any]) -> dict[str, Any]:
         "title": entry["title"],
         "description": entry["description"],
         "params": entry["params"],
+        # The member writes a message that is sent as them (MIP-2482): the form shows the chat
+        # editor and `messageChatTargets`, with no Inbox and no push. Absent for the others.
+        **({"postsAsOwner": True} if entry.get("posts_as_owner") else {}),
         "usesAi": entry["uses_ai"],
         # Whether its report may be posted in a chat other people read (MIP-1420): it is about
         # one project. Any job may go to a chat the member is alone in.
@@ -270,11 +273,15 @@ class ScheduleListView(_Base):
                 "aiCreditsOut": _ai_credits_out(request.user.pk),
                 "timeZone": zone.key,
                 "limit": schedules.schedule_limit(request.user.pk),
-                "jobs": [_job(j) for j in schedule_text.job_catalog()],
+                "jobs": [_job(j) for j in schedule_text.job_catalog(owner_posts=True)],
                 "schedules": [_row(s, zone, readable) for s in rows],
                 # The chats a report can be pointed at (MIP-1420), for the form's picker. Whether
                 # a given report may go to one is decided when the schedule is saved.
                 "chatTargets": schedule_audience.chat_targets(request.user.pk, ctx.team_id),
+                # The chats a scheduled message can be sent to (MIP-2482): public group chats too.
+                "messageChatTargets": schedule_audience.message_targets(
+                    request.user.pk, ctx.team_id
+                ),
                 # What the member does not have of the two defaults: one step to (re-)add.
                 "suggestions": [
                     {

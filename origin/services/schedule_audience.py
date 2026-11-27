@@ -42,6 +42,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.acl import active_project_owners
+from origin.services.archive import archived_channel_response
 from origin.services.channel_scope import can_read_chat, chat_member_q, chat_member_rows
 from origin.services.schedule_jobs import JOBS
 
@@ -51,6 +52,11 @@ TARGET_KINDS = (ChannelKind.GM, ChannelKind.PM)
 MAX_TARGETS = 200
 
 NOT_FOUND = "That chat was not found."
+# A scheduled message (MIP-2482): the owner's own words, sent as they would send them.
+MESSAGE_NEEDS_CHAT = "Pick the group chat or project chat to send the message to."
+MESSAGE_KIND = "A scheduled message can be sent to a group chat or a project chat."
+MESSAGE_ARCHIVED = "That chat is archived, so no message can be sent to it."
+MESSAGE_EXTERNAL = "A chat shared with other teams cannot take a scheduled message."
 ARCHIVED = "That chat is archived, so nothing can be posted in it."
 KIND = "A report can be posted in a group chat or a project chat."
 PUBLIC = (
@@ -127,7 +133,11 @@ def problem(
     user_id: Any, team_id: Any, channel: Channel, job_key: str, params: dict[str, Any]
 ) -> str | None:
     """Why this member's `job_key` report may not be posted in `channel`, as a sentence to
-    show; None when it may."""
+    show; None when it may. For a scheduled message (`Job.posts_as_owner`) the question is only
+    whether the owner may send in that chat (`send_problem`): they wrote every word themselves."""
+    job = JOBS.get(job_key)
+    if job is not None and job.posts_as_owner:
+        return send_problem(user_id, team_id, channel)
     if channel.is_deleted or str(channel.team_id) != str(team_id):
         return NOT_FOUND
     if channel.archived_at is not None:
@@ -140,7 +150,6 @@ def problem(
         return PUBLIC
     if not can_read_chat(channel, team_id, user_id):
         return NOT_FOUND
-    job = JOBS.get(job_key)
     reader_ids = readers(channel)
     if job is not None and job.ai_in_private_chat and job.ai_applies(params):
         return None if reader_ids <= {str(user_id)} else AI_NOT_ALONE
@@ -165,6 +174,24 @@ def problem(
     if project is None:
         return NO_PROJECT
     return NOT_EVERYONE if outside_project(reader_ids, project_id) else None
+
+
+def send_problem(user_id: Any, team_id: Any, channel: Channel) -> str | None:
+    """Why this member may not have a scheduled message sent in `channel` (MIP-2482); None when
+    they may. The rule of a hand send (a member of a live chat that is not archived, nor its
+    project), narrowed to group and project chats of this team: never a direct message, and never
+    a chat shared with another team. A public group chat the member joined is fine."""
+    if channel.is_deleted or str(channel.team_id) != str(team_id):
+        return NOT_FOUND
+    if channel.kind not in TARGET_KINDS:
+        return MESSAGE_KIND
+    if channel.is_external:
+        return MESSAGE_EXTERNAL
+    if not can_read_chat(channel, team_id, user_id):  # by membership alone: public chats too
+        return NOT_FOUND
+    if archived_channel_response(channel) is not None:
+        return MESSAGE_ARCHIVED
+    return None
 
 
 def outside_project(reader_ids: set[str], project_id: int) -> bool:
@@ -213,14 +240,32 @@ def readable_ids(user_id: Any, channel_ids: Any) -> set[Any]:
     )
 
 
+def message_targets(user_id: Any, team_id: Any) -> list[dict[str, Any]]:
+    """The chats a scheduled message can be sent to (MIP-2482), for the form's picker: every
+    group chat (public ones too) and project chat the member is in that `send_problem` allows."""
+    return _targets(
+        Channel.objects.filter(
+            Q(project__isnull=True) | Q(project__archived_at__isnull=True),
+            chat_member_q(user_id),
+        ),
+        team_id,
+    )
+
+
 def chat_targets(user_id: Any, team_id: Any) -> list[dict[str, Any]]:
     """The chats this member could point a report at in this team, for the schedule form's
     picker: live, not archived, not shared with another team, ones they are in. Whether a given
     report is allowed in one is decided by `problem`, when the schedule is saved."""
+    return _targets(
+        Channel.objects.filter(chat_member_q(user_id), Q(kind=ChannelKind.PM) | Q(is_private=True)),
+        team_id,
+    )
+
+
+def _targets(chats, team_id: Any) -> list[dict[str, Any]]:
+    """`chats` narrowed to this team's live group and project chats, as the picker's rows."""
     rows = (
-        Channel.objects.filter(
-            chat_member_q(user_id),
-            Q(kind=ChannelKind.PM) | Q(is_private=True),
+        chats.filter(
             team_id=team_id,
             is_deleted=False,
             archived_at__isnull=True,

@@ -12,6 +12,7 @@ from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools import Tool, ToolContext
 from origin.services import schedule_defaults, schedule_text, schedules
 from origin.services.user_time import user_zone
+from origin.views.public.mcp.secretary._schedule_args import without_message
 
 
 def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -20,7 +21,7 @@ def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Read-only on purpose (the tool says readOnlyHint): it never seeds. The Schedules page
     # and the tick create the defaults; here they are only offered in `suggested`.
     mine = schedules.list_schedules(ctx)
-    rows = [schedule_text.present(s, zone) for s in mine]
+    rows = [without_message(schedule_text.present(s, zone)) for s in mine]
     return {
         "time_zone": zone.key,
         "schedules": rows,

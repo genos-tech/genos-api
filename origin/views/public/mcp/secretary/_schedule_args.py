@@ -6,8 +6,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from origin.search_engine.agent.tools import ToolError
+from origin.search_engine.agent.tools import ToolContext, ToolError
 from origin.services import schedules
+from origin.services.schedule_jobs import JOBS
 from origin.services.user_time import user_zone
 
 RECURRENCE_PROPERTIES: dict[str, Any] = {
@@ -136,3 +137,29 @@ __all__ = [
     "recurrence_args",
     "user_zone",
 ]
+
+
+APP_ONLY = (
+    "A scheduled message is sent as the member, so it is made, changed and run only in the Genos "
+    "app (Settings > Schedules). From here it can be listed, paused or deleted."
+)
+
+
+def posts_as_owner(job_key: Any) -> bool:
+    """Whether the job posts a message as the member (MIP-2482): not for a connected AI app."""
+    job = JOBS.get(job_key) if isinstance(job_key, str) else None
+    return job is not None and job.posts_as_owner
+
+
+def schedule_row(ctx: ToolContext, schedule_id: Any):
+    """The member's schedule with this id, or None (the service then says it was not found)."""
+    return next(
+        (s for s in schedules.list_schedules(ctx) if str(s.id) == str(schedule_id)),
+        None,
+    )
+
+
+def without_message(row: dict[str, Any]) -> dict[str, Any]:
+    """A listed schedule without the message it sends: the words are the member's, and the client
+    needs only to know which schedule it is."""
+    return {**row, "params": {}} if posts_as_owner(row.get("job")) else row

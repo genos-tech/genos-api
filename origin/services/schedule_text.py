@@ -165,18 +165,21 @@ def _catalog_params(job: Any) -> dict[str, Any]:
     }
 
 
-def job_catalog() -> list[dict[str, Any]]:
+def job_catalog(*, owner_posts: bool = False) -> list[dict[str, Any]]:
     """What a schedule can run: key, title, what it does and the parameters it takes, and
     (MIP-1212) whether it uses AI, the effort it defaults to and what a run costs at each level.
     A job with an `agent_note` (where an id comes from, MIP-1630) lists it for the AI client; the
     REST page picks its own keys and never shows it. A job behind a switch that is off is left out
-    (`Job.available`)."""
+    (`Job.available`). A job that posts as the member (`Job.posts_as_owner`) is listed only with
+    `owner_posts` (the app's own form): a connected AI app is not offered it."""
     return [
         {
             "job": job.key,
             "title": job.title,
             "description": job.description,
-            "params": _catalog_params(job),
+            # A posting job's content is written in the app's own editor, never a form field.
+            "params": {} if job.posts_as_owner else _catalog_params(job),
+            **({"posts_as_owner": True} if job.posts_as_owner else {}),
             "uses_ai": job.uses_ai,
             **({"saves_note": note_save_sentence()} if job.delivers_note else {}),
             "effort_default": job.effort_default if job.uses_ai else None,
@@ -184,5 +187,5 @@ def job_catalog() -> list[dict[str, Any]]:
             **({"agent_note": job.agent_note} if job.agent_note else {}),
         }
         for job in sorted(JOBS.values(), key=lambda j: j.key)
-        if job.available is None or job.available()
+        if (job.available is None or job.available()) and (owner_posts or not job.posts_as_owner)
     ]
