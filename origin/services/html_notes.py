@@ -678,7 +678,12 @@ def _next_rev(note_type: int, note_id: int) -> int:
 
 
 def append_revision(
-    note_type: int, note_id: int, user_id: str | None, prepared: PreparedHtml
+    note_type: int,
+    note_id: int,
+    user_id: str | None,
+    prepared: PreparedHtml,
+    *,
+    server_rendered: bool = False,
 ) -> NoteHtmlRevision:
     """Add the page as the note's newest revision and drop the ones past `KEEP_REVISIONS`.
 
@@ -697,6 +702,7 @@ def append_revision(
                     size=prepared.size,
                     warnings=prepared.scan.warnings,
                     created_by_id=user_id,
+                    server_rendered=server_rendered,
                 )
             break
         except IntegrityError:
@@ -716,7 +722,13 @@ def mark_html(note_type: int, note_id: int) -> None:
 
 
 def replace_page(
-    *, note_type: int, note, user, prepared: PreparedHtml, keep_title: bool
+    *,
+    note_type: int,
+    note,
+    user,
+    prepared: PreparedHtml,
+    keep_title: bool,
+    server_rendered: bool = False,
 ) -> NoteHtmlRevision:
     """Save a NEW page onto an existing HTML note: title (unless kept), placeholder body, a
     revision, and a version row so the note's history shows the change. One transaction."""
@@ -728,7 +740,13 @@ def replace_page(
         note.body = prepared.body
         note.body_format = BODY_FORMAT_HTML
         note.save(update_fields=["title", "body", "body_format", "ts_updated_at"])
-        revision = append_revision(note_type, note.note_id, getattr(user, "id", None), prepared)
+        revision = append_revision(
+            note_type,
+            note.note_id,
+            getattr(user, "id", None),
+            prepared,
+            server_rendered=server_rendered,
+        )
         snapshot_note_version(
             team=note.team,
             editor=user,
@@ -855,11 +873,16 @@ def _answer(
     return out
 
 
-def save_page(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def save_page(
+    args: dict[str, Any], ctx: ToolContext, *, server_rendered: bool = False
+) -> dict[str, Any]:
     """The plan first (a Free member gets a suggestion and nothing is stored, a lookup that fails
     reads as Core), then the cheap checks, the scan last: the plan's size, then access, the count
     of notes and the rate limit, and only then the (linear but not free) scan of up to the plan's
-    size, so a caller with no access, or past a limit, makes the server do no work on the page."""
+    size, so a caller with no access, or past a limit, makes the server do no work on the page.
+
+    `server_rendered` marks a page the SERVER drew (a dashboard, MIP-2417): its in-app links work
+    in the viewer. A Python keyword, never read from `args`, which a model or a person writes."""
     try:
         limits = html_note_limits.limits_for(ctx.user_id)
     except html_note_limits.HtmlNotesNotOnPlan as not_on_plan:
@@ -870,12 +893,16 @@ def save_page(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except HtmlNoteRefused as refused:
         raise ToolError(str(refused)) from None
     if args.get("note_id") not in (None, ""):
-        return _replace_page(args, ctx, limits)
-    return _create_page(args, ctx, limits)
+        return _replace_page(args, ctx, limits, server_rendered=server_rendered)
+    return _create_page(args, ctx, limits, server_rendered=server_rendered)
 
 
 def _replace_page(
-    args: dict[str, Any], ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits
+    args: dict[str, Any],
+    ctx: ToolContext,
+    limits: html_note_limits.HtmlNoteLimits,
+    *,
+    server_rendered: bool,
 ) -> dict[str, Any]:
     ref = load_readable_note(args, ctx)
     note = ref.note
@@ -912,6 +939,7 @@ def _replace_page(
             user=user,
             prepared=prepared,
             keep_title=not (args.get("title") or "").strip(),
+            server_rendered=server_rendered,
         )
     except Exception as exc:  # noqa: BLE001
         reference = log_failure("save_html_note failed", exc)
@@ -932,7 +960,11 @@ def _replace_page(
 
 
 def _create_page(
-    args: dict[str, Any], ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits
+    args: dict[str, Any],
+    ctx: ToolContext,
+    limits: html_note_limits.HtmlNoteLimits,
+    *,
+    server_rendered: bool,
 ) -> dict[str, Any]:
     note_type = normalize_note_type(args.get("note_type"))
     if note_type == "shared":
@@ -973,7 +1005,9 @@ def _create_page(
         code = _CODE[family]
         try:
             mark_html(code, made["note_id"])
-            revision = append_revision(code, made["note_id"], ctx.user_id, prepared)
+            revision = append_revision(
+                code, made["note_id"], ctx.user_id, prepared, server_rendered=server_rendered
+            )
         except Exception as exc:  # noqa: BLE001
             reference = log_failure("save_html_note failed", exc)
             raise ToolError(f"Failed to save the page (ref {reference}). Nothing was created.")

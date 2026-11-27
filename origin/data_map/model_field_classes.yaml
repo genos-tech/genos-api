@@ -652,6 +652,7 @@ origin.NoteHtmlRevision:
   sha256: none
   size: none
   warnings: none
+  server_rendered: none
   created_by: none
   ts_created_at: none
 origin.NotePermissionMaster:

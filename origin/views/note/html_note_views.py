@@ -96,7 +96,8 @@ class HtmlNoteFrameView(AuthenticatedAPIView):
 
     The note's own read ACL decides (`require_read_role`, the same 404 for an unknown, other-team and
     unreadable note), then this signs a short-lived token for the note's latest revision and answers
-    `{path, nonce, rev, expires_in}`. `path` is relative to the API host (`/h/<token>`, served by
+    `{path, nonce, rev, expires_in, links}` (`links`: the server drew this revision, so the viewer
+    may open the in-app link a click in it posts, MIP-2417). `path` is relative to the API host (`/h/<token>`, served by
     `HtmlNotePageView`, ONCE: every frame load asks for a fresh one); `nonce` is the secret the page's
     first script reports back, given to nobody but this caller (the page route spends the URL before
     any script of the page runs, so the page cannot hand the URL on to learn it). Off (`HTML_NOTES`
@@ -124,6 +125,7 @@ class HtmlNoteFrameView(AuthenticatedAPIView):
             {
                 "path": f"{html_note_pages.PAGE_PATH_PREFIX}{token}",
                 "nonce": html_note_pages.nonce_for(token),
+                "links": revision.server_rendered,
                 "rev": revision.rev,
                 "size": revision.size,
                 "warnings": revision.warnings,
@@ -206,13 +208,18 @@ class HtmlNotePageView(APIView):
         if not html_note_pages.consume(str(token)):
             return gone
 
+        script_nonce = (
+            html_note_pages.script_nonce_for(str(token)) if revision.server_rendered else ""
+        )
         response = self._harden(
             Response(
-                html_note_pages.document(revision.html, html_note_pages.nonce_for(str(token))),
+                html_note_pages.document(
+                    revision.html, html_note_pages.nonce_for(str(token)), script_nonce
+                ),
                 status=status.HTTP_200_OK,
             )
         )
-        response["Content-Security-Policy"] = html_note_pages.content_security_policy()
+        response["Content-Security-Policy"] = html_note_pages.content_security_policy(script_nonce)
         # Django's clickjacking middleware would add `X-Frame-Options: DENY`, which beats
         # `frame-ancestors` and would stop the app from framing its own page; the policy says who may.
         response.xframe_options_exempt = True
