@@ -914,7 +914,16 @@ def _point_label(page: _Page, label: Any, unit: str) -> str:
     return page.day(value)
 
 
-def _chart(page: _Page, points: list[Any], unit: str, added: bool) -> str:
+def _chart(
+    page: _Page,
+    points: list[Any],
+    unit: str,
+    added: bool,
+    names: tuple[str, str] = ("", ""),
+) -> str:
+    """The columns. `names` (escaped) are a skill's own words for the column and the line."""
+    first = names[0] or page.say("closed")
+    second = names[1] or page.say("added")
     points = [p for p in points if isinstance(p, dict)][-MAX_SERIES:]
     closed = [_int(p.get("closed")) for p in points]
     created = [_int(p.get("created")) if added else 0 for p in points]
@@ -927,9 +936,7 @@ def _chart(page: _Page, points: list[Any], unit: str, added: bool) -> str:
     few = len(points) <= 16
     for p, c, a in zip(points, closed, created):
         label = _point_label(page, p.get("label"), unit)
-        said = f"{label}: {c} {page.say('closed')}" + (
-            f", {a} {page.say('added')}" if added else ""
-        )
+        said = f"{label}: {c} {first}" + (f", {a} {second}" if added else "")
         number = f"<b>{c}</b>" if c and few else ""
         tick = f'<u style="--at:{min(1.0, a / top) * 82:.1f}%"></u>' if a else ""
         columns.append(
@@ -941,7 +948,7 @@ def _chart(page: _Page, points: list[Any], unit: str, added: bool) -> str:
         axis = '<div class="xlabels">' + "".join(f"<span>{x}</span>" for x in labels) + "</div>"
     else:
         axis = f'<div class="xlabels ends"><span>{labels[0]}</span><span>{labels[-1]}</span></div>'
-    said = page.say("closed") + ": " + ", ".join(str(c) for c in closed)
+    said = first + ": " + ", ".join(str(c) for c in closed)
     return (
         f'<div class="chart" role="img" aria-label="{said}" data-gd-tips>{"".join(columns)}</div>'
         f"{axis}"
@@ -952,18 +959,17 @@ def _trend(page: _Page, block: dict[str, Any]) -> str:
     unit = str(block.get("unit") or "")
     points = [p for p in _rows(block, "points") if isinstance(p, dict)]
     added = any(_int(p.get("created")) for p in points)
-    chart = _chart(page, points, unit, added)
+    # What the solid column and the line count: a skill's own words, else closed and added.
+    named = block.get("legend")
+    given = named if isinstance(named, list) and len(named) == 2 else ("", "")
+    names = (_t(given[0], 30), _t(given[1], 30))
+    chart = _chart(page, points, unit, added, names)
     head = page.head(block, "sec_trend")
     if not chart:
         return _section(page, head, f'<p class="meta">{page.say("nothing_closed")}</p>')
-    # What the solid column and the line count: a skill's own words, else closed and added.
-    named = block.get("legend")
-    first, second = named if isinstance(named, list) and len(named) == 2 else ("", "")
-    legend = [f'<li><span class="key fill"></span>{_t(first, 30) or page.say("closed")}</li>']
+    legend = [f'<li><span class="key fill"></span>{names[0] or page.say("closed")}</li>']
     if added:
-        legend.append(
-            f'<li><span class="key tick"></span>{_t(second, 30) or page.say("added")}</li>'
-        )
+        legend.append(f'<li><span class="key tick"></span>{names[1] or page.say("added")}</li>')
     if unit in ("day", "week", "month"):
         average = sum(_int(p.get("closed")) for p in points) / max(1, len(points))
         legend.append(f"<li>{page.say(f'per_{unit}', n=f'{average:.1f}'.removesuffix('.0'))}</li>")

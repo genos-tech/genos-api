@@ -266,6 +266,17 @@ class SavedPageTests(SimpleTestCase):
         self.assertIn('aria-label="2 Closed, 4 Open"', body)
         self.assertIn('aria-label="closed: 2"', body)
 
+    def test_a_charts_tooltip_uses_the_words_of_its_own_legend(self):
+        trend = {
+            "type": "trend",
+            "unit": "day",
+            "legend": ["won", "lost"],
+            "points": [{"label": "2026-11-01", "closed": 2, "created": 1}],
+        }
+        body = body_of(render([trend]))
+        self.assertIn("Nov 1: 2 won, 1 lost", Tags(body).attrs("title"))
+        self.assertIn('aria-label="won: 2"', body)
+
     def test_filters_are_offered_only_when_they_can_help(self):
         def tools(block, **extra):
             return Tags(body_of(render([block], **extra)))
