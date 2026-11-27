@@ -87,6 +87,11 @@ class TaskActivityActionType(models.TextChoices):
     # `TaskDelivery` row itself is deleted. Only a manually recorded link
     # can be removed, so this never says a webhook link went away.
     PR_UNLINKED = "pr_unlinked", "PR unlinked"
+    # An automation rule matched the task (MIP-2498): metadata carries the rule's id and name,
+    # the project ids and, for a refusal, a reason code. The field changes a rule makes are the
+    # ordinary rows, with `metadata.via.kind == "rule"`.
+    AUTOMATION_APPLIED = "automation_applied", "Moved or changed by a rule"
+    AUTOMATION_REFUSED = "automation_refused", "Rule not applied"
 
 
 class TaskActivity(models.Model):

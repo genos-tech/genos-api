@@ -22,9 +22,9 @@ Delta envelope shape (matches `serializers.DeltaEnvelopeSerializer`):
     }
 
 The frontend persists `server_time` as the next `?since=` value. Soft-deleted
-messages come back in `deletes` (the array of UUIDs that disappeared since
-the checkpoint) so the client can apply tombstones without parsing every
-message row.
+messages come back as rows with `deletedAt` set. `deletes` is the array of
+UUIDs no longer in this chat at all since the checkpoint (moved with their
+task to another chat, MIP-2505).
 """
 
 from datetime import timedelta
@@ -54,6 +54,7 @@ from origin.serializers.chat.unified_serializers import (
 from origin.services import (
     message_tombstone,
     message_via,
+    moved_messages,
     realtime_push,
     thread_summary_cleanup,
     webhook_enqueue,
@@ -574,6 +575,13 @@ def _prefetched_messages(qs):
     return MessageSerializer.annotate_task_comment_count(qs)
 
 
+def _deletes_since(channel, since, *, is_thread_reply) -> list[str]:
+    # A load with no checkpoint (first, or too old) holds nothing to drop: the client evicts.
+    if since is None:
+        return []
+    return moved_messages.deleted_ids_since(channel, since, is_thread_reply=is_thread_reply)
+
+
 class MessagesDeltaView(AuthenticatedAPIView):
     """GET /api/v3/channels/{channel_id}/messages/?since=ISO
 
@@ -647,11 +655,11 @@ class MessagesDeltaView(AuthenticatedAPIView):
         # `deletes` is a separate array per the envelope spec, but since
         # `apply_since_filter` already returns soft-deleted rows in the
         # `messages` array (with deletedAt set), the client can read
-        # tombstones directly. We keep `deletes` for hard-deletes (e.g.
-        # post-purge) — currently always empty.
+        # tombstones directly. `deletes` names what is no longer in this
+        # chat at all: rows that moved to another one (MIP-2505).
         envelope_data = {
             "messages": messages_data,
-            "deletes": [],
+            "deletes": _deletes_since(channel, since, is_thread_reply=False),
         }
         return Response(
             build_delta_response(envelope_data, server_time, force_full, retention=retention)
@@ -787,7 +795,10 @@ class ThreadMessagesDeltaView(AuthenticatedAPIView):
         qs = _prefetched_messages(qs)
         return Response(
             build_delta_response(
-                {"messages": MessageSerializer(qs, many=True).data, "deletes": []},
+                {
+                    "messages": MessageSerializer(qs, many=True).data,
+                    "deletes": _deletes_since(channel, since, is_thread_reply=True),
+                },
                 server_time,
                 force_full,
                 retention=retention,
