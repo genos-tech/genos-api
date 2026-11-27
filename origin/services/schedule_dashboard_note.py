@@ -28,6 +28,7 @@ from origin.models.common.schedule_models import PAUSE_NOTE, MemberSchedule
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.note_access import load_readable_note
 from origin.services import dashboard_page, html_notes
+from origin.services.schedule_dashboards import in_team_space
 from origin.services.schedule_delivery import _run_key
 from origin.services.schedule_jobs import Report
 from origin.services.schedules import ScheduleRunError
@@ -47,8 +48,9 @@ class SchedulePauseRun(ScheduleRunError):
         self.reason = reason
 
 
-def note_path(note_id: int) -> str:
-    return f"/workspace/notes/my/{note_id}"
+def note_path(note_id: int, *, team: bool = False) -> str:
+    """The app address of the dashboard note, by the section of Notes that shows it."""
+    return f"/workspace/notes/{'team' if team else 'my'}/{note_id}"
 
 
 def _existing_note_id(
@@ -133,7 +135,7 @@ def deliver_note(
             # An UPDATE of this column only, so the member's concurrent edits to the others stand.
             MemberSchedule.objects.filter(pk=sched.pk).update(output=output)
             sched.output = output
-    link = note_path(note_id)
+    link = note_path(note_id, team=in_team_space(ctx.user_id, ctx.team_id, note_id))
     head = {
         "heading": "Dashboard page",
         "key": "items",
