@@ -92,7 +92,8 @@
       "title": "Weekly review",
       "description": "Weekly review and plan from Genos: what got done, what slipped, what is stuck, and the top five for next week, with an optional personal note to keep it.",
       "tags": [
-        "general"
+        "general",
+        "dashboard"
       ],
       "icon": "✨",
       "tool_level": "act",
@@ -176,7 +177,8 @@
       "title": "Weekly priorities",
       "description": "Set the team's priorities for the week from the data: the top five things that matter, what is blocked, who is carrying too much, and what to stop, saved as a note after a yes.",
       "tags": [
-        "founder"
+        "founder",
+        "dashboard"
       ],
       "icon": "🚀",
       "tool_level": "act",
@@ -212,7 +214,8 @@
       "title": "Content week",
       "description": "Show what publishes this week and what is still waiting for approval, from the content tasks and campaign milestones in Genos: by day, with owner, status and what each piece is waiting on. Reads only.",
       "tags": [
-        "marketing"
+        "marketing",
+        "dashboard"
       ],
       "icon": "📣",
       "tool_level": "read",
@@ -260,7 +263,8 @@
       "title": "Status report",
       "description": "Write a status report for a Genos project, milestone or sprint from the data, not from memory: what changed, what needs a decision, risks and what is stuck, grouped by project or milestone, and save it as a note after a yes.",
       "tags": [
-        "product"
+        "product",
+        "dashboard"
       ],
       "icon": "🧭",
       "tool_level": "act",
@@ -308,7 +312,8 @@
       "title": "Research update",
       "description": "Write the weekly research update from what really closed and what was found: finished tasks, new findings notes, what is blocked and what is next, saved as a note after a yes.",
       "tags": [
-        "research"
+        "research",
+        "dashboard"
       ],
       "icon": "🔬",
       "tool_level": "act",
@@ -356,7 +361,8 @@
       "title": "Pipeline review",
       "description": "Review a sales pipeline kept as Genos tasks: find the deals that went quiet, say what the next step is for each, and after a yes set the due dates, priorities or statuses in one call.",
       "tags": [
-        "sales"
+        "sales",
+        "dashboard"
       ],
       "icon": "🤝",
       "tool_level": "act",
@@ -392,7 +398,8 @@
       "title": "Study week",
       "description": "Lay out the study week: the deadlines in the next seven days, the classes and events in the calendar, the to-dos already planned, and where the free blocks are, so the heaviest day is visible before it arrives. Reads only.",
       "tags": [
-        "student"
+        "student",
+        "dashboard"
       ],
       "icon": "🎓",
       "tool_level": "read",
@@ -416,7 +423,8 @@
       "title": "Support digest",
       "description": "Write the weekly support digest from the support tasks in Genos: the themes customers hit, how many reports each, what was fixed, which escalations are still open and how old they are. Saves it as a note after a yes.",
       "tags": [
-        "support"
+        "support",
+        "dashboard"
       ],
       "icon": "🎧",
       "tool_level": "act",

@@ -60,6 +60,22 @@ PACKS: dict[str, tuple[str, str, str]] = {
     "genos-founder": ("genos-founder", "founder", "🚀"),
 }
 
+# The tag of a skill that can make a dashboard (MIP-2418): the dashboard form lists only skills that
+# carry it. An ordinary tag, so a member can put it on their own skill. A skill is here only when its
+# result is a report of numbers or lists, built by READING (a dashboard run has no write tool, so a
+# "save as a note" step never happens there), and it needs no figures the person must paste in.
+DASHBOARD_TAG = "dashboard"
+DASHBOARD_SKILLS: dict[str, str] = {
+    "status-report": "what changed, what needs a decision and what is stuck, from the data",
+    "weekly-review": "the week's closed, slipped and stuck work and a top five",
+    "weekly-priorities": "five priorities, the blockers and the load per person as counts",
+    "pipeline-review": "a table of deals with days quiet and the next step",
+    "support-digest": "customer issue themes with counts, fixes and open escalations",
+    "research-update": "what was done, found and stuck in the period",
+    "content-week": "this week's publishing list by day and what waits for approval",
+    "study-week": "the week's deadlines, classes and to-dos by day",
+}
+
 # Runbooks that do not run in the app, with the reason. Everything else is translated.
 EXCLUDED: dict[str, str] = {
     "setup": "writes the Genos rules into Claude's memory file and installs plugins: Claude Code only",
@@ -278,7 +294,7 @@ def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict,
                 "slug": name,
                 "title": title_m.group(1).strip(),
                 "description": build_description(meta["description"]),
-                "tags": [tag],
+                "tags": [tag, DASHBOARD_TAG] if name in DASHBOARD_SKILLS else [tag],
                 "icon": icon,
                 "tool_level": "act" if writes(out, tools) else "read",
                 "pack": tag,
@@ -286,6 +302,9 @@ def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict,
             }
         )
         bodies[name] = out + "\n"
+    unknown = set(DASHBOARD_SKILLS) - {s["slug"] for s in skills}
+    if unknown:
+        raise BuildError(f"dashboard skills that are not in the catalog: {sorted(unknown)}")
     missing = set(EXCLUDED) - seen_excluded
     if missing:
         raise BuildError(f"excluded runbooks not found in {ref}: {sorted(missing)}")
