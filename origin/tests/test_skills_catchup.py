@@ -18,14 +18,13 @@ from origin.models.chat.unified_models import Activity
 from origin.models.skills.skill_models import TOOL_LEVEL_READ
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent import controller
-from origin.search_engine.llm.types import FunctionCall
 from origin.search_engine.agent.tools import base as tool_base
 from origin.search_engine.agent.tools.list_my_unread import LIST_MY_UNREAD
 from origin.search_engine.agent.tools.list_my_waiting_comments import (
     LIST_MY_WAITING_COMMENTS_INAPP,
 )
+from origin.search_engine.llm.types import FunctionCall
 from origin.services.skills import official, text
-from origin.services.task_comment_fanout import fan_out_task_comment
 from origin.tests.test_skills_api import LIST
 from origin.tests.test_skills_official import official_skills, sync_command
 from origin.tests.test_unread_digest import UnreadBase
