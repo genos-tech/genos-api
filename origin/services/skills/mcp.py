@@ -122,7 +122,8 @@ def list_runnable(user_id: Any, team_id: Any, query: str = "") -> dict[str, Any]
     rows = _guard(lambda: run.runnable(user, team_id))
     out = []
     for r in rows:
-        if query and query not in f"{r['slug']} {r['title']} {r['description']}".lower():
+        words = f"{r['slug']} {r['title']} {r['description']} {' '.join(r['tags'])}"
+        if query and query not in words.lower():
             continue
         group = r["group"]
         author = {
@@ -139,6 +140,8 @@ def list_runnable(user_id: Any, team_id: Any, query: str = "") -> dict[str, Any]
                 "owner": r["ownerName"] or None,
                 "title": r["title"],
                 "description": r["description"],
+                # What the skill is made for, as the app's pickers filter (`dashboard`).
+                "tags": r["tags"],
                 "argument_hint": r["argumentHint"] or None,
                 "tool_level": r["toolLevel"],
                 "official": bool(r["isOfficial"]),

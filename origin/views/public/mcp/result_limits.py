@@ -342,7 +342,7 @@ HINTS: dict[str, str] = {
     "list_sprints": "Pass a smaller `limit`, or narrow with project_id or status.",
     "get_sprint_summary": "Ask for one sprint at a time with sprint_id.",
     "get_task_blockers": "Ask for one task at a time with task_id.",
-    "list_my_skills": "Narrow with `query` (a word of the skill's name, title or description).",
+    "list_my_skills": "Narrow with `query` (a word of the skill's name, title, description or tags).",
     "get_skill": "Ask for one skill at a time with `skill`.",
     "run_skill": "Run one skill at a time with `skill`, and keep `input` short.",
     "get_task_history": "Pass a smaller `limit` for the newest changes.",

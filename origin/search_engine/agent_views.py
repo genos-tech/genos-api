@@ -3872,11 +3872,17 @@ class AgentFeaturesView(AuthenticatedAPIView):
         # ADDITIVE, and present only while HTML_NOTES is on (MIP-2215): the key's presence is how the
         # web client knows to offer `.html` import. `max_bytes` is the plan's page limit, null when
         # the plan has no HTML notes (Free), so the dialog can say so before a file is sent.
+        # `max_storage_bytes` and `used_bytes` (MIP-2453) are the member's HTML storage quota and
+        # what their kept pages take of it, for Settings → Plan & Usage; both null on Free.
         if getattr(settings, "HTML_NOTES", False):
             from origin.services import html_note_limits  # noqa: PLC0415
 
             row = html_note_limits.limits_for_tier(resolved["tier"])
-            payload["html_notes"] = {"max_bytes": row.max_bytes if row is not None else None}
+            payload["html_notes"] = {
+                "max_bytes": row.max_bytes if row is not None else None,
+                "max_storage_bytes": row.max_storage_bytes if row is not None else None,
+                "used_bytes": (html_note_limits.storage_used(user_id) if row is not None else None),
+            }
         return Response(payload)
 
 

@@ -1801,7 +1801,9 @@ class PlansViewTests(BillingTestBase):
 
     def test_plans_payload_html_notes_come_from_the_one_html_note_table(self):
         # MIP-2362: the comparison shows HTML page limits read off HTML_NOTE_LIMITS (no second copy):
-        # None for a plan without HTML pages, else the count, the page size in bytes and saves per hour.
+        # None for a plan without HTML pages, else the storage quota and page size in bytes and saves
+        # per hour (MIP-2453: no count of pages, and a new key, so an older web client drops the rows
+        # instead of reading a `max_notes` that is gone).
         from origin.services import html_note_limits  # noqa: PLC0415
 
         with self._price_mock():
@@ -1812,18 +1814,19 @@ class PlansViewTests(BillingTestBase):
         for tier, limits in by_tier.items():
             row = html_note_limits.HTML_NOTE_LIMITS[tier]
             if row is None:
-                self.assertIsNone(limits["html_notes"], tier)
+                self.assertIsNone(limits["html_pages"], tier)
             else:
                 self.assertEqual(
-                    limits["html_notes"],
+                    limits["html_pages"],
                     {
-                        "max_notes": row.max_notes,
+                        "max_storage_bytes": row.max_storage_bytes,
                         "max_bytes": row.max_bytes,
                         "saves_per_hour": row.saves_per_hour,
                     },
                     tier,
                 )
-        self.assertIsNone(by_tier["free"]["html_notes"])
+        self.assertIsNone(by_tier["free"]["html_pages"])
+        self.assertNotIn("html_notes", by_tier["core"])
 
     def test_plans_payload_counts_follow_the_enforced_tier_default_not_unlimited(self):
         # A TIER_QUOTAS table that predates webhooks_max / schedules_max resolves to the tier default on the
