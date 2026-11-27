@@ -24,7 +24,11 @@ skill and `manifest.json`) and `origin/services/skills/official_slugs.py`; both 
 `manage.py sync_official_skills` reads them. The output is deterministic: a second run changes nothing.
 
 The script fails (exit 1) when a translated body still mentions Claude Code, the connector, git or gh,
-or a tool the in-app agent does not have (when `--tools-dump` is given). Fix the rule, not the output.
+or a tool the in-app agent does not have. Fix the rule, not the output.
+
+`--tools-dump` is needed (MIP-2448): without the in-app agent's tool list nobody can tell a skill that
+only reads from one that writes, or check the tool names. Make it first, where Django runs:
+`python manage.py shell -c "exec(open('scripts/dump_in_app_tools.py').read())"` (writes tools.json).
 """
 
 from __future__ import annotations
@@ -249,7 +253,7 @@ def source_line(release: str, pack_dir: str, name: str) -> str:
     return f"Source: [Genos skills {release}]({url}), the runbook this skill was made from."
 
 
-def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict, dict[str, str]]:
+def build(docs: Path, ref: str, release: str, tools: dict) -> tuple[dict, dict[str, str]]:
     listing = _git(docs, "ls-tree", "-r", "--name-only", ref).split()
     skills: list[dict] = []
     bodies: dict[str, str] = {}
@@ -329,23 +333,20 @@ def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict,
     return manifest, bodies
 
 
-def lint(slug: str, body: str, tools: dict | None) -> list[str]:
+def lint(slug: str, body: str, tools: dict) -> list[str]:
     out: list[str] = []
     for line in body.split("\n"):
         if _FORBIDDEN.search(line):
             out.append(f"{slug}: still Claude Code or connector text: {line.strip()[:140]}")
-    if tools:
-        known = set(tools["registry"]) | {p for ps in tools["params"].values() for p in ps}
-        for name in sorted(set(_TOOL_WORD.findall(body))):
-            if name in known or name in FIELD_NAMES:
-                continue
-            out.append(f"{slug}: `{name}` is not an in-app tool or parameter")
+    known = set(tools["registry"]) | {p for ps in tools["params"].values() for p in ps}
+    for name in sorted(set(_TOOL_WORD.findall(body))):
+        if name in known or name in FIELD_NAMES:
+            continue
+        out.append(f"{slug}: `{name}` is not an in-app tool or parameter")
     return out
 
 
-def writes(body: str, tools: dict | None) -> bool:
-    if not tools:
-        return True
+def writes(body: str, tools: dict) -> bool:
     return any(n in set(tools["write"]) for n in _TOOL_WORD.findall(body))
 
 
@@ -413,7 +414,15 @@ def main() -> int:
     ap.add_argument("--release", required=True, help="the release tag of the public plugin, v0.6.0")
     ap.add_argument("--tools-dump", type=Path, help="JSON from scripts/dump_in_app_tools.py")
     args = ap.parse_args()
-    tools = json.loads(args.tools_dump.read_text()) if args.tools_dump else None
+    if not args.tools_dump:
+        print(
+            "Nothing written: --tools-dump is needed, or every skill would be marked as one that "
+            "writes. Make tools.json where Django runs with scripts/dump_in_app_tools.py (its "
+            "docstring has the command), then pass --tools-dump tools.json.",
+            file=sys.stderr,
+        )
+        return 2
+    tools = json.loads(args.tools_dump.read_text())
     try:
         manifest, bodies = build(args.docs, args.ref, args.release, tools)
     except BuildError as exc:
