@@ -12,6 +12,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.task.task_models import TaskMaster
+from origin.services.task_number_alias import display_id_q
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import as_int, as_uuid
 from origin.views.utils.scope_guards import is_project_member, reachable_project_ids
@@ -82,7 +83,7 @@ class SearchTasksView(AuthenticatedAPIView):
             match = Q(title__icontains=query)
             id_match = None
             if m := (_ID_RE.match(query) or _COMPACT_ID_RE.match(query)):
-                id_match = Q(project__code__iexact=m.group(1), project_task_number=int(m.group(2)))
+                id_match = display_id_q(m.group(1), int(m.group(2)))
             elif m := _NUMBER_RE.match(query):
                 id_match = Q(project_task_number=int(m.group(1)))
             if id_match is not None:
