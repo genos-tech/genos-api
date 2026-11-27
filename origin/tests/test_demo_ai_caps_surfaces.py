@@ -250,14 +250,16 @@ class SummaryViewTests(_Base):
             self.assertEqual(kept.status_code, 200, call.__name__)
 
     def test_the_team_ceiling_reaches_both_summaries_of_that_team_only(self):
+        # Another team over its ceiling first: the ledger row of a block stays for the test.
+        for call in (self._note, self._thread):
+            with over_the_team_ceiling(self.demo_team.pk):
+                resp, _ = call(self.pro, self.pro_team, cached=False)
+            self.assertEqual(resp.status_code, 200, call.__name__)
         for call in (self._note, self._thread):
             with over_the_team_ceiling(self.pro_team.pk):
                 resp, regen = call(self.pro, self.pro_team, cached=False)
             self.assertEqual(resp.json()["category"], "ai_monthly_limit", call.__name__)
             regen.assert_not_called()
-            with over_the_team_ceiling(self.demo_team.pk):
-                resp, _ = call(self.pro, self.pro_team, cached=False)
-            self.assertEqual(resp.status_code, 200, call.__name__)
 
     def test_a_normal_user_is_served_while_the_demo_cap_is_zero_and_never_counted(self):
         with (

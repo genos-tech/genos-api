@@ -608,10 +608,11 @@ class AskPathEnforcementTests(_StreamingBase):
 
     @AUTHORITATIVE
     def test_the_team_ceiling_refuses_that_teams_ask_only(self):
-        with over_the_team_ceiling(self.team.pk):
-            self.assertEqual(self._ask().json()["category"], "ai_monthly_limit")
+        # Another team over its ceiling first: the ledger row of a block stays for the test.
         with over_the_team_ceiling(uuid.uuid4()):
             self.assertEqual(self._ask().status_code, 200)
+        with over_the_team_ceiling(self.team.pk):
+            self.assertEqual(self._ask().json()["category"], "ai_monthly_limit")
 
     @AUTHORITATIVE
     def test_the_free_breaker_is_off_by_default(self):
