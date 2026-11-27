@@ -27,6 +27,13 @@ railway config plan                         # read-only: what would change
 railway config apply                        # shows the plan again and asks you to confirm
 ```
 
+**"requires Railway CLI 5.42.1 or newer" with a new CLI** is not about the
+version. The SDK (3.16.0, and still 3.19.1) runs `$_ --version`, and under a
+wrapper such as `timeout` that is the wrapper. `cli-path.mjs`, imported first by
+`railway.ts`, drops such a `$_` so the SDK uses `railway` from `PATH` (MIP-2480).
+Run it from the repo root: inside `.railway/` the CLI loads the SDK before
+`railway.ts`, and a wrapped command still fails there.
+
 `plan` is always safe. Read it for `to destroy`: it should say **0**.
 `apply` marks destructive changes before it asks.
 
