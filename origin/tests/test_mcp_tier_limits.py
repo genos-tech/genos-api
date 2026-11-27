@@ -84,6 +84,11 @@ class LimitsBase(McpBase):
         limits._local.clear()
         self.addCleanup(cache.clear)
         self.addCleanup(limits._local.clear)
+        # "Store unavailable" is logged once a minute per process: start each test as if it had not
+        # been, so what a test logs does not depend on which test ran before it (MIP-2445).
+        quiet = mock.patch.object(limits, "_last_down_log", float("-inf"))
+        quiet.start()
+        self.addCleanup(quiet.stop)
         # A cache error elsewhere opens a 5 s breaker that makes every throttle allow.
         self.addCleanup(setattr, throttles, "_down_until", 0.0)
         env = _env(self.mode)
@@ -695,9 +700,14 @@ class TestShadow(LimitsBase):
         with mock.patch.object(
             limits, "throttle_cache", side_effect=ConnectionInterrupted(connection=None)
         ):
-            with self.assertNoLogs("origin.services.mcp_tier_limits", "INFO"):
+            with self.assertLogs("origin.services.mcp_tier_limits", "INFO") as logs:
                 for _ in range(3):
                     self.assertEqual(self.call_ok().status_code, 200)
+        # The outage is said once; nothing is measured.
+        self.assertEqual(
+            [r.getMessage() for r in logs.records],
+            ["mcp.tier_limits store unavailable; counting in this process"],
+        )
         self.assertEqual(limits._local, {})  # noqa: SLF001
 
 

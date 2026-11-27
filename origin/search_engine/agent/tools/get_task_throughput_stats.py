@@ -35,6 +35,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
+from origin.services.user_time import zone_for_user_id
 
 _MAX_DAYS = 365
 _VALID_BUCKETS = {"day", "week"}
@@ -115,8 +116,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         }
 
     trunc = TruncDay if bucket == "day" else TruncWeek
+    # The asking member's days and weeks, as get_my_throughput counts them (MIP-2451).
+    zone = zone_for_user_id(ctx.user_id)
     rows = (
-        qs.annotate(bucket_start=trunc("ts_created_at"))
+        qs.annotate(bucket_start=trunc("ts_created_at", tzinfo=zone))
         .values("bucket_start")
         .annotate(created=created_expr, closed=closed_expr)
         .order_by("bucket_start")
