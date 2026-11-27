@@ -48,9 +48,7 @@ class LocalDayTests(JobBase):
         with self.at_now():
             tool = GET_MY_THROUGHPUT.run({"days": 7, "bucket": "day"}, self.ctx)
             # A page that others read counts "mine" with its own query.
-            shared = ai_dashboard._mine(
-                self.ctx, 7, "day", {str(self.user.id), str(self.user2.id)}
-            )
+            shared = ai_dashboard._mine(self.ctx, 7, "day", {str(self.user.id), str(self.user2.id)})
         for out in (tool, shared):
             self.assertEqual(
                 self.closed_days(out["buckets"], "bucket_start"), [(DAY.isoformat(), 1)]
