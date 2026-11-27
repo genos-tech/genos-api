@@ -45,6 +45,8 @@ TASK_KEYS = {
     "display_id",
     "title",
     "status",
+    # MIP-2492, additive: the project's own label for `status`, or null.
+    "custom_status",
     "priority",
     "project_id",
     "team_id",

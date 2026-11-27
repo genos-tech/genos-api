@@ -55,6 +55,7 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services.milestone_service import sync_backing_task
+from origin.services.project_statuses import custom_status_ref
 from origin.services.task_card_post import post_task_created_card
 from origin.services.task_status_reason import (
     locked_status_change,
@@ -187,6 +188,7 @@ def _serialize_task(t: TaskMaster) -> dict:
         "display_id": t.display_id,
         "title": t.title,
         "status": t.status,
+        "custom_status": custom_status_ref(t),
         "priority": t.priority,
         "project_id": t.project_id,
         "team_id": str(t.team_id) if t.team_id else None,
@@ -284,9 +286,11 @@ class TaskListCreateView(PublicApiView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        qs = TaskMaster.objects.filter(
-            project_id__in=allowed, is_deleted=False, is_init_task=False
-        ).order_by("-ts_updated_at")
+        qs = (
+            TaskMaster.objects.select_related("custom_status")
+            .filter(project_id__in=allowed, is_deleted=False, is_init_task=False)
+            .order_by("-ts_updated_at")
+        )
         total = qs.count()
         tasks = qs[offset : offset + limit]
         return Response(

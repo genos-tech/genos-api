@@ -2,7 +2,7 @@ from django.db import models
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import ProjectMaster, drop_stale_custom_status
 from origin.models.task.sprint_models import Sprint
 
 
@@ -128,6 +128,15 @@ class MilestoneMaster(models.Model):
     title = models.CharField(max_length=255)
     description = models.JSONField(blank=True, null=True)
     status = models.CharField(default="Open")
+    # As `TaskMaster.custom_status`; mirrored onto the backing task by `sync_backing_task`.
+    custom_status = models.ForeignKey(
+        "origin.ProjectStatus",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="status_milestones",
+        to_field="status_id",
+    )
     status_code = models.BigIntegerField(blank=True, null=True)
     priority = models.CharField(blank=True, null=True)
     priority_code = models.BigIntegerField(blank=True, null=True)
@@ -147,6 +156,10 @@ class MilestoneMaster(models.Model):
     is_deleted = models.BooleanField(default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        drop_stale_custom_status(self, kwargs)
+        super().save(*args, **kwargs)
 
 
 class MilestoneAssignees(models.Model):

@@ -396,6 +396,7 @@ EXPECTED_KEY_ORDER = [
     "startDate",
     "daysLeft",
     "status",
+    "customStatusId",
     "assigneeId",
     "assigneeEmail",
     "assigneeName",
@@ -444,6 +445,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [{"id": "l", "url": "https://example.com", "title": "PR"}],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#2",
@@ -474,6 +476,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {"f1": "v1"},
+        "customStatusId": None,
     },
     {
         "id": "id#3",
@@ -504,6 +507,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#4",
@@ -534,6 +538,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#5",
@@ -564,6 +569,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [{"id": "l", "url": "https://example.com", "title": "PR"}],
         "customFieldValues": {"f1": "v4"},
+        "customStatusId": None,
     },
     {
         "id": "id#6",
@@ -594,6 +600,7 @@ EXPECTED_ROWS = [
         "sprintId": "sprintId#1",
         "links": [],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#7",
@@ -624,6 +631,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#8",
@@ -654,6 +662,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {"f1": "v7"},
+        "customStatusId": None,
     },
     {
         "id": "id#9",
@@ -684,6 +693,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [{"id": "l", "url": "https://example.com", "title": "PR"}],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#10",
@@ -714,6 +724,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#11",
@@ -744,6 +755,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {"f1": "v10"},
+        "customStatusId": None,
     },
     {
         "id": "id#12",
@@ -774,6 +786,7 @@ EXPECTED_ROWS = [
         "sprintId": "sprintId#1",
         "links": [],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#13",
@@ -804,6 +817,7 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [{"id": "l", "url": "https://example.com", "title": "PR"}],
         "customFieldValues": {},
+        "customStatusId": None,
     },
     {
         "id": "id#14",
@@ -834,5 +848,6 @@ EXPECTED_ROWS = [
         "sprintId": None,
         "links": [],
         "customFieldValues": {"f1": "v13"},
+        "customStatusId": None,
     },
 ]
