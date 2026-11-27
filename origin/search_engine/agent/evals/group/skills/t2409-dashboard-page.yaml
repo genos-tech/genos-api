@@ -2,11 +2,13 @@
 # JSON object the server can draw, from numbers it read?
 #
 # WRITTEN, NOT RUN (Ken: no paid eval without their go). The group loader globs `group/*.yaml` only,
-# so neither CI nor `agent_eval_group` reads this folder. The in-app runner cannot yet put a skill's
-# text in front of the model; a driver for these needs `system_extra` = the skill block of the
-# published `dashboard-page` + `UNATTENDED_RULES` + `skill_dashboard.DIRECTIVE` (what
-# `run_skill.run_for_answer` sends), on the in-app v1 fixture. Pass = `parse_dashboard` accepts the
-# answer, then `expect`, then Claude judges the transcript against the fixture's real counts.
+# so neither CI nor `agent_eval_group` reads this folder.
+#
+# Driver (MIP-2378): `group/skill_dashboard_eval.py`, command `agent_eval_dashboards --suite skill`: the
+# scheduled skill run (`run_skill.run_for_answer`, as a dashboard schedule calls it) on the in-app v1
+# fixture, the published `dashboard-page` synced in a transaction that is rolled back. Pass =
+# `parse_dashboard` accepts the answer, then `expect`, then Claude judges the transcript against the
+# fixture's real counts.
 
 - id: t2409.dashboard-page.mine.en
   lang: en
