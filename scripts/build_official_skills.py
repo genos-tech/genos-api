@@ -66,6 +66,7 @@ PACKS: dict[str, tuple[str, str, str]] = {
 # "save as a note" step never happens there), and it needs no figures the person must paste in.
 DASHBOARD_TAG = "dashboard"
 DASHBOARD_SKILLS: dict[str, str] = {
+    "dashboard-page": "the starter template: answers with the dashboard data itself (MIP-2409)",
     "status-report": "what changed, what needs a decision and what is stuck, from the data",
     "weekly-review": "the week's closed, slipped and stuck work and a top five",
     "weekly-priorities": "five priorities, the blockers and the load per person as counts",
