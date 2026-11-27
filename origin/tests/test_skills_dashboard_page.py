@@ -69,7 +69,7 @@ class TextAgreesWithTheDirectiveTests(SimpleTestCase):
             "meters": [skill_dashboard.MAX_BLOCK_ROWS],
             "workload": [skill_dashboard.MAX_PEOPLE],
             "timeline": [skill_dashboard.MAX_BLOCK_ROWS],
-            "attention": [skill_dashboard.MAX_GROUPS, 3],
+            "attention": [skill_dashboard.MAX_GROUPS, skill_dashboard.MAX_ROWS],
             "table": [skill_dashboard.MAX_COLUMNS, skill_dashboard.MAX_TABLE_ROWS],
             "list": [skill_dashboard.MAX_BLOCK_ROWS],
         }
