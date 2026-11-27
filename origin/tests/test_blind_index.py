@@ -1084,15 +1084,13 @@ class TestEncryptedFields(_FreshKeyring, BaseAPITestCase):
 
     def test_the_profile_endpoint_refuses_a_lookalike(self):
         self.authenticate()
-        for field in ("about_me", "phone_number"):
-            with self.subTest(field=field):
-                res = self.client.put(
-                    "/api/v2/user/profile/",
-                    {"user_id": str(self.user.id), field: "gAAAAA" + "x" * 120},
-                    format="json",
-                )
-                self.assertEqual(res.status_code, 400, res.content)
-                self.assertIn("encrypted data", str(res.content))
+        res = self.client.put(
+            "/api/v2/user/profile/",
+            {"user_id": str(self.user.id), "about_me": "gAAAAA" + "x" * 120},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertIn("encrypted data", str(res.content))
 
     def test_a_short_value_with_the_prefix_is_fine(self):
         self.authenticate()

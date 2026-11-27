@@ -162,10 +162,9 @@ def presence_profile(user) -> dict:
 
     Narrow enough for the widest audience above. A guest is in their host
     team's room through the team shell `GetMyTeamsView` gives them, so the
-    same card reaches colleagues and outsiders alike: no phone number,
-    because that is a teammates-only field (`_without_phone`), and no email.
-    Neither belongs on a presence ping, and both reach every reader through
-    the roster, which is already narrowed per reader.
+    same card reaches colleagues and outsiders alike: no email. It does not
+    belong on a presence ping, and it reaches every reader through the
+    roster, which is already narrowed per reader.
 
     Location follows `location_shared` exactly as a roster row read by
     somebody else does. `timezone` is left out: the client pins it from the
