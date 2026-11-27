@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0298_project_status_mip2492"),
+        ("origin", "0299_task_number_alias_mip2497"),
     ]
 
     operations = [
