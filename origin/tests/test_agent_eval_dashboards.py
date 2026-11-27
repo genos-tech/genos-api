@@ -534,6 +534,15 @@ class CommandTests(FixtureBase):
         self.assertIn("FAIL  t2361.create-mine.en rep 1  (proposed_write)", text)
         self.assertEqual([r["case_id"] for r in rows], ["t2361.create-mine.en"])
 
+    def test_the_cap_stops_the_mcp_client_after_the_call_that_crossed_it(self):
+        client = ScriptedClient(reply(text_block("x"), tokens=(100_000_000, 0)))
+        with mock.patch.object(
+            agent_eval_dashboards.Command, "client_factory", lambda self=None: client
+        ):
+            text = self.run_command("--suite", "mcp", "--ken-approved", "--cost-cap-usd", "20")
+        self.assertIn("cost cap reached", text)
+        self.assertEqual(len(client.requests), 1)
+
     def test_without_the_fixture_it_refuses_instead_of_building_it(self):
         fixture.TeamMaster.objects.filter(owner_id=fixture.FIXTURE_USER_ID).update(is_demo=False)
         with self.assertRaisesMessage(CommandError, "agent_eval_setup"):
