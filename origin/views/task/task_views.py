@@ -75,6 +75,7 @@ from origin.services.task_milestone_move import (
 from origin.services.task_milestone_move import (
     cascade_tree_position_to_subtasks as _cascade_tree_position_to_subtasks,
 )
+from origin.services.task_number_alias import remember_numbers
 from origin.services.task_progress import progress_at
 from origin.services.task_project_move import (
     collect_descendant_task_ids as _collect_descendant_task_ids,
@@ -1071,7 +1072,17 @@ class TaskMasterView(AuthenticatedAPIView):
         # one field" usage patterns.
         serializer = TaskMasterSerializer(task, data=update_data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            # `task` still holds the project and number it is leaving; the save
+            # below nulls the number, so the old display id is kept first, in
+            # one transaction with it (MIP-2497).
+            with transaction.atomic():
+                if project_changed and not was_scaffold:
+                    remember_numbers(
+                        TaskMaster.objects.filter(task_id=task.task_id).values_list(
+                            "project_id", "project_task_number", "task_id"
+                        )
+                    )
+                serializer.save()
 
             # Collaborators M2M: absent key => leave untouched, a list
             # (incl. []) => wholesale replace. Read from request.data (not

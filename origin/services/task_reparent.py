@@ -17,6 +17,7 @@ from origin.services.task_milestone_move import (
     bridge_milestone_to_parent,
     cascade_tree_position_to_subtasks,
 )
+from origin.services.task_number_alias import remember_number
 from origin.services.task_project_move import (
     collect_descendant_task_ids,
     relocate_task_satellites,
@@ -342,6 +343,8 @@ def move_task_to_project(task, project_id, *, report: dict | None = None) -> Non
     destination = ProjectMaster.objects.get(project_id=project_id)
     old_project_id, old_team_id = task.project_id, task.team_id
     with transaction.atomic():
+        # The old display id keeps opening it (MIP-2497).
+        remember_number(task)
         task.project_id = destination.project_id
         task.team_id = destination.team_id
         # Unique per project: null it so the move can't collide, then

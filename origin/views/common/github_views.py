@@ -69,6 +69,7 @@ from origin.services.pr_references import CLOSES as PR_CLOSES
 from origin.services.pr_references import PART_OF as PR_PART_OF
 from origin.services.pr_references import parse_pr_references
 from origin.services.task_delivery import canonical_pr_url, sync_pull_request
+from origin.services.task_number_alias import display_ids, former_numbers_q
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
 
@@ -698,15 +699,27 @@ def _branch_candidate_tasks(head_ref: str, team_ids: list, *select_related: str,
     match = Q()
     if numbers:
         match |= Q(project_task_number__in=numbers)
+        # The branch may carry the id a task had before it moved (MIP-2497).
+        match |= former_numbers_q(numbers, team_ids)
     if task_ids:
         match |= Q(task_id__in=task_ids)
-    return TaskMaster.objects.select_related(*select_related).filter(
-        match,
-        team_id__in=team_ids,
-        is_deleted=False,
-        project__code__isnull=False,
-        project_task_number__isnull=False,
+    return (
+        TaskMaster.objects.select_related(*select_related)
+        .prefetch_related("number_aliases__project")
+        .filter(
+            match,
+            team_id__in=team_ids,
+            is_deleted=False,
+            project__code__isnull=False,
+            project_task_number__isnull=False,
+        )
     )
+
+
+def _branch_names_task(head_ref: str, task) -> bool:
+    """Does `head_ref` carry a display id of `task`, current or from before a move?"""
+    ids = display_ids(task)
+    return bool(ids) and _branch_match_re(*ids).search(head_ref) is not None
 
 
 def _close_tasks_for_merged_pr(
@@ -776,12 +789,8 @@ def _close_tasks_for_merged_pr(
     for task in candidates:
         if task.task_id in part_of_ids:
             continue
-        if task.task_id not in linked_ids:
-            display_id = task.display_id
-            if not display_id or display_id.startswith("#"):
-                continue
-            if not _branch_match_re(display_id).search(head_ref):
-                continue
+        if task.task_id not in linked_ids and not _branch_names_task(head_ref, task):
+            continue
         # Per-user opt-in. Assignee's preference wins; reporter's
         # preference is intentionally ignored (the assignee owns the
         # task's "done" decision).
@@ -910,12 +919,8 @@ def _record_pr_comment_activity(
         "line": comment.get("line"),
     }
     created = 0
-    pattern = _branch_match_re  # forward ref; resolved at call time
     for task in candidates:
-        display_id = task.display_id
-        if not display_id or display_id.startswith("#"):
-            continue
-        if not pattern(display_id).search(head_ref):
+        if not _branch_names_task(head_ref, task):
             continue
         # Idempotency guard — webhook redeliveries (e.g. retry after a
         # transient failure) shouldn't produce duplicate activity rows.
@@ -965,10 +970,7 @@ def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str, tea
     }
     created = 0
     for task in candidates:
-        display_id = task.display_id
-        if not display_id or display_id.startswith("#"):
-            continue
-        if not _branch_match_re(display_id).search(head_ref):
+        if not _branch_names_task(head_ref, task):
             continue
         if TaskActivity.objects.filter(
             task=task,
@@ -1001,12 +1003,7 @@ def _tasks_for_branch(head_ref: str, team_ids: list) -> list:
     if not head_ref or not team_ids:
         return []
     candidates = _branch_candidate_tasks(head_ref, team_ids, "project")
-    return [
-        task
-        for task in candidates
-        if not task.display_id.startswith("#")
-        and _branch_match_re(task.display_id).search(head_ref)
-    ]
+    return [task for task in candidates if _branch_names_task(head_ref, task)]
 
 
 def _tasks_named_in_pr_text(pr: dict, team_ids: list) -> list[tuple]:
@@ -1027,18 +1024,24 @@ def _tasks_named_in_pr_text(pr: dict, team_ids: list) -> list[tuple]:
             numbers.add(number)
     if not numbers:
         return []
-    candidates = TaskMaster.objects.select_related("project").filter(
-        project_task_number__in=numbers,
-        team_id__in=team_ids,
-        is_deleted=False,
-        project__code__isnull=False,
-        project__is_deleted=False,
+    candidates = (
+        TaskMaster.objects.select_related("project")
+        .prefetch_related("number_aliases__project")
+        .filter(
+            Q(project_task_number__in=numbers) | former_numbers_q(numbers, team_ids),
+            team_id__in=team_ids,
+            is_deleted=False,
+            project__code__isnull=False,
+            project__is_deleted=False,
+        )
     )
-    return [
-        (task, refs[task.display_id.upper()])
-        for task in candidates
-        if task.display_id.upper() in refs
-    ]
+    named = []
+    for task in candidates:
+        # A PR may name one task by its old and its new id; "Part of" wins, as for one id.
+        rules = {refs[i.upper()] for i in display_ids(task) if i.upper() in refs}
+        if rules:
+            named.append((task, PR_PART_OF if PR_PART_OF in rules else PR_CLOSES))
+    return named
 
 
 def _tasks_for_pr(pr: dict, team_ids: list) -> tuple[list, dict]:
@@ -1663,11 +1666,13 @@ def _handle_pr_comment_event(
 # can see.
 
 
-def _branch_match_re(display_id: str) -> re.Pattern[str]:
-    """Match a branch name that contains `display_id` at a non-alnum
-    boundary, case-insensitive. Avoids false positives like "GEN-4" → "GEN-42"."""
+def _branch_match_re(display_id: str, *former_ids: str) -> re.Pattern[str]:
+    """Match a branch name that contains `display_id` (or one of the task's
+    `former_ids`) at a non-alnum boundary, case-insensitive. Avoids false
+    positives like "GEN-4" → "GEN-42"."""
+    ids = "|".join(re.escape(i) for i in (display_id, *former_ids))
     return re.compile(
-        rf"(^|[^A-Za-z0-9]){re.escape(display_id)}([^A-Za-z0-9]|$)",
+        rf"(^|[^A-Za-z0-9])(?:{ids})([^A-Za-z0-9]|$)",
         re.IGNORECASE,
     )
 
@@ -2225,7 +2230,7 @@ def _log_links(route: str, account: "_GithubCredential | _CredentialSet") -> Non
 def _pulls_for_task(
     credentials: _CredentialSet,
     task,
-    display_id: str,
+    ids: list[str],
     repo_pulls: list[tuple[str, str, list[dict]]],
     *,
     bypass_cache: bool = False,
@@ -2235,7 +2240,7 @@ def _pulls_for_task(
     two sources (live pulls walk + persisted `task.links` auto-links)
     and the html_url dedupe behave identically — see
     `GithubPullsForTaskView`'s docstring for the source semantics."""
-    pattern = _branch_match_re(display_id)
+    pattern = _branch_match_re(*ids)
     pulls: list[dict] = []
     seen_urls: set[str] = set()
     # --- Source 1: recent pulls whose head branch matches display_id ----
@@ -2297,15 +2302,15 @@ def _pulls_for_task(
 
 def _resolve_task_display_id(task_id: str):
     """Common task lookup + display-id guard shared by both endpoints.
-    Returns (task, display_id) on success or a Response on failure."""
+    Returns (task, ids) on success or a Response on failure, `ids` being the
+    task's current display id and any it had before a move."""
     try:
         task = TaskMaster.objects.select_related("project").get(task_id=task_id)
     except TaskMaster.DoesNotExist:
         return None, Response({"detail": "task_not_found"}, status=status.HTTP_404_NOT_FOUND)
-    display_id = task.display_id
-    if not display_id or display_id.startswith("#"):
+    if task.display_id.startswith("#"):
         return None, None  # signal "empty result"
-    return (task, display_id), None
+    return (task, display_ids(task)), None
 
 
 class GithubBranchesForTaskView(APIView):
@@ -2330,13 +2335,13 @@ class GithubBranchesForTaskView(APIView):
             return err
         if resolved is None:
             return Response({"branches": []})
-        _task, display_id = resolved
+        _task, ids = resolved
 
         credentials = _CredentialSet(request.user)
         if not credentials.connected:
             return Response({"branches": []})
 
-        pattern = _branch_match_re(display_id)
+        pattern = _branch_match_re(*ids)
         repos = _watched_repos(request.user)
         bypass_cache = request.GET.get("fresh") == "1"
 
@@ -2416,7 +2421,7 @@ class GithubPullsForTaskView(APIView):
             return err
         if resolved is None:
             return Response({"pulls": []})
-        task, display_id = resolved
+        task, ids = resolved
 
         credentials = _CredentialSet(request.user)
         if not credentials.connected:
@@ -2425,9 +2430,7 @@ class GithubPullsForTaskView(APIView):
         repos = _watched_repos(request.user)
         bypass_cache = request.GET.get("fresh") == "1"
         repo_pulls = _collect_repo_pulls(credentials, repos, bypass_cache=bypass_cache)
-        pulls = _pulls_for_task(
-            credentials, task, display_id, repo_pulls, bypass_cache=bypass_cache
-        )
+        pulls = _pulls_for_task(credentials, task, ids, repo_pulls, bypass_cache=bypass_cache)
         _log_links("pulls_for_task", credentials)
         return Response({"pulls": pulls})
 
@@ -2490,16 +2493,19 @@ class GithubPullsForTasksView(APIView):
         if not credentials.connected:
             return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
 
-        with_display: list[tuple[TaskMaster, str]] = []
+        with_display: list[tuple[TaskMaster, list[str]]] = []
         # Same walkable-id batch as the task-dependency endpoint closed
         # in #255: narrow rather than refuse, so one stray id does not
         # blank the whole PR column.
         task_ids = [t for t in task_ids if can_access_task(t, request.user.id)]
-        for task in TaskMaster.objects.filter(task_id__in=task_ids).select_related("project"):
-            display_id = task.display_id
-            if not display_id or display_id.startswith("#"):
+        for task in (
+            TaskMaster.objects.filter(task_id__in=task_ids)
+            .select_related("project")
+            .prefetch_related("number_aliases__project")
+        ):
+            if task.display_id.startswith("#"):
                 continue
-            with_display.append((task, display_id))
+            with_display.append((task, display_ids(task)))
         if not with_display:
             return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
 
@@ -2508,10 +2514,10 @@ class GithubPullsForTasksView(APIView):
         repo_pulls = _collect_repo_pulls(credentials, repos, bypass_cache=bypass_cache)
 
         incomplete: list[str] = []
-        for task, display_id in with_display:
+        for task, ids in with_display:
             failed_before = credentials.failed_lookups
             pulls_by_task[str(task.task_id)] = _pulls_for_task(
-                credentials, task, display_id, repo_pulls, bypass_cache=bypass_cache
+                credentials, task, ids, repo_pulls, bypass_cache=bypass_cache
             )
             # A repo whose pulls list could not be read may hold this task's
             # PR, so then no task can be called complete.
