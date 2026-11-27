@@ -1,3 +1,5 @@
+// Keep this first: it must run before "railway/iac" is evaluated (MIP-2480).
+import "./cli-path.mjs";
 import { defineRailway, github, preserve, project, service } from "railway/iac";
 
 // The cron services (MIP-857). Railway's Config as Code is deprecated: existing
