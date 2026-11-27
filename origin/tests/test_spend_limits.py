@@ -18,7 +18,7 @@ from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from origin.search_engine import spend_limits
+from origin.search_engine import metered, spend_limits
 from origin.search_engine.agent_views import _credit_gate
 from origin.search_engine.models import AiSpendEvent
 from origin.services.report_ai import llm
@@ -70,6 +70,21 @@ class LimitTests(_Base):
             self.assertFalse(spend_limits.monthly_limit_reached(OTHER_TEAM))
             self.assertFalse(spend_limits.monthly_limit_reached(""))
             self.assertFalse(spend_limits.monthly_limit_reached(None))
+
+    def test_any_spelling_of_the_team_id_is_the_same_team(self):
+        """MIP-2450: a view takes the team id from the request body."""
+        spellings = (TEAM.upper(), TEAM.replace("-", ""), "{" + TEAM + "}", uuid.UUID(TEAM))
+        for spelling in spellings:
+            # What the ledger is written with, for an ask that sent this spelling.
+            self.assertEqual(metered.spend_kwargs_for("ask", team_id=spelling)["team_id"], TEAM)
+        spend_row(team_id=TEAM, usd_micro=2_000_000)
+        with limits(team_usd=2.0):
+            for spelling in spellings:
+                cache.clear()
+                self.assertTrue(spend_limits.monthly_limit_reached(str(spelling)), spelling)
+        for nothing in ("", None):
+            self.assertEqual(metered.spend_kwargs_for("ask", team_id=nothing)["team_id"], "")
+        self.assertEqual(spend_limits.canonical_team_id("not-a-uuid"), "not-a-uuid")
 
     def test_last_month_does_not_count(self):
         row = spend_row(team_id=TEAM, jpy_milli=10**9, usd_micro=10**9)

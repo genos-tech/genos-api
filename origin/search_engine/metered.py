@@ -40,6 +40,7 @@ from origin.search_engine import spend_recorder
 from origin.search_engine.llm import spend
 from origin.search_engine.models import AiRequestCost
 from origin.search_engine.quota import get_effective_tier
+from origin.search_engine.spend_limits import canonical_team_id
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ def spend_kwargs_for(
         "surface": surface,
         "request_id": str(uuid.uuid4()),
         "user_id": str(user_id or ""),
-        "team_id": str(team_id or ""),
+        "team_id": canonical_team_id(team_id),
         "plan": plan,
         "effort": getattr(chosen, "effort", "") or "",
         "credit_budget_usd_micro": int(credit_budget_usd_micro or 0),
