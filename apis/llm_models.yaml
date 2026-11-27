@@ -502,20 +502,25 @@ providers:
           class: highend
           label: GPT-5.6 Sol
           note: Very slow, but best for very complex questions.
-          # ⚠️ PROMOTIONAL price: OpenAI's page says "GPT-5.6 Sol's
-          # promotional pricing is available until November 30, 2026" and
-          # does not say what it costs afterwards. Re-read the page.
-          price: { input: 4.00, output: 20.00, cached_input: 0.40, cache_write: 5.00 }
+          # ⚠️ NOT what OpenAI charges today, on purpose (MIP-2372, Ken
+          # 2026-11-27). OpenAI lists a PROMOTIONAL $4/$20 and says it
+          # "is available until November 30, 2026", with no price for
+          # after. We keep the pre-promotion $5/$30 so we never charge
+          # less than OpenAI does once the promotion ends. The other
+          # rates sit at the same level, by OpenAI's own ratios: cached
+          # read 0.1x input, 30-minute write 1.25x input, and over 272K
+          # prompt tokens 2x input and cache rates, 1.5x output.
+          # RE-PRICE Sol when OpenAI publishes its new price.
+          price: { input: 5.00, output: 30.00, cached_input: 0.50, cache_write: 6.25 }
           long_prompt_price:
               above_tokens: 272000
-              input: 8.00
-              output: 30.00
-              cached_input: 0.80
-              cache_write: 10.00
-          # Up to 272K prompt tokens: level with claude-opus-5-5 on input
-          # and output and dearer on cache reads ($0.40 vs $0.20), so the
-          # `highend` caps below are sized on these two. Over 272K Sol is
-          # the dearest model in the catalog ($8/$30).
+              input: 10.00
+              output: 45.00
+              cached_input: 1.00
+              cache_write: 12.50
+          # The most expensive rung in the catalog, so it is the model
+          # worst-case-at-cap is sized on — the `highend` caps below are
+          # effectively "how much Sol per day".
 
 # =====================================================================
 #  Per-tier daily caps, BY CLASS
@@ -540,8 +545,8 @@ providers:
 #    middle  gpt-5.6-terra and gemini-3.1-pro-preview $2/$12 (the 2026-07
 #            sizing used $3/$15, so the worst case at the middle cap is
 #            lower than these caps were sized for)
-#    highend gpt-5.6-sol and claude-opus-5-5 $4/$20 (the sizing used
-#            sol at $5/$30; the Sol price is promotional, see its entry)
+#    highend gpt-5.6-sol    $5/$30  (unchanged; OpenAI's promotional
+#            price is lower, see its entry)
 #  and the mid rung count is still 3, while premium DROPPED from 3 to 2
 #  (claude-opus-4-7 + 4-8 collapsed into one Opus rung; now 5.5 at $4/$20). Worst-case
 #  exposure therefore went down, not up. The caps were not re-sized with

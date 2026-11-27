@@ -554,13 +554,14 @@ class ShippedRateCardTests(SimpleTestCase):
             f"call they serve would be silently dropped from cost totals",
         )
 
-    def test_openai_rungs_match_openais_pricing_page(self):
+    def test_openai_rungs_are_priced_from_openais_pricing_page(self):
         """https://developers.openai.com/api/docs/pricing, Standard tier,
-        read 2026-11-27 (MIP-2372). Sol's was promotional until 11-30."""
+        read 2026-11-27 (MIP-2372). Except Sol: OpenAI's price is a
+        promotion ending 2026-11-30, so we keep the pre-promotion level."""
         pinned = {
             "gpt-5.6-luna": ((0.20, 1.20, 0.02, 0.25), (0.40, 1.80, 0.04, 0.50)),
             "gpt-5.6-terra": ((2.00, 12.00, 0.20, 2.50), (4.00, 18.00, 0.40, 5.00)),
-            "gpt-5.6-sol": ((4.00, 20.00, 0.40, 5.00), (8.00, 30.00, 0.80, 10.00)),
+            "gpt-5.6-sol": ((5.00, 30.00, 0.50, 6.25), (10.00, 45.00, 1.00, 12.50)),
         }
         for model, (short, long) in pinned.items():
             with self.subTest(model=model):
