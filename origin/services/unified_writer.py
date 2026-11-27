@@ -422,6 +422,7 @@ def write_task_comment_as_thread_reply(
     body: list,
     project_id: Optional[int] = None,
     bypass_flag: bool = False,
+    announce_header: bool = False,
 ) -> Optional[Message]:
     """Mirror a legacy `TaskComments` row as a v3 thread-reply `Message`
     under the PM task header.
@@ -447,6 +448,9 @@ def write_task_comment_as_thread_reply(
     `UNIFIED_MESSAGING_DUAL_WRITE` setting, but the comment fan-out, the
     demo seeder and `repair_task_comment_mirrors` run regardless of that
     runtime flag. They pass `True`.
+
+    `announce_header`: tell open chats about a card this call had to make. Only a comment
+    someone just wrote asks for it: an import or a seeder would push one per old task.
 
     Returns the created/found Message on success, None on any failure.
     Never raises — the caller's legacy `TaskComments` save is the
@@ -511,8 +515,9 @@ def write_task_comment_as_thread_reply(
             # milestones (which always post a header) worked.
             #
             # The header is the task's full card (MIP-2483), built where every card is
-            # (`task_card_post.header_parts`); posted silently, so a comment on an old task
-            # notifies who it always did. Sender is the task's reporter (the card's author),
+            # (`task_card_post.header_parts`); posted silently, with no `MessageMention` rows
+            # and no activity, so a comment on an old task notifies who it always did and puts
+            # nobody's old card in their list of mentions. Sender is the task's reporter (the card's author),
             # never the commenter.
             from origin.models.task.task_models import TaskMaster
 
@@ -561,7 +566,7 @@ def write_task_comment_as_thread_reply(
                         reply_count=0,
                     )
                     # Chats that are open see the new card now, not at their next sync.
-                    if not activity_suppressed():
+                    if announce_header and not activity_suppressed():
                         realtime_push.push_message(parent, realtime_push.CREATED)
                     logger.info(
                         "[unified_writer] lazily created PM task-card header for "

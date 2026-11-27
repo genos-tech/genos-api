@@ -264,6 +264,25 @@ class RepairTaskCardsTests(AppBase):
 
         self.assertEqual(task_card.card_values(plain), task_card.card_values(muted))
 
+    def test_only_the_tasks_first_heading_message_is_ever_rewritten(self):
+        card = self._card(self.stale)
+        other = Message.objects.create(
+            channel=self.channel,
+            sender=self.user,
+            seq=900,
+            body=BLOCKS,
+            body_text="hand written",
+            task_id=self.stale.task_id,
+        )
+
+        counts = self._run("--apply")
+
+        self.assertEqual(counts["not_a_card"], "1")
+        other.refresh_from_db()
+        self.assertEqual(other.body, BLOCKS)
+        card.refresh_from_db()
+        self.assertIn("Status: Closed", _text(card.body))
+
     def test_a_card_left_in_another_projects_chat_is_not_touched(self):
         other = ProjectMaster.objects.create(
             team=self.team, project_name="Other", owner=self.user, project_system_user=self.user

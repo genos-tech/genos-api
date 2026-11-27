@@ -17,6 +17,11 @@ from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services import realtime_push, task_card_post
 from origin.services.activity_suppression import suppress_task_activity
 from origin.services.milestone_manage import delete_milestone
+from origin.services.sprint_manage import delete_sprint, update_sprint
+from origin.services.task_milestone_conversion import (
+    convert_milestone_to_task,
+    convert_task_to_milestone,
+)
 from origin.signals.task_signals import update_tasks_recorded
 
 from .status_reason_support import with_reason
@@ -223,6 +228,17 @@ class AppEditsRefreshTheCardTests(RefreshBase):
         self.assertIn("Status: WIP", _text(self._card().body))
 
 
+class ConversionCardTests(RefreshBase):
+    def test_converting_to_a_milestone_and_back_rewrites_the_card(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            milestone = convert_task_to_milestone(self.task.task_id)
+        self.assertTrue(_text(self._card().body).startswith("🚩"))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            convert_milestone_to_task(milestone.milestone_id)
+        self.assertTrue(_text(self._card().body).startswith("🧾"))
+
+
 class MilestoneCardRefreshTests(CardPostBase):
     def setUp(self):
         super().setUp()
@@ -301,6 +317,26 @@ class MilestoneCardRefreshTests(CardPostBase):
 
         self.assertIn("Status: Deleted", _text(self._card().body))
         self.assertEqual(self._card().metadata["taskStatus"], "Deleted")
+
+    def test_renaming_and_deleting_the_sprint_updates_its_row(self):
+        sprint = Sprint.objects.create(
+            team=self.team,
+            project=self.project,
+            name="Sprint 7",
+            sequence_number=7,
+            start_date="2026-11-16",
+            end_date="2026-11-29",
+        )
+        self._update(sprint_id=sprint.sprint_id)
+        sprint.refresh_from_db()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            update_sprint(sprint, name="Sprint seven")
+        self.assertIn("Sprint: Sprint seven", _text(self._card().body))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            delete_sprint(sprint)
+        self.assertIn("Sprint: —", _text(self._card().body))
 
     def test_removing_every_assignee_reads_unassigned(self):
         self._update(assignee_ids=[])

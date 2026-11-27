@@ -36,6 +36,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 
 from origin.middleware.current_user import get_current_source, get_current_user
+from origin.models.chat.unified_models import Message
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectCustomField, ProjectMaster
@@ -577,12 +578,29 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
                 )
     # A queryset update fires no signal, so a cascade that wrote a field the chat card shows
     # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483).
-    if _CARD_FIELDS.intersection(tracked):
-        for pk in ids:
-            row = before.get(pk)
-            if row is not None and not row["is_init_task"]:
-                _schedule_card_refresh(task_id=pk)
+    if shown := _CARD_FIELDS.intersection(tracked):
+        for pk in _changed_with_a_card(ids, before, shown):
+            _schedule_card_refresh(task_id=pk)
     return count
+
+
+def _changed_with_a_card(ids, before: dict, shown: frozenset) -> list:
+    """Of `ids`, the tasks that have a chat card and had one of the `shown` fields change: a bulk
+    cascade must not cost a card lookup per row it merely touched."""
+    changed = [
+        row["pk"]
+        for row in TaskMaster.objects.filter(pk__in=ids).values("pk", *shown)
+        if row["pk"] in before
+        and not before[row["pk"]]["is_init_task"]
+        and any(row[f] != before[row["pk"]][f] for f in shown)
+    ]
+    if not changed:
+        return []
+    return list(
+        Message.objects.filter(task_id__in=changed, is_thread_reply=False, deleted_at__isnull=True)
+        .values_list("task_id", flat=True)
+        .distinct()
+    )
 
 
 # ---------------------------------------------------------------------------

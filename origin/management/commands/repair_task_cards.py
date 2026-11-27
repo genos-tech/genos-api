@@ -22,6 +22,11 @@ from origin.services.task_card import card_values
 from origin.views.chat.message_views import rewrite_card_message
 
 
+def _opens_with_a_heading(body) -> bool:
+    first = body[0] if isinstance(body, list) and body else None
+    return isinstance(first, dict) and first.get("type") == "heading"
+
+
 class Command(BaseCommand):
     help = "Rebuild bare or out-of-date task cards in project chats. Dry run unless --apply."
 
@@ -31,7 +36,16 @@ class Command(BaseCommand):
 
     def handle(self, *args, apply=False, limit=0, **options):
         counts = dict.fromkeys(
-            ("checked", "title_only", "out_of_date", "current", "other_chat", "failed", "written"),
+            (
+                "checked",
+                "title_only",
+                "out_of_date",
+                "current",
+                "other_chat",
+                "not_a_card",
+                "failed",
+                "written",
+            ),
             0,
         )
         cards = (
@@ -45,7 +59,18 @@ class Command(BaseCommand):
             .select_related("channel", "sender", "task")
             .order_by("channel_id", "seq")
         )
+        seen: set[tuple] = set()
         for card in cards.iterator(chunk_size=200):
+            # The card is the FIRST top-level message of its task in the chat, as everywhere
+            # else reads it, and it opens with a heading. Anything else is left alone: a rebuild
+            # keeps nothing of the old text.
+            if (card.channel_id, card.task_id) in seen:
+                counts["not_a_card"] += 1
+                continue
+            seen.add((card.channel_id, card.task_id))
+            if not _opens_with_a_heading(card.body):
+                counts["not_a_card"] += 1
+                continue
             counts["checked"] += 1
             # A task moved to another project leaves its card behind: rebuilding it would show
             # the new project's facts to the old project's chat.
