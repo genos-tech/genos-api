@@ -537,6 +537,13 @@ origin.MessageMention:
   mentioned_user: none
   via_group_id: none
   ts_created_at: none
+origin.MessageMovedAway:
+  id: none
+  channel: none
+  message_id: none
+  is_thread_reply: none
+  inline_files: none
+  moved_at: none
 origin.MessageReaction:
   id: none
   message: none

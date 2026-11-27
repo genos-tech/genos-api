@@ -1,20 +1,26 @@
 """A task moved to another project takes its chat card and comment thread along (MIP-2505)."""
 
+from datetime import timedelta
 from unittest import mock
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 
 from origin.models.chat.unified_models import (
     Activity,
     ActivityType,
     Channel,
     ChannelKind,
+    ChannelMember,
     Flag,
     Message,
+    MessageMovedAway,
     ReadCursor,
 )
 from origin.models.common.team_models import TeamMembers
+from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -22,11 +28,18 @@ from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.search_engine.models import ThreadSummary
 from origin.services import realtime_push, task_card_move
+from origin.services.demo_seeder import delete_demo_team_data
 from origin.services.unified_writer import (
     task_comment_message_uuid,
     write_task_comment_as_thread_reply,
 )
 from origin.views.common.media_views import _may_read_media
+from origin.views.utils.note_role import (
+    NOTE_TYPE_CHAT,
+    ROLE_EDITOR,
+    ROLE_OWNER,
+    get_effective_role,
+)
 
 from .status_reason_support import with_reason
 from .test_task_card_post import CardPostBase
@@ -226,6 +239,210 @@ class AgentMoveTests(MoveBase):
 
         self.assertFalse(_may_read_media(path, self.user2.id))
         self.assertTrue(_may_read_media(path, self.newcomer.id))
+
+
+class LeftBehindTests(MoveBase):
+    """MIP-2516: offline devices, pasted images and thread notes."""
+
+    def setUp(self):
+        super().setUp()
+        self.task = self._create(assignee_id=str(self.user.id))
+        self.card = self._card_of(self.task)
+        self.path = f"chats/{self.channel.id}/inline/{'a' * 32}.png"
+        self.reply = self._comment(self.task, 1)
+        Message.objects.filter(pk=self.reply.pk).update(body=self._image(self.path))
+
+    def _image(self, *paths):
+        return [
+            {"type": "image", "props": {"url": f"https://api.example.com/media/{p}"}} for p in paths
+        ]
+
+    def _delta(self, user, channel, kind, since):
+        self.client.force_authenticate(user=user)
+        res = self.client.get(f"/api/v3/channels/{channel.id}/{kind}/", {"since": since})
+        self.assertEqual(res.status_code, 200, res.data)
+        return res.data["data"]["deletes"]
+
+    def test_a_later_sync_of_the_old_chat_names_what_left_it(self):
+        since = timezone.now().isoformat()
+
+        self._move(self.task)
+
+        self.assertEqual(
+            self._delta(self.user2, self.channel, "messages", since), [str(self.card.pk)]
+        )
+        self.assertEqual(
+            self._delta(self.user2, self.channel, "threads", since), [str(self.reply.pk)]
+        )
+        self.assertEqual(self._delta(self.user, self.new_channel, "messages", since), [])
+        # A sync that ran while the move was committing still hears of it.
+        just_after = timezone.now().isoformat()
+        self.assertEqual(
+            self._delta(self.user2, self.channel, "threads", just_after), [str(self.reply.pk)]
+        )
+        # A device that synced well after the move has nothing to drop.
+        later = (timezone.now() + timedelta(minutes=6)).isoformat()
+        self.assertEqual(self._delta(self.user2, self.channel, "threads", later), [])
+
+    def test_what_moved_back_is_not_named(self):
+        since = timezone.now().isoformat()
+
+        self._move(self._move(self.task), self.project)
+
+        self.assertEqual(self._delta(self.user, self.channel, "messages", since), [])
+        self.assertEqual(self._delta(self.user, self.channel, "threads", since), [])
+        self.assertEqual(
+            self._delta(self.user, self.new_channel, "threads", since), [str(self.reply.pk)]
+        )
+
+    def test_a_pasted_image_is_read_by_the_chat_its_message_is_in(self):
+        self.assertTrue(_may_read_media(self.path, self.user2.id))
+        self.assertFalse(_may_read_media(self.path, self.newcomer.id))
+
+        task = self._move(self.task)
+
+        self.assertFalse(_may_read_media(self.path, self.user2.id))
+        self.assertTrue(_may_read_media(self.path, self.newcomer.id))
+
+        self._move(task, self.project)
+
+        self.assertTrue(_may_read_media(self.path, self.user2.id))
+        self.assertFalse(_may_read_media(self.path, self.newcomer.id))
+
+    def test_an_image_still_shown_in_the_old_chat_stays_readable_there(self):
+        stays = self._card_of(self._create(title="Stays"))
+        Message.objects.filter(pk=stays.pk).update(body=self._image(self.path))
+
+        self._move(self.task)
+
+        self.assertTrue(_may_read_media(self.path, self.user2.id))
+        self.assertTrue(_may_read_media(self.path, self.newcomer.id))
+
+    def test_a_link_to_another_chats_file_opens_nothing(self):
+        other = Channel.objects.create(team=self.team, kind=ChannelKind.GM, owner=self.user2)
+        ChannelMember.objects.create(channel=other, user=self.user2)
+        theirs = f"chats/{other.id}/inline/{'b' * 32}.png"
+        Message.objects.filter(pk=self.reply.pk).update(body=self._image(theirs))
+
+        self._move(self.task)
+
+        self.assertTrue(_may_read_media(theirs, self.user2.id))
+        self.assertFalse(_may_read_media(theirs, self.newcomer.id))
+
+    def test_a_name_that_could_be_guessed_is_not_carried(self):
+        guessable = f"chats/{self.channel.id}/inline/image.png"
+        Message.objects.filter(pk=self.reply.pk).update(body=self._image(guessable))
+
+        self._move(self.task)
+
+        self.assertTrue(_may_read_media(guessable, self.user2.id))
+        self.assertFalse(_may_read_media(guessable, self.newcomer.id))
+
+    def test_a_team_teardown_leaves_no_move_record(self):
+        self._move(self.task)
+        self.assertTrue(MessageMovedAway.objects.exists())
+
+        delete_demo_team_data(self.team.team_id)
+
+        self.assertFalse(MessageMovedAway.objects.exists())
+
+    def test_the_images_stay_readable_when_the_chat_left_behind_is_deleted(self):
+        self._move(self.task)
+        Message.objects.filter(channel=self.channel).delete()
+        Channel.objects.filter(pk=self.channel.pk).delete()
+
+        self.assertTrue(_may_read_media(self.path, self.newcomer.id))
+
+    def test_a_file_of_an_untouched_message_is_still_read_by_its_own_chat(self):
+        self._move(self.task)
+        untouched = f"chats/{self.channel.id}/inline/{'c' * 32}.png"
+
+        self.assertTrue(_may_read_media(untouched, self.user2.id))
+        self.assertFalse(_may_read_media(untouched, self.newcomer.id))
+
+    def _note(self, **fields):
+        return ChatNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user2,
+            chat_type=ChannelKind.PM,
+            channel=self.channel,
+            title="n",
+            **{"is_thread": True, "thread_root_id": self.card.pk, **fields},
+        )
+
+    def test_the_notes_on_the_thread_move_with_it(self):
+        note = self._note()
+        child = self._note(parent_note_id=note.note_id, is_thread=False, thread_root_id=None)
+        chat_wide = self._note(is_thread=False, thread_root_id=None)
+        under_it = self._note(parent_note_id=chat_wide.note_id)
+        for person in (self.user, self.user2):
+            NotePermissionMaster.objects.create(
+                team=self.team,
+                user=person,
+                note_type=NOTE_TYPE_CHAT,
+                note_id=note.note_id,
+                role_id=ROLE_EDITOR,
+            )
+        self.assertIsNone(get_effective_role(self.newcomer.id, NOTE_TYPE_CHAT, note.note_id))
+
+        self._move(self.task)
+
+        for row in (note, child, chat_wide, under_it):
+            row.refresh_from_db()
+        self.assertEqual(
+            (note.channel_id, note.thread_root_id), (self.new_channel.id, self.card.pk)
+        )
+        self.assertEqual(
+            (child.channel_id, child.parent_note_id), (self.new_channel.id, note.note_id)
+        )
+        # Moved out from under a note that stays: it stands on its own.
+        self.assertEqual(
+            (under_it.channel_id, under_it.parent_note_id), (self.new_channel.id, None)
+        )
+        self.assertEqual(chat_wide.channel_id, self.channel.id)
+        self.assertEqual(
+            get_effective_role(self.newcomer.id, NOTE_TYPE_CHAT, note.note_id), ROLE_EDITOR
+        )
+        for row in (note, child, under_it):
+            self.assertIsNone(get_effective_role(self.user2.id, NOTE_TYPE_CHAT, row.note_id))
+
+    def test_moving_back_gives_the_author_their_note_again(self):
+        note = self._note()
+        NotePermissionMaster.objects.create(
+            team=self.team,
+            user=self.user2,
+            note_type=NOTE_TYPE_CHAT,
+            note_id=note.note_id,
+            role_id=ROLE_OWNER,
+        )
+
+        task = self._move(self.task)
+        self.assertIsNone(get_effective_role(self.user2.id, NOTE_TYPE_CHAT, note.note_id))
+        self._move(task, self.project)
+
+        self.assertEqual(
+            get_effective_role(self.user2.id, NOTE_TYPE_CHAT, note.note_id), ROLE_OWNER
+        )
+
+    def test_a_teardown_reaches_the_record_of_a_chat_already_deleted(self):
+        self._move(self.task)
+        Message.objects.filter(channel=self.channel).delete()
+        Channel.objects.filter(pk=self.channel.pk).delete()
+
+        delete_demo_team_data(self.team.team_id)
+
+        self.assertFalse(MessageMovedAway.objects.exists())
+
+    def test_a_note_on_a_merged_thread_follows_to_the_card_that_stays(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(project_id=self.destination.pk)
+        new_card = self._comment(TaskMaster.objects.get(pk=self.task.pk), 2).thread_root
+        note = self._note()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            task_card_move.move_task_cards([self.task.task_id], project_id=self.destination.pk)
+
+        note.refresh_from_db()
+        self.assertEqual((note.channel_id, note.thread_root_id), (self.new_channel.id, new_card.pk))
 
 
 class OtherMoveTests(MoveBase):
