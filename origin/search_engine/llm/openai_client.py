@@ -85,27 +85,30 @@ def _get_client() -> OpenAI:
 # --------------------------------------------------------------------------- #
 
 
-def _usage_parts(usage: Any) -> tuple[int, int, int, int]:
-    """`(prompt, cached, output, reasoning)` from an OpenAI usage object.
+def _usage_parts(usage: Any) -> tuple[int, int, int, int, int]:
+    """`(prompt, cached, cache_write, output, reasoning)` from OpenAI usage.
 
-    OpenAI reports `prompt_tokens` as the FULL prompt including any
-    cached prefix — the opposite of Anthropic, where `input_tokens` is
-    the uncached remainder. The cached count lives in
-    `prompt_tokens_details.cached_tokens`. We subtract so the neutral
-    sink's `prompt_tokens` means "uncached prompt" on every provider;
-    otherwise the offline cost aggregator would double-count the cached
-    span at the full input rate.
+    OpenAI reports `prompt_tokens` as the FULL prompt including the
+    cache reads and writes — the opposite of Anthropic, where
+    `input_tokens` is the remainder. The two counts live in
+    `prompt_tokens_details` (`cached_tokens`, `cache_write_tokens`). We
+    subtract both so the neutral sink's `prompt_tokens` means "ordinary
+    input" on every provider; each token is billed at one of the three
+    rates, never two.
     """
     total_prompt = int(getattr(usage, "prompt_tokens", None) or 0)
     prompt_details = getattr(usage, "prompt_tokens_details", None)
     cached = int(getattr(prompt_details, "cached_tokens", None) or 0)
+    # GPT-5.6 and later bill a write at 1.25x input; older models report
+    # no count (MIP-2372).
+    cache_write = int(getattr(prompt_details, "cache_write_tokens", None) or 0)
     output = int(getattr(usage, "completion_tokens", None) or 0)
     completion_details = getattr(usage, "completion_tokens_details", None)
     reasoning = int(getattr(completion_details, "reasoning_tokens", None) or 0)
-    # Clamp: a provider that ever reports cached > prompt must not make
-    # the uncached remainder negative.
-    uncached = max(total_prompt - cached, 0)
-    return uncached, cached, output, reasoning
+    # Clamp: a provider that ever reports more reads and writes than
+    # prompt must not make the remainder negative.
+    uncached = max(total_prompt - cached - cache_write, 0)
+    return uncached, cached, cache_write, output, reasoning
 
 
 def _log_usage(usage: Any, model: str) -> None:
@@ -119,13 +122,15 @@ def _log_usage(usage: Any, model: str) -> None:
         return
     if not settings.SEARCH_ENGINE.get("LLM_LOG_USAGE_METADATA", False):
         return
-    uncached, cached, output, reasoning = _usage_parts(usage)
-    billed_input = uncached + cached
+    uncached, cached, cache_write, output, reasoning = _usage_parts(usage)
+    billed_input = uncached + cached + cache_write
     cache_pct = round((cached / billed_input) * 100) if billed_input else 0
     log.info(
-        "openai usage model=%s input=%d cached=%d (%d%% cached) output=%d reasoning=%d",
+        "openai usage model=%s input=%d cache_write=%d cached=%d (%d%% cached) "
+        "output=%d reasoning=%d",
         model,
         uncached,
+        cache_write,
         cached,
         cache_pct,
         output,
@@ -146,16 +151,14 @@ def _fill_usage_sink(sink: CallUsage, usage: Any, model: str) -> None:
     if usage is None:
         return
     try:
-        uncached, cached, output, reasoning = _usage_parts(usage)
+        uncached, cached, cache_write, output, reasoning = _usage_parts(usage)
         sink.prompt_tokens = uncached
         sink.cached_tokens = cached
-        # OpenAI bills cache reads at a discount but reports no separate
-        # "cache write" line, so this stays 0 (same as Gemini).
-        sink.cache_write_tokens = 0
+        sink.cache_write_tokens = cache_write
         sink.output_tokens = output
         sink.thought_tokens = reasoning
         sink.total_tokens = int(getattr(usage, "total_tokens", None) or 0) or (
-            uncached + cached + output
+            uncached + cached + cache_write + output
         )
     except Exception:  # noqa: BLE001 — metrics must not break generation
         log.debug("OpenAI usage sink fill failed", exc_info=True)

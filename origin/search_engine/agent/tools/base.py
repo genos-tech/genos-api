@@ -64,6 +64,8 @@ class ToolContext:
     # left (MIP-1965): the tool then runs a plain search, no query rewrite and no rerank, and
     # adds one notice line. Server-set, NEVER from the LLM or the caller; off everywhere else.
     plain_search: bool = False
+    # Why it is plain, when it is not the credits (MIP-2363). "" = the credit notice.
+    plain_search_notice: str = ""
 
 
 class ToolError(Exception):

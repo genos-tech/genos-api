@@ -115,6 +115,10 @@ def add_narrative(
         report["summary"] = clip(
             f"{report['summary']} The AI summary was left out: you have no AI credits left this month."
         )
+    elif result.skipped == llm.SKIP_MONTHLY_LIMIT:
+        report["summary"] = clip(
+            f"{report['summary']} The AI summary was left out: Genos AI has reached its monthly limit."
+        )
     return report
 
 

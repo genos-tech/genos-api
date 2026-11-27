@@ -6,6 +6,9 @@ credits exactly like an in-app question (same ledger, `AiRequestCost.surface` te
 When the caller has nothing left the search still answers, as a plain search with no model call,
 and says so in one line. It is never refused for credits.
 
+A reached monthly spend limit (`spend_limits`, MIP-2363) takes the same way out, with its own
+notice.
+
 Every failure here answers "has credits": a ledger hiccup must not degrade a paying user.
 """
 
@@ -15,12 +18,24 @@ import logging
 
 from origin.search_engine import credit_ledger, quota
 from origin.search_engine.agent.tools.search_kb import PLAIN_SEARCH_NOTICE
+from origin.search_engine.spend_limits import monthly_limit_reached
 
 log = logging.getLogger(__name__)
 
 MCP_SEARCH_SURFACE = "mcp_search"
 SEARCH_TOOL = "search_workspace"
 NOTICE = PLAIN_SEARCH_NOTICE
+MONTHLY_LIMIT_NOTICE = (
+    "Genos AI has reached its monthly limit, so this was a plain search "
+    "(no AI rephrasing or re-ranking)."
+)
+
+
+def plain_notice(user_id: str, team_id: str = "") -> str:
+    """The line a search that must run plain says, or "" when it may use its AI steps."""
+    if monthly_limit_reached(team_id):
+        return MONTHLY_LIMIT_NOTICE
+    return NOTICE if out_of_credits(user_id) else ""
 
 
 def out_of_credits(user_id: str) -> bool:

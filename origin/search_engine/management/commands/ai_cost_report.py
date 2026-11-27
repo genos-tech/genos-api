@@ -48,6 +48,7 @@ from apis.request_id import describe_exception
 from origin.management.cron_command import CronCommand
 from origin.search_engine.llm.spend import SURFACE_UNATTRIBUTED
 from origin.search_engine.models import AiRequestCost, AiSpendEvent
+from origin.search_engine.spend_limits import month_spend_jpy_milli
 
 log = logging.getLogger(__name__)
 
@@ -479,6 +480,15 @@ class Command(CronCommand):
             f"\n-- Budget --\n"
             f"  {_yen(spent)} of {_yen(allowed_milli)} pro-rated for {window} ({pct:.0f}%)"
         )
+        month_spent = month_spend_jpy_milli()
+        if month_spent >= budget_month * 1000:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  Soft stop is on: {_yen(month_spent)} this month has reached the "
+                    f"{_yen(int(budget_month * 1000))} budget, so AI features run plain until "
+                    f"the month ends."
+                )
+            )
         if spent > allowed_milli:
             log.error(
                 "AI spend %s exceeded the pro-rated budget %s for %s (%.0f%%)",

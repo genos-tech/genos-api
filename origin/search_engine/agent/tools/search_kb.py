@@ -268,7 +268,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     summary = f"Searched knowledge base — {len(matches)} matches"
     if plain:
-        summary += f"\n{PLAIN_SEARCH_NOTICE}"
+        summary += f"\n{ctx.plain_search_notice or PLAIN_SEARCH_NOTICE}"
     return {
         "matches": matches,
         "__summary__": summary,

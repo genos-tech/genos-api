@@ -2385,10 +2385,10 @@ SEARCH_ENGINE["AI_BENCHMARK_REGRESSION_PCT"] = float(
     os.environ.get("AI_BENCHMARK_REGRESSION_PCT") or "25"
 )
 
-# Per-workspace (team) monthly ceiling in YEN — alert-only, opt-in.
-# 0 = off. A team over the line logs a WARNING naming the team; there
-# is deliberately no blocking lever here, because pausing N users over
-# one member's spend is a human decision, not a threshold's.
+# Per-workspace (team) monthly ceiling in US dollars, opt-in. 0 = off.
+# A team over the line logs a WARNING naming the team, and its AI features
+# step back to their plain versions until the month ends: the same way out
+# as zero credits, nothing errors (MIP-2363, `search_engine.spend_limits`).
 SEARCH_ENGINE["AI_TEAM_MONTHLY_CEILING_USD"] = float(
     os.environ.get("AI_TEAM_MONTHLY_CEILING_USD") or "0"
 )
@@ -2402,9 +2402,15 @@ if os.environ.get("AI_TEAM_MONTHLY_CEILING_JPY") and not os.environ.get(
         "denominated in USD. Set AI_TEAM_MONTHLY_CEILING_USD instead."
     )
 
-# Monthly AI budget in YEN, for `ai_cost_report --alert`. The command
-# pro-rates it to the reporting window and logs at ERROR when spend is
-# over — which fails the cron run via CronCommand's tripwire.
+# Monthly AI budget in YEN. Two readers:
+#   * `ai_cost_report --alert` pro-rates it to the reporting window and
+#     logs at ERROR when spend is over, which fails the cron run via
+#     CronCommand's tripwire;
+#   * the soft stop (MIP-2363, `search_engine.spend_limits`): once the
+#     calendar month's spend reaches the WHOLE budget, every AI feature
+#     members use runs plain until the month ends. So it must have the
+#     same value on the web service and on `schedule-tick`.
+# Both read the cost ledger, so with AI_COST_METER off nothing is counted.
 #
 # 0 (the default) means NO budget is configured and nothing is checked.
 # Deliberately opt-in: a threshold guessed before any real measurement
