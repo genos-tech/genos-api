@@ -71,7 +71,7 @@ class RegistryIsUntouchedTests(SimpleTestCase):
             )
             self.assertLessEqual(
                 set(addition.optional),
-                set(_registered(addition.tool).parameters_schema["required"]),
+                set(_registered(addition.tool).parameters_schema.get("required", [])),
             )
 
 

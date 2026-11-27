@@ -37,6 +37,7 @@ from origin.search_engine.agent.tools import delete_calendar_event as _delete_ca
 from origin.search_engine.agent.tools import list_calendar_events as _list_calendar_events
 from origin.search_engine.agent.tools import list_calendars as _list_calendars
 from origin.search_engine.agent.tools import list_project_tags as _list_project_tags
+from origin.search_engine.agent.tools import list_uncompleted_todos as _list_uncompleted_todos
 from origin.search_engine.agent.tools import milestone_convert as _milestone_convert
 from origin.search_engine.agent.tools import task_attachments as _task_attachments
 from origin.search_engine.agent.tools import todo_source as _todo_source
@@ -90,6 +91,12 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # The first paid run: the model read the rules and filled the required fields itself. A required field is the member's.
     ("create_task", FOLLOWUPS_FLAG, _REQUIRED),
     ("create_task_plan", FOLLOWUPS_FLAG, _REQUIRED),
+    # MIP-2456: where the to-do list stops, and the parameter that looks further.
+    (
+        "list_uncompleted_todos",
+        _list_uncompleted_todos.DAYS_AHEAD_FLAG,
+        _list_uncompleted_todos.DESCRIPTION_ADDITION,
+    ),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`
