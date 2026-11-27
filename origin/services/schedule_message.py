@@ -58,7 +58,10 @@ def _inline_has_content(item: Any) -> bool:
     if kind in (None, "text"):
         return isinstance(item.get("text"), str) and bool(item["text"].strip())
     if kind == "link":
-        return any(_inline_has_content(i) for i in item.get("content") or [])
+        nested = item.get("content") or []
+        if not isinstance(nested, list):
+            raise MessageProblem(SHAPE)
+        return any(_inline_has_content(i) for i in nested)
     return True  # a mention, a # reference chip, an emoji
 
 
@@ -86,6 +89,9 @@ def _check_blocks(blocks: list[Any]) -> None:
         count += 1
         if count > MAX_BLOCKS or depth > MAX_DEPTH:
             raise MessageProblem(TOO_LONG)
+        # Inline content (a list), a table (an object) or none.
+        if not isinstance(block.get("content"), (list, dict, type(None))):
+            raise MessageProblem(SHAPE)
         children = block.get("children")
         if children is None:
             continue
@@ -118,7 +124,10 @@ def preview(body: Any) -> str:
     A line is read as a hand send reads it (`generate_first_line`); blank blocks before it are
     skipped, and a block that reader cannot name (a # chip alone) falls back to its text."""
     for block in body if isinstance(body, list) else []:
-        line = generate_first_line.get(block) or extract_text([block])
+        try:
+            line = generate_first_line.get(block) or extract_text([block])
+        except (AttributeError, TypeError):  # a chip or link of an unexpected shape
+            line = extract_text([])
         line = " ".join(line.split())
         if line:
             return line if len(line) <= PREVIEW_CHARS else line[: PREVIEW_CHARS - 1].rstrip() + "…"

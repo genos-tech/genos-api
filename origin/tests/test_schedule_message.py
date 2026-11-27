@@ -181,6 +181,16 @@ class TestTheMessageIsChecked(MessageBase):
         sched = self.make(body=body)
         self.assertEqual(sched.params, {"body": body})
 
+    def test_malformed_content_is_refused_in_words(self):
+        link = {"type": "link", "href": "https://x.test", "content": 5}
+        for body in ([paragraph(link)], [{**paragraph("x"), "content": 5}]):
+            self.assertEqual(self.refused(body), schedule_message.SHAPE)
+
+    def test_a_chip_of_an_unexpected_shape_has_no_preview_and_still_saves(self):
+        body = [paragraph({"type": "mention", "props": "nobody"})]
+        self.assertEqual(schedule_message.preview(body), "")
+        self.assertTrue(self.make(body=body))
+
     def test_a_non_array_body_is_refused(self):
         with self.assertRaises(schedules.ScheduleError):
             self.make(body="hello")
