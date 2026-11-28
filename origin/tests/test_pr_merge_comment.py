@@ -164,6 +164,13 @@ class MergeCommentTests(DeliveryBase):
         self.assertIn("<https://github.com/genos-tech/other/pull/9>", text)
         self.assertNotIn("All linked PRs merged", text)
 
+    def test_a_deleted_task_is_not_told_to_close(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(status="Deleted")
+        self._merge()
+        text = self._only_comment_text()
+        self.assertIn("The task is Deleted, so the merge did not close it.", text)
+        self.assertNotIn("close it or say what is left", text)
+
     def test_a_closed_unmerged_or_opened_pr_posts_nothing(self):
         self._post(_pr_event("opened"))
         self._post(_pr_event("closed", state="closed", merged=False))

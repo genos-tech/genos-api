@@ -185,8 +185,8 @@ def build_markdown(
             paras.append("Reopen it, or finish those first.")
         else:
             paras.append("The task is Closed. No other linked PR or sub-task is open.")
-    elif status == "Rejected":
-        paras.append("The task is Rejected, so the merge did not close it.")
+    elif status in ("Rejected", "Deleted"):
+        paras.append(f"The task is {status}, so the merge did not close it.")
         if open_prs:
             paras.append(open_prs)
     elif other_prs:

@@ -358,6 +358,14 @@ class TestGithubWebhook(TestCase):
         task.refresh_from_db()
         self.assertEqual(task.status, "Open")
 
+    def test_merged_pr_leaves_a_task_with_status_deleted(self):
+        # MIP-2526: "Delete task" sets the status and leaves `is_deleted` off.
+        task = self._create_task(project_task_number=42, status_value="Deleted")
+        response = self._post_webhook(_pr_payload(action="closed", merged=True, head_ref="HK-42"))
+        self.assertEqual(response.data["updated"], 0)
+        task.refresh_from_db()
+        self.assertEqual(task.status, "Deleted")
+
     def test_merged_pr_skips_orphan_tasks_with_no_display_id(self):
         # A task without a project has display_id like "#<id>" which
         # would alias every task in the system — the close path bails
