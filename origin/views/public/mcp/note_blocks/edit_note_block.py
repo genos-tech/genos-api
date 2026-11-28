@@ -138,7 +138,7 @@ def run_edit(
             f"Not authorized to edit note {ref.note_id}. You must be the owner, have editor "
             "permission on it, or be a member of the project or chat it belongs to."
         )
-    if why := archived_note_refusal(ref.family, ref.note_id):
+    if why := archived_note_refusal(ref.family, ref.note_id, ctx.user_id):
         raise ToolError(f"{why} Nothing was changed.")
     note = ref.note
     # An HTML note's blocks are only the placeholder made from its page (MIP-2214).

@@ -228,7 +228,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # MIP-1852: no new work in an archived project (the app's create refuses it with 409). After the
     # membership check, so a stranger learns nothing about the project's state.
-    if why := archived_refusal(project):
+    if why := archived_refusal(project, ctx.user_id):
         raise ToolError(f"{why} Nothing was created.")
 
     # MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`): a task the app's own form would refuse because a field the

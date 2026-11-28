@@ -22,7 +22,8 @@ Three bounds are what make that one-time consent sound:
    walk a third party in. Without this, one grant would be transitively
    re-sharable to the whole world.
 2. **`role_ceiling` clamps.** The guest team chooses within what the host
-   allowed and cannot exceed it.
+   allowed and cannot exceed it. A viewer ceiling also stops their writes
+   (`services/share_roles`).
 3. **Either side can revoke, and revoking deletes rows** (see below).
 
 ## The grant is not the access
@@ -415,9 +416,9 @@ def set_role_ceiling(grant: ExternalGrant, role_ceiling: str, actor) -> External
     the guest team's only route to the new role would be for their
     manager to eject each colleague and re-add them.
 
-    Lowering does NOT retroactively demote. Quietly taking write access
-    away from someone mid-edit is a worse surprise than the host having
-    to decide; their blunt instrument for that is revoke.
+    Lowering takes write access away at once (MIP-2571): every write asks
+    the grant's CURRENT ceiling (`services/share_roles`), so a host who
+    picks View only is believed. The participation rows are left as they are.
     """
     if grant is None:
         raise ExternalGrantError("not_found")
@@ -1130,9 +1131,9 @@ def _write_participant(grant: ExternalGrant, user_id, role: str) -> None:
         # the external role is a real value in the vocabulary
         # (`ASSIGNABLE_PROJECT_ROLES`) and `editor` there confers member
         # management — an outsider who could add people to the host's
-        # project would defeat the grant. Read/write on the tasks
-        # themselves does not come from this column anyway: it comes from
-        # `can_access_task`, which asks only about membership.
+        # project would defeat the grant. Reading the tasks does not come
+        # from this column (`can_access_task` asks only about membership),
+        # and a View only share is enforced on writes by `services/share_roles`.
         add_project_guest(grant.owner_team_id, grant.object_id, user_id)
         return
 

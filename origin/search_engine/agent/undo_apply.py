@@ -67,6 +67,7 @@ from origin.search_engine.models import AgentRun, AgentStep
 from origin.services.collab_push import push_note_body_now
 from origin.services.note_delete import DeleteRefused, child_note_count, delete_note
 from origin.services.note_version_restore import RestoreRefused, restore_note_version
+from origin.services.share_roles import view_only_note_response, view_only_task_response
 from origin.services.task_body_restore import put_back_task_body
 from origin.services.task_comment_manage import soft_delete_comment
 from origin.views.utils.note_role import (
@@ -180,6 +181,8 @@ def _locked_task(undoing: Undoing, task_id: int) -> TaskMaster:
     if str(task.team_id or "") != undoing.team_id or not can_access_task(
         task.task_id, undoing.user_id
     ):
+        raise _no_access(f"task {task.display_id}")
+    if view_only_task_response(task.task_id, undoing.user_id):
         raise _no_access(f"task {task.display_id}")
     return task
 
@@ -360,6 +363,8 @@ def _locked_note(undoing: Undoing, family: str, note_id: int):
     if note is None:
         raise _changed("The note")
     if str(note.team_id or "") != undoing.team_id:
+        raise _no_access("this note")
+    if view_only_note_response(code, note.note_id, undoing.user_id):
         raise _no_access("this note")
     return note, code
 
