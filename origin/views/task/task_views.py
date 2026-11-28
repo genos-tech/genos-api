@@ -281,6 +281,35 @@ TASK_CREATE_REQUIRED = (
 )
 
 
+# Everything of a full save that belongs to the project it was read in: a stale one drops these
+# (MIP-2524). The move already cleared the milestone, sprint, parent and tags, and pruned the
+# collaborators.
+_PROJECT_SCOPED_SAVE_FIELDS = frozenset(
+    {
+        "project",
+        "team",
+        "milestone",
+        "sprint",
+        "parent_task_id",
+        "root_task_id",
+        "tags",
+        "custom_field_values",
+        "custom_status",
+        "collaborators",
+    }
+)
+
+
+def _is_stale_project_echo(task, data) -> bool:
+    """True when this save re-sends the project its copy was loaded in (`base_project`) and
+    the task has since moved elsewhere (MIP-2524): the person did not pick that project, so it
+    is not a move. A client that sends no `base_project` is taken at its word, as before."""
+    base, requested = data.get("base_project"), data.get("project")
+    if base in (None, "") or requested in (None, "") or task.is_init_task:
+        return False
+    return str(requested) == str(base) and str(requested) != str(task.project_id)
+
+
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
         # Tier quota: monthly task-creation cap. Charged to the
@@ -624,13 +653,21 @@ class TaskMasterView(AuthenticatedAPIView):
         if res := refuse_unsafe_link_urls(request.data.get("links")):
             return res
 
+        # A copy older than a move must not move the task back (MIP-2524): drop what it holds of
+        # the project it was read in, keep the rest of the edit, and tell the app to reload.
+        data = request.data
+        stale_project = _is_stale_project_echo(task, data)
+        if stale_project:
+            logger.info("task PUT %s: stale project in a save, not moving", task_id)
+            data = {k: v for k, v in data.items() if k not in _PROJECT_SCOPED_SAVE_FIELDS}
+
         # MIP-2391: a status this save sets must be one of the six; restating the stored one passes.
-        if request.data.get("status") is not None and (
-            message := status_value_error(request.data.get("status"), task.status)
+        if data.get("status") is not None and (
+            message := status_value_error(data.get("status"), task.status)
         ):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
-        update_data = request.data.copy()
+        update_data = data.copy()
 
         # A save may only restate these as they are. `is_deleted: true` used to
         # soft-delete the task without the delete endpoint's checks and cleanup,
@@ -642,7 +679,7 @@ class TaskMasterView(AuthenticatedAPIView):
         server_owned = stored_values(task, TASK_SERVER_OWNED_FIELDS)
         if not task.is_init_task:
             server_owned["is_init_task"] = False
-        if res := refuse_forged_fields(request.data, server_owned):
+        if res := refuse_forged_fields(data, server_owned):
             return res
         for field in TASK_SERVER_OWNED_FIELDS:
             update_data.pop(field, None)
@@ -654,8 +691,8 @@ class TaskMasterView(AuthenticatedAPIView):
         # serializer.save() and writes parent_task_id / root_task_id /
         # milestone_id directly so the None-strip can keep its current
         # behavior for every other field.
-        milestone_in_request = "milestone" in request.data
-        requested_milestone_id = request.data.get("milestone") if milestone_in_request else None
+        milestone_in_request = "milestone" in data
+        requested_milestone_id = data.get("milestone") if milestone_in_request else None
 
         # Get parent task id from request data.
         #
@@ -665,8 +702,8 @@ class TaskMasterView(AuthenticatedAPIView):
         # `serializer.save()` overwrites it and makes the comparison
         # impossible. Normalized because callers send the id as both a
         # number and a string, and `"12" != 12` would read as a move.
-        parent_in_request = "parent_task_id" in request.data
-        parent_task_id = _normalize_task_id(request.data.get("parent_task_id"))
+        parent_in_request = "parent_task_id" in data
+        parent_task_id = _normalize_task_id(data.get("parent_task_id"))
         parent_changed = parent_in_request and parent_task_id != task.parent_task_id
 
         # A task can't hang under itself or under one of its own
@@ -692,7 +729,7 @@ class TaskMasterView(AuthenticatedAPIView):
         # so the rest of the request can keep flowing through the
         # existing strip-then-save path. We treat the empty string the
         # same as null because some legacy callers ship `""` instead.
-        clear_due_date = "due_date" in request.data and request.data.get("due_date") in (None, "")
+        clear_due_date = "due_date" in data and data.get("due_date") in (None, "")
 
         # `start_date` is the same trap with the same answer (MIP-912): the
         # strip below dropped `start_date: null`, so the app's Clear button
@@ -700,7 +737,7 @@ class TaskMasterView(AuthenticatedAPIView):
         # must therefore send null only for a real clear: the app's full
         # save used to send `start_date: null` for any object that did not
         # carry the field, which is why its fix ships first.
-        clear_start_date = "start_date" in request.data and request.data.get("start_date") in (
+        clear_start_date = "start_date" in data and data.get("start_date") in (
             None,
             "",
         )
@@ -708,12 +745,12 @@ class TaskMasterView(AuthenticatedAPIView):
         # `custom_status` (MIP-2492): a value other than the stored one is a pick, an explicit
         # null a clear; a full save restating the stored one says nothing (`TaskMaster.save`
         # drops it when the status has moved on).
-        custom_status_picked = "custom_status" in request.data and not is_same_status_id(
-            request.data.get("custom_status"), task.custom_status_id
+        custom_status_picked = "custom_status" in data and not is_same_status_id(
+            data.get("custom_status"), task.custom_status_id
         )
 
         # Remove None values from the update_data
-        for key, val in request.data.items():
+        for key, val in data.items():
             if val is None:
                 update_data.pop(key, None)
 
@@ -729,7 +766,7 @@ class TaskMasterView(AuthenticatedAPIView):
         # pop()s with no default), so popping here first would double-pop
         # that key and KeyError. `pop(..., None)` also no-ops when the strip
         # already removed it. The original value is still read from
-        # `request.data` below, so "absent vs [] vs list" intent survives.
+        # `data` below, so "absent vs [] vs list" intent survives.
         update_data.pop("collaborators", None)
 
         # Shape-validate custom field values before they reach the
@@ -756,7 +793,7 @@ class TaskMasterView(AuthenticatedAPIView):
                     or values_project
                 )
             if message := refuse_changed_values(
-                request.data.get("custom_field_values"),
+                data.get("custom_field_values"),
                 cleaned_values,
                 task.custom_field_values,
                 values_project,
@@ -857,7 +894,7 @@ class TaskMasterView(AuthenticatedAPIView):
                 ).first()
                 or people_project
             )
-        if message := refuse_new_people(task, people_project, request.data):
+        if message := refuse_new_people(task, people_project, data):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
         if project_changed:
@@ -917,7 +954,7 @@ class TaskMasterView(AuthenticatedAPIView):
             # above, so a stranger learns nothing; the assignee this save sets is the one judged
             # (a null is dropped from the save, so the stored one stays).
             if message := task_move_assignee_problem(
-                task, dest_project, assignee=request.data.get("assignee")
+                task, dest_project, assignee=data.get("assignee")
             ):
                 return Response(
                     {"error": message, "code": "assignee_not_on_destination"},
@@ -937,7 +974,7 @@ class TaskMasterView(AuthenticatedAPIView):
         if custom_status_picked:
             if task.is_milestone:
                 # A null is a full save echoing a row it holds no label for: dropped, not refused.
-                if request.data.get("custom_status") not in (None, ""):
+                if data.get("custom_status") not in (None, ""):
                     return Response(
                         {
                             "error": "Set a milestone's status on the milestone.",
@@ -949,10 +986,10 @@ class TaskMasterView(AuthenticatedAPIView):
                 try:
                     row, implied = pick_custom_status(
                         people_project.project_id if people_project else None,
-                        request.data.get("custom_status"),
+                        data.get("custom_status"),
                         current_id=task.custom_status_id,
                         current_status=task.status,
-                        requested_status=request.data.get("status"),
+                        requested_status=data.get("status"),
                     )
                 except StatusError as exc:
                     return _status_refusal(exc)
@@ -1091,10 +1128,10 @@ class TaskMasterView(AuthenticatedAPIView):
                 serializer.save()
 
             # Collaborators M2M: absent key => leave untouched, a list
-            # (incl. []) => wholesale replace. Read from request.data (not
+            # (incl. []) => wholesale replace. Read from data (not
             # the popped/stripped update_data) so an explicit clear ([])
             # still lands.
-            sync_task_collaborators(task, request.data.get("collaborators"))
+            sync_task_collaborators(task, data.get("collaborators"))
 
             # Re-claim a number in the destination project (see the null-out
             # above). Runs before the blocks below so their
@@ -1256,6 +1293,7 @@ class TaskMasterView(AuthenticatedAPIView):
             return Response(
                 {
                     **move_report,
+                    **({"staleProject": True} if stale_project else {}),
                     **automation,
                     # Surface the computed `display_id` ("<code>-<n>")
                     # alongside the serialized fields. TaskMasterSerializer
