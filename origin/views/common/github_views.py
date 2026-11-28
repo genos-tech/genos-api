@@ -785,9 +785,11 @@ def _close_tasks_for_merged_pr(
     # install that happens to share a project code.
     part_of_ids = set(part_of_ids)
     linked_ids = (linked_ids | set(closes_ids)) - part_of_ids
+    # A milestone's status is on `MilestoneMaster` and its backing row can have drifted (this
+    # function closed that row alone before MIP-2538), so the row is not what says it is done.
     candidates = _branch_candidate_tasks(
         head_ref, team_ids, "project", "assignee", also_task_ids=linked_ids
-    ).exclude(status__in=DONE_STATUSES)
+    ).exclude(Q(status__in=DONE_STATUSES) & Q(is_milestone=False))
     updated = 0
     for task in candidates:
         if task.task_id in part_of_ids:
@@ -818,6 +820,8 @@ def _close_tasks_for_merged_pr(
             closed = _close_milestone_for_merged_pr(task, pr_close)
             if closed is not None:
                 updated += closed
+                continue
+            if task.status in DONE_STATUSES:
                 continue
         task.status = DONE_STATUS
         task._pr_merge_close = pr_close

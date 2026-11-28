@@ -46,6 +46,7 @@ from django.db import transaction
 from django.db.models import TextField
 from django.db.models.functions import Cast
 
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
@@ -243,11 +244,19 @@ def post_merge_comment(
     )
     if current is None or current.project_id is None or current.project.is_deleted:
         return False
+    status = current.status
+    if current.is_milestone:  # the milestone's own status; its backing row can have drifted
+        status = (
+            MilestoneMaster.objects.filter(task_id=current.task_id)
+            .values_list("status", flat=True)
+            .first()
+            or status
+        )
     subtasks, subtask_total = _open_subtasks(current)
     other_prs = _other_open_prs(current, pr_url)
     markdown = build_markdown(
         task=current,
-        status=current.status,
+        status=status,
         pr_url=pr_url,
         label=_pr_label(owner, repo, number),
         title=title,

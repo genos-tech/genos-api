@@ -23,7 +23,7 @@ from origin.models.common.user_models import GithubWebhookRegistration
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectStatus
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services.milestone_manage import update_milestone
 from origin.services.milestone_service import create_milestone
 from origin.services.project_statuses import ensure_project_statuses
@@ -424,6 +424,20 @@ class TestGithubWebhook(TestCase):
 
         self.assertEqual(response.data["updated"], 0)
         self.assertEqual(MilestoneMaster.objects.get(pk=milestone.pk).status, "Rejected")
+        # The merge comment reads the milestone's status, not the drifted row's.
+        comment = TaskComments.objects.get(task=backing, sender__isnull=True)
+        self.assertIn("Rejected", json.dumps(comment.comment_body))
+        self.assertNotIn("close it or say what is left", json.dumps(comment.comment_body))
+
+    def test_merged_pr_closes_an_open_milestone_whose_backing_row_reads_closed(self):
+        # What the old close left behind: the row Closed, the milestone still open.
+        milestone, backing = self._create_milestone("WIP")
+        TaskMaster.objects.filter(pk=backing.pk).update(status="Closed")
+
+        response = self._merge(backing)
+
+        self.assertEqual(response.data["updated"], 1)
+        self.assertEqual(MilestoneMaster.objects.get(pk=milestone.pk).status, "Closed")
 
     # ── PR opened → "PR linked" activity (branch carries display id) ──
 
