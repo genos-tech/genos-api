@@ -13,6 +13,11 @@ def _url(path: str) -> str:
     return f"{str(settings.FRONTEND_BASE_URL).rstrip('/')}{path}"
 
 
+def app_url(path: str) -> str:
+    """The web app's address of `path` (a path of the app, starting with `/`)."""
+    return _url(path)
+
+
 def chat_url(chat_type: str, chat_id: str, thread_id: str | None = None) -> str:
     thread = f"/thread/{thread_id}" if thread_id else ""
     return _url(f"/workspace/chat/{chat_type}/{chat_id}{thread}")

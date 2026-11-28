@@ -34,6 +34,7 @@ from typing import Any
 
 from origin.models.common.user_models import CustomUser
 from origin.models.skills.skill_models import TOOL_LEVEL_READ, VISIBILITY_PUBLIC, SkillInstall
+from origin.services.app_links import app_url
 from origin.services.skills import run, service
 
 # A client's model should not be handed a megabyte as "the person's words".
@@ -71,6 +72,9 @@ def _guard(call):
 
 def _sentence(exc: service.SkillError) -> str:
     text = str(exc)
+    if isinstance(exc, run.InstallRequired):
+        # The person installs it in the app, so say where, with its address.
+        return f"{text} The person installs it in the Genos app: {app_url(run.install_page_path(exc.where))}"
     if isinstance(exc, run.SkillAmbiguous):
         # Ids only: a teammate's account name is text somebody chose, and an error is not fenced.
         ids = ", ".join(f"`{c.get('id')}`" for c in exc.extra.get("candidates", []))
@@ -114,8 +118,8 @@ def _author_of(skill: Any, user: CustomUser) -> str:
 
 
 def list_runnable(user_id: Any, team_id: Any, query: str = "") -> dict[str, Any]:
-    """The skills this person may run in this team, in `/name` resolution order (mine, team,
-    installed, official). Metadata only: never the text, never a note id."""
+    """The skills this person may run in this team (their own and installed ones, MIP-2589), in
+    `/name` resolution order. Metadata only: never the text, never a note id."""
     query = str(query or "").strip()[:QUERY_MAX_CHARS].lower()
     user = _user(user_id)
     _require_member(user, team_id)
@@ -129,7 +133,6 @@ def list_runnable(user_id: Any, team_id: Any, query: str = "") -> dict[str, Any]
         author = {
             run.GROUP_MINE: run.AUTHOR_YOU,
             run.GROUP_TEAM: run.AUTHOR_TEAMMATE,
-            run.GROUP_OFFICIAL: run.AUTHOR_OFFICIAL,
         }.get(group) or (run.AUTHOR_OFFICIAL if r["isOfficial"] else run.AUTHOR_OUTSIDE)
         out.append(
             {
@@ -154,8 +157,9 @@ def list_runnable(user_id: Any, team_id: Any, query: str = "") -> dict[str, Any]
 
 
 def _find(user: CustomUser, team_id: Any, ref: Any) -> tuple[Any, SkillInstall | None]:
-    """The skill a reference names: by id the way the REST API reads one (anything the person may
-    read), by name in the order `/name` resolves it (mine, team, installed, official)."""
+    """The skill a reference names, by the rule of a run (MIP-2589): the person's own, or one they
+    installed; anything else they could install answers `InstallRequired`. By id, then, the skill
+    they may read; by name in the order `/name` resolves it."""
     kind, value = _ref_kind(ref)
     _require_member(user, team_id)
     if kind == "id":
@@ -164,11 +168,11 @@ def _find(user: CustomUser, team_id: Any, ref: Any) -> tuple[Any, SkillInstall |
         # owner's own and a team skill name that team's work. A public skill belongs to no team.
         if skill.visibility != VISIBILITY_PUBLIC and str(skill.team_id) != str(team_id):
             raise service.SkillNotFound
-        install = (
-            None
-            if service.is_owner(skill, user.pk)
-            else SkillInstall.objects.filter(user=user, skill=skill).first()
-        )
+        if service.is_owner(skill, user.pk):
+            return skill, None
+        install = SkillInstall.objects.filter(user=user, skill=skill).first()
+        if install is None:
+            raise run.InstallRequired(skill.slug, run._where(skill), str(skill.id))
         return skill, install
     return run._by_name(user, str(team_id), value)
 
@@ -176,9 +180,6 @@ def _find(user: CustomUser, team_id: Any, ref: Any) -> tuple[Any, SkillInstall |
 def _require_confirmed(user: Any, skill: Any, install: Any, author: str) -> None:
     """Refuse (`SkillNeedsConfirmation`) when what `read_skill` would return is still unconfirmed:
     the version it reads for an outside author, or any run of a copy of a harmful skill."""
-    # An outside skill the person has not installed cannot be run at all (`run.resolve` says
-    # "install it first"), so reading it is only reading, as in the directory; the gate is for the
-    # version their install runs.
     outside = author == run.AUTHOR_OUTSIDE and install is not None
     version_no = install.version_no if install is not None else skill.published_version_no
     needs_outside, needs_harmful = service.needed_confirmations(
@@ -302,9 +303,9 @@ def build_instructions(resolved: run.ResolvedSkill, person_input: str) -> str:
 def run_instructions(
     user_id: Any, team_id: Any, ref: Any, person_input: str = ""
 ) -> dict[str, Any]:
-    """The skill the person may run here (the `/name` rule: its id, or its name by mine > team >
-    installed > official, never a public skill they have not installed), as instructions for the
-    client's model."""
+    """The skill the person may run here (the `/name` rule: its id, or its name by mine > installed
+    team > installed public, never one they have not installed), as instructions for the client's
+    model."""
     person_input = str(person_input or "")
     if len(person_input) > INPUT_MAX_CHARS:
         raise McpSkillError(

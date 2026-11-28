@@ -402,8 +402,9 @@ class SkillVersion(models.Model):
 
 
 class SkillInstall(models.Model):
-    """How a public or official skill joins "my skills" without copying it: pinned to one version,
-    so the author cannot swap the text after the fact."""
+    """How a shared skill (a public one, an official one or a team one, MIP-2589) joins the skills a
+    member can run, without copying it: pinned to one version, so the author cannot swap the text
+    after the fact."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
@@ -412,6 +413,10 @@ class SkillInstall(models.Model):
     skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="installs")
     version_no = models.PositiveIntegerField()
     auto_update = models.BooleanField(default=False)
+    # Whether this row moved `Skill.install_count`. False for the installs Genos makes itself (the
+    # defaults and the ones kept for continuity, MIP-2589): the Hub's count is of people who chose
+    # to install, and a default count would be a public count of every account.
+    counted = models.BooleanField(default=True, db_default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

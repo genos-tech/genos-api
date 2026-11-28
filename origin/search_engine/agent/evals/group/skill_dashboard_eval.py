@@ -125,6 +125,13 @@ def _published_skill_id(slug: str) -> str:
     return str(skill.id)
 
 
+def _install_for(user_id: str, skill_id: str) -> None:
+    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+    from origin.services.skills import service  # noqa: PLC0415
+
+    service.install(CustomUser.objects.get(pk=user_id), skill_id)
+
+
 def run_case(case: SkillCase, *, info: dict[str, Any]) -> SkillRun:
     """One case, one repetition, rolled back."""
     from django.conf import settings  # noqa: PLC0415
@@ -149,6 +156,7 @@ def run_case(case: SkillCase, *, info: dict[str, Any]) -> SkillRun:
         if chosen is not None:
             run.model, run.effort = chosen.model, chosen.effort
         skill_id = _published_skill_id(case.skill)
+        _install_for(info["user_id"], skill_id)  # only an installed skill runs (MIP-2589)
         got = run_skill.run_for_answer(
             ToolContext(team_id=info["team_id"], user_id=info["user_id"]),
             {"source": "skill", "skill_id": skill_id, "input": case.query},

@@ -540,10 +540,12 @@ class PublicSkillTests(SkillBase):
         self.assertEqual(Skill.objects.get(pk=skill["id"]).install_count, 0)
         self.assertEqual(self.client.get(f"{LIST}?tab=installed").json()["skills"], [])
 
-    def test_only_a_public_skill_of_someone_else_is_installed(self):
+    def test_a_skill_of_my_own_is_not_installed_but_a_teammates_team_skill_is(self):
         team_skill = self.make_ok(slug="for-team", visibility="team")
-        self.as_user(self.user2)
         self.assertEqual(self.client.post(detail(team_skill["id"], "install/")).status_code, 400)
+        self.as_user(self.user2)
+        self.assertEqual(self.client.post(detail(team_skill["id"], "install/")).status_code, 201)
+        self.as_user(self.user)
         public = self.make_public(slug="mine-public")
         self.as_user(self.user)
         self.assertEqual(self.client.post(detail(public["id"], "install/")).status_code, 400)

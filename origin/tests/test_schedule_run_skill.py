@@ -138,7 +138,12 @@ class Base(SkillBase):
             "visibility": visibility,
         }
         data.update(over)
-        return service.create(owner, team, service.Fields(**data))
+        install = data.pop("install", True)
+        skill = service.create(owner, team, service.Fields(**data))
+        # A teammate's team skill is installed by `self.user` unless `install=False` (MIP-2589).
+        if install and owner == self.user2 and data["visibility"] == "team":
+            service.install(self.user, skill.id)
+        return skill
 
     def publish_v2(self, skill, body=BODY_V2):
         service.update(skill.owner, skill.id, service.Fields(body_markdown=body))
@@ -220,10 +225,14 @@ class SavingTests(Base):
                 self.schedule(skill)
             self.assertIn("not found", str(c.exception))
         # A public skill is readable by anyone signed in, so it is named, but never run unless the
-        # owner installed it (no squatting, the rule of `/name`).
+        # owner installed it (MIP-2589): the refusal says where to install it.
         with self.assertRaises(schedules.ScheduleError) as c:
             self.schedule(stranger)
-        self.assertIn("Install this skill", str(c.exception))
+        self.assertIn("from the Genos Hub first", str(c.exception))
+        uninstalled = self.skill(self.user2, visibility="team", slug="theirs", install=False)
+        with self.assertRaises(schedules.ScheduleError) as c:
+            self.schedule(uninstalled)
+        self.assertIn("from Team skills first", str(c.exception))
         self.assertEqual(MemberSchedule.objects.count(), 0)
 
     def test_a_teammates_published_team_skill_and_an_installed_public_one_are_allowed(self):

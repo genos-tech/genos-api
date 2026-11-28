@@ -147,9 +147,8 @@ def clean_input(value: Any) -> str:
 
 def pin_skill(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     """`{skill_id, version_no, input?}` to store, or a refusal in words. The owner must be allowed
-    to run the skill NOW (the same rule as `/name`: theirs, a teammate's published team skill, an
-    installed or official one), the skill must have a published version, and the version is pinned
-    in the result. Shared by the "Run a skill" job and a dashboard made by a skill (MIP-2399)."""
+    to run the skill NOW (the same rule as `/name`: theirs or one they installed, MIP-2589), the
+    skill must have a published version, and the version is pinned in the result. Shared by the "Run a skill" job and a dashboard made by a skill (MIP-2399)."""
     from origin.models.common.user_models import CustomUser  # noqa: PLC0415
     from origin.services.schedules import ScheduleError  # noqa: PLC0415 (import cycle)
     from origin.services.skills import run as skill_run  # noqa: PLC0415
@@ -328,6 +327,12 @@ def run_for_answer(
     except service.SkillNotFound:
         raise _fail(
             "That skill is no longer available to you, so this schedule did not run."
+        ) from None
+    except skill_run.InstallRequired as exc:
+        where = "the Genos Hub" if exc.where == skill_run.WHERE_HUB else "Team skills"
+        raise _fail(
+            f"`/{exc.slug}` is not installed, so this schedule did not run. Install it from "
+            f"{where} and it runs again at its next time."[:200]
         ) from None
     except service.SkillNeedsConfirmation:
         raise _fail(
@@ -547,7 +552,7 @@ register_job(
         effort_default=EFFORT_DEFAULT,
         agent_note=(
             "`skill_id` is a skill's id from the skills list (a skill you own with a published "
-            "version, a teammate's team skill, or one you installed). `version_no` is optional: "
+            "version, or one you installed). `version_no` is optional: "
             "it is pinned to the current published version when the schedule is saved. `input` is "
             "the words the skill is given (what you would type after /name)."
         ),

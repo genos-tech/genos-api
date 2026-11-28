@@ -16,7 +16,7 @@ from unittest import mock
 from django.conf import settings
 
 from origin.models.skills.skill_models import SkillTag
-from origin.services.skills import official
+from origin.services.skills import official, service
 from origin.services.skills.official_slugs import OFFICIAL_SLUGS
 from origin.tests.test_skills_api import LIST, detail
 from origin.tests.test_skills_official import SyncBase, official_skills, sync_command
@@ -52,6 +52,9 @@ class DashboardTagTests(SyncBase, TagBase):
 
     def test_a_synced_official_skill_publishes_the_tag_and_the_picker_sees_it(self):
         sync_command("--apply")
+        # An official skill is offered once installed from the Genos Hub (MIP-2589).
+        for skill in official_skills():
+            service.install(self.user, skill.pk)
         listed = {r["slug"] for r in self.rows() if r["isOfficial"] and DASHBOARD in r["tags"]}
         self.assertEqual(listed, self.chosen())
 

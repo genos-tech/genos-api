@@ -275,9 +275,9 @@ class McpConfirmTests(McpSkillBase):
 
     def test_get_skill_does_not_hand_over_the_text_of_an_unconfirmed_install(self):
         public = self.skill(self.outsider, "public", body_markdown="STEP: SECRET-STEPS")
-        # Not installed: it cannot be run, so reading it is only reading, as in the directory.
-        text, is_error = self.call("get_skill", skill=str(public.id))
-        self.assertFalse(is_error, text)
+        # Not installed: neither run nor read over MCP (MIP-2589).
+        text = self.refused("get_skill", skill=str(public.id))
+        self.assertNotIn("SECRET-STEPS", text)
         service.install(self.user, public.id)
         text = self.refused("get_skill", skill=str(public.id))
         self.assertNotIn("SECRET-STEPS", text)
@@ -349,6 +349,7 @@ class HarmfulTakedownTests(ConfirmBase):
         service.update(
             self.user2, self.copy.id, service.Fields(visibility="team", slug="shared-copy")
         )
+        service.install(self.third, self.copy.id)
         self.take_down()
         self.confirm(self.copy, 0, user=self.user2)
         resp, _ = self.ask({"id": str(self.copy.id)}, user=self.third)
