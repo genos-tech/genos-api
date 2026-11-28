@@ -27,8 +27,8 @@ if TYPE_CHECKING:  # the REST feed imports `via_for_viewer`; it needs none of th
     from origin.search_engine.agent.tools import ToolContext
 
 # The kinds whose `via` carries nothing private, and the only fields of each that anyone may read:
-# `agent` (the in-app AI), `pr_merge` (a PR URL), `dependencies`, `github` (a GitHub login) and
-# `unknown`. Everything else is private to its owner: `api_key` (a key's id, name and prefix),
+# `agent` (the in-app AI), `pr_merge` (a PR URL), `dependencies`, `github` (a GitHub login), `rule`
+# (a project rule's name) and `unknown`. Everything else is private to its owner: `api_key` (a key's id, name and prefix),
 # `oauth` (a connected app's connection id and client name), `app` (an Undo's internal ids), and any
 # kind added later. The gate fails closed: a new credential kind is reduced to its kind until it is
 # listed here on purpose (MIP-1507).
@@ -37,6 +37,9 @@ SAFE_VIA_FIELDS: dict[str, tuple[str, ...]] = {
     "pr_merge": ("pr_url",),
     "dependencies": (),
     "github": ("github_user",),
+    # A project rule (MIP-2522). Its name is in the history row every reader of the task already
+    # gets (`metadata.ruleName`); the stored `via` holds only `rule_id`, which stays dropped.
+    "rule": ("rule_name",),
     "unknown": (),
 }
 

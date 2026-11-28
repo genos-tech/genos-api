@@ -23,6 +23,13 @@ set. What the model passes back to a write tool stays bare: ids, display ids,
 dates, booleans and the known enum values. The model-side fence can't tell the
 two apart by key, so it is done here (`model_fence.FENCED_IN_TOOL`).
 
+A change a project rule made (MIP-2498) is `via: {kind: "rule", rule_name}` behind
+`SEARCH_ENGINE["AGENT_HISTORY_RULES"]` (MIP-2522, default off; off, it reads `unknown` as before),
+and a rule that was not applied says why in `reason`. The name is the one the history rows
+snapshotted (`metadata.ruleName`), which the app's own history shows every reader of the task;
+the rule's current row is never read. The reason is the public code the row holds
+(`automation_rules.public_reason`), in the app's words.
+
 ACL contract: same gate as `fetch_task` — tenant guard on
 `ctx.team_id`, then `task_acl_user_ids` (project member, assignee or
 reporter).
@@ -35,6 +42,7 @@ from typing import Any
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.parity import flag_on
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -50,6 +58,30 @@ from origin.search_engine.agent.tools.task_enums import (
 )
 from origin.services.history_labels import HistoryLabels
 from origin.views.public.mcp.via_privacy import via_for_viewer
+
+RULES_FLAG = "AGENT_HISTORY_RULES"
+_AUTOMATION_ACTIONS = (
+    TaskActivityActionType.AUTOMATION_APPLIED,
+    TaskActivityActionType.AUTOMATION_REFUSED,
+)
+# Why a rule was not applied, by the code the history row holds: the app's English words
+# (`automation.reasons` in genos-frontend), so the model and the member are told the same.
+_REFUSAL_REASONS = {
+    "destination": "the task cannot move to the rule's destination project",
+    "owner": "the rule's owner can no longer run it",
+    "plan": "the rule owner's plan does not include automation rules",
+    "nested": "a sub-task only moves with its parent",
+    "rate_limited": "rules have acted on this task too often in a short time",
+    "error": "something went wrong",
+    "bad_status": "the status the rule sets is no longer available",
+    "assignee_not_allowed": "the person the rule assigns cannot be assigned there",
+    "too_many_tasks": "the milestone has more than 200 tasks, too many for a rule to move",
+}
+# A milestone's row carries `milestoneId`: "the task" would be wrong there.
+_MILESTONE_REFUSAL_REASONS = {
+    "destination": "the milestone cannot move to the rule's destination project",
+    "rate_limited": "rules have acted on this milestone too often in a short time",
+}
 
 _DEFAULT_LIMIT = 30
 _MAX_LIMIT = 100
@@ -113,9 +145,55 @@ def _shown_via(via: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "unknown"}
 
 
-def _via(row: TaskActivity) -> dict[str, Any]:
+def _rule_id(row: TaskActivity) -> int | None:
+    """The rule that wrote `row`, when one did."""
+    via = (row.metadata or {}).get("via")
+    if isinstance(via, dict) and via.get("kind") == "rule":
+        rule_id = via.get("rule_id")
+        return rule_id if isinstance(rule_id, int) else None
+    return None
+
+
+def rule_names(rows: list[TaskActivity]) -> dict[int, str]:
+    """`{activity_id: name}` for the rows a rule wrote that do not carry its name themselves (the
+    ordinary status, assignee, … rows), read from the same task's `automation_applied` rows. One
+    query at most, none when the flag is off or no row needs it.
+
+    The rule's row is never read: a reader of the task may not be on the rule's project, and the
+    history already holds the name it had. A row whose task has no such snapshot (a sub-task a
+    rule moved along with its parent) stays unnamed."""
+    if not flag_on(RULES_FLAG):
+        return {}
+    need = [r for r in rows if _rule_id(r) is not None and not (r.metadata or {}).get("ruleName")]
+    if not need:
+        return {}
+    snapshots: dict[tuple[int, int], list[tuple[int, str]]] = {}
+    for task_id, activity_id, metadata in (
+        TaskActivity.objects.filter(
+            task_id__in={r.task_id for r in need},
+            action_type__in=_AUTOMATION_ACTIONS,
+            metadata__ruleId__in=list({_rule_id(r) for r in need}),
+        )
+        .order_by("activity_id")
+        .values_list("task_id", "activity_id", "metadata")
+    ):
+        if name := metadata.get("ruleName"):
+            snapshots.setdefault((task_id, metadata["ruleId"]), []).append((activity_id, name))
+    out = {}
+    for row in need:
+        seen = snapshots.get((row.task_id, _rule_id(row)))
+        if seen:
+            # The run's own row is written after its changes; a renamed rule keeps the old name
+            # on the changes it made under it.
+            out[row.activity_id] = next(
+                (name for activity_id, name in seen if activity_id > row.activity_id), seen[-1][1]
+            )
+    return out
+
+
+def _via(row: TaskActivity, names: dict[int, str] | None = None) -> dict[str, Any]:
     """How the change arrived. `metadata.via` is stamped by `_record`;
-    rows written before it existed, and system writes, have none."""
+    rows written before it existed, and system writes, have none. `names` is `rule_names`."""
     meta = row.metadata or {}
     if meta.get("closedByPrMerge"):
         return {"kind": "pr_merge", "pr_url": meta.get("prUrl")}
@@ -128,6 +206,13 @@ def _via(row: TaskActivity) -> dict[str, Any]:
         return {"kind": "github", "github_user": meta.get("github_username")}
     via = meta.get("via")
     if isinstance(via, dict) and via.get("kind"):
+        if via["kind"] == "rule" and flag_on(RULES_FLAG):
+            name = meta.get("ruleName") or (names or {}).get(row.activity_id)
+            # The name is typed by whoever manages the rule, so it is fenced.
+            return {
+                "kind": "rule",
+                **({"rule_name": wrap_workspace_content(str(name))} if name else {}),
+            }
         return _shown_via(via)
     return {"kind": "unknown"}
 
@@ -206,6 +291,7 @@ def _entry(
     row: TaskActivity,
     usernames: dict[str, str],
     viewer_id: Any = None,
+    names: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     actor = row.actor
     entry: dict[str, Any] = {
@@ -219,8 +305,16 @@ def _entry(
         ),
         # A key or a connected app writes as its owner, so the row's actor is the owner: anyone
         # else reads the kind only (MIP-1470).
-        "via": via_for_viewer(_via(row), row.actor_id, viewer_id),
+        "via": via_for_viewer(_via(row, names), row.actor_id, viewer_id),
     }
+    if row.action_type == TaskActivityActionType.AUTOMATION_REFUSED and flag_on(RULES_FLAG):
+        meta = row.metadata or {}
+        code = meta.get("reason")
+        if code:
+            words = _REFUSAL_REASONS.get(code, str(code))
+            if meta.get("milestoneId") is not None:
+                words = _MILESTONE_REFUSAL_REASONS.get(code, words)
+            entry["reason"] = words
     if row.action_type in (
         TaskActivityActionType.COMMENT_ADDED,
         TaskActivityActionType.COMMENT_EDITED,
@@ -320,7 +414,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     labels = HistoryLabels(rows, viewer_id=ctx.user_id, task_project_id=task.project_id)
     for r in rows:
         labels.cut(r)
-    history = [_entry(r, usernames, ctx.user_id) for r in rows]
+    names = rule_names(rows)
+    history = [_entry(r, usernames, ctx.user_id, names) for r in rows]
 
     return {
         "task_id": task.task_id,

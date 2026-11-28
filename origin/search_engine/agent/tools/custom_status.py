@@ -10,6 +10,9 @@ project gives it ("In Review", "Ready to start"). With the flag on:
 
 A name that does not fit is never a refusal (Ken, 2026-11-22: Genos guides with suggestions): the
 rest of the call is applied and the reply says what was left out, with the names that would fit.
+The paid eval of MIP-2494 found the model asking instead of proposing the write, and not naming
+those statuses afterwards (MIP-2546): the argument's description says to send the name anyway, and
+the reply says to tell the member the names (first in the result for the two single-task writes).
 
 With the flag off nothing here is declared, read or written.
 """
@@ -37,7 +40,8 @@ ARG = "custom_status"
 
 _WRITE_DESCRIPTION = (
     "Status name from list_project_tags `statuses`, e.g. 'In Review'. Also sets `status`, so "
-    "omit that. '' removes it."
+    "omit that. '' removes it. A name not listed is no reason to stop or ask: send it with the "
+    "other changes; the reply lists names that fit."
 )
 #: What the flag adds to a write tool's schema (`tool_flag_params`).
 PROPERTIES: dict[str, dict[str, Any]] = {
@@ -111,13 +115,33 @@ class Choice:
 
 
 def _left_out(project: ProjectMaster | None, why: str) -> Choice:
+    candidates = project_status_choices(project) if project is not None else []
+    # The names are not put in the sentence: they are typed by users and stay in `candidates`.
+    say = " Tell the member, naming the statuses in `candidates`." if candidates else ""
     return Choice(
         suggestion={
             "kind": ARG,
-            "message": f"`{ARG}` was not applied: {why} The rest of the call was.",
-            "candidates": project_status_choices(project) if project is not None else [],
+            "message": f"`{ARG}` was not applied: {why} The rest of the call was.{say}",
+            "candidates": candidates,
         }
     )
+
+
+#: What a single-task write says FIRST in its result when a name was left out with names to offer:
+#: the in-app loop does not show the model `__summary__`, and a sentence at the end of a result was
+#: not relayed (`update_task`'s move notice, MIP-1609).
+LEFT_OUT_NOTICE = (
+    "`custom_status` was not applied, so say that in your answer and list the status names in "
+    "`suggestions` > `candidates` for the member to pick from. Any other change was made."
+)
+
+
+def lead_with_notice(result: dict[str, Any], choice: Choice) -> dict[str, Any]:
+    """`result` with `tell_the_member` first when `choice` left a name out and has names to offer.
+    A notice the tool already leads with (a move's) is kept as it is."""
+    if not (choice.suggestion and choice.suggestion["candidates"]) or "tell_the_member" in result:
+        return result
+    return {"tell_the_member": LEFT_OUT_NOTICE, **result}
 
 
 def choose(

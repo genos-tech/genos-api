@@ -43,8 +43,11 @@ from django.db import transaction
 from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.notification_models import NotificationPreference
 from origin.models.common.team_models import TeamMembers
+from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import ai_app_switches as switches
 from origin.services.mcp_client_family import credential_family
 from origin.services.v3_activity import SURFACE_AI_APP
@@ -134,18 +137,49 @@ def _milestone_item(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _note_place(family: str, note_id, task_id) -> tuple[str, Any, Any]:
+    """`(url, project_id, task_id)` of a note. The app opens a notice's note in a modal from the
+    url alone (MIP-1755), and not every write's answer says where its note sits (a comment, a
+    block edit or a share names only the note), so a task or chat note is read from its row."""
+    fallback = ("/workspace/notes", None, task_id)
+    if not note_id:
+        return fallback
+    # A Team Notes or shared note is a personal note; its id opens it.
+    if family in ("personal", "team", "shared", "1"):
+        return f"/workspace/notes/my/{note_id}", None, task_id
+    if family in ("task", "2"):
+        row = (
+            TaskNoteMaster.objects.filter(note_id=note_id)
+            .values_list("project_id", "task_id")
+            .first()
+        )
+        project_id, task_id = row if row else (None, task_id)
+        if task_id and not project_id:
+            project_id = _task_facts(task_id).get("projectId")
+        if not (project_id and task_id):
+            return fallback
+        url = f"/workspace/notes/task/project/{project_id}/task/{task_id}/note/{note_id}"
+        return url, project_id, int(task_id)
+    if family in ("chat", "3"):
+        row = (
+            ChatNoteMaster.objects.filter(note_id=note_id)
+            .values_list("chat_type", "channel_id", "thread_root_id")
+            .first()
+        )
+        if row and row[0] in CHAT_TYPE_LABEL and row[1]:
+            chat_type, channel_id, thread_root_id = row
+            url = (
+                f"/workspace/notes/chat/{CHAT_TYPE_LABEL[chat_type]}/{channel_id}"
+                f"/thread/{thread_root_id or 0}/note/{note_id}"
+            )
+            return url, None, task_id
+    return fallback
+
+
 def _note_item(payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     note_type = payload.get("note_type") or args.get("note_type")
     note_id = payload.get("note_id")
-    task_id = payload.get("task_id")
-    project_id = None
-    url = "/workspace/notes"
-    if str(note_type) in ("personal", "1") and note_id:
-        url = f"/workspace/notes/my/{note_id}"
-    elif str(note_type) in ("task", "2") and note_id and task_id:
-        project_id = _task_facts(task_id).get("projectId")
-        if project_id:
-            url = f"/workspace/notes/task/project/{project_id}/task/{task_id}/note/{note_id}"
+    url, project_id, task_id = _note_place(str(note_type), note_id, payload.get("task_id"))
     return {
         "kind": "note",
         "id": note_id,
@@ -295,6 +329,10 @@ def _created_todo(args, payload) -> Notice | None:
         "title": _clip(payload.get("title")),
         "url": "/workspace/todo",
     }
+    # The day the item sits under is part of its link: without it only the whole list can open.
+    if local_date := payload.get("local_date"):
+        item["localDate"] = local_date
+        item["url"] = f"/workspace/todo/{local_date}/item/{payload['item_id']}"
     return Notice(VERB_CREATED, "todo", 1, [item])
 
 
