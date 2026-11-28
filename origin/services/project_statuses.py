@@ -94,12 +94,26 @@ def custom_status_ref(obj) -> dict | None:
     return {"id": row.status_id, "name": row.name, "category": row.category}
 
 
-def status_label(obj, status: str) -> str:
+def default_status_names(project_ids) -> dict:
+    """`{(project id, category): name}` of each project's default status per category, in one
+    query: what `status_label` reads one at a time."""
+    return {
+        (project_id, category): name
+        for project_id, category, name in ProjectStatus.objects.filter(
+            project_id__in=project_ids, is_default=True, archived_at__isnull=True
+        ).values_list("project_id", "category", "name")
+    }
+
+
+def status_label(obj, status: str, *, defaults: dict | None = None) -> str:
     """What `obj`'s project calls `status` (the order in the module docstring), for text the
-    server writes, such as a chat card. A built-in nobody renamed reads as `status` itself."""
+    server writes, such as a chat card. A built-in nobody renamed reads as `status` itself.
+    `defaults` is `default_status_names` of the project, for a caller that labels many rows."""
     ref = custom_status_ref(obj) if status == obj.status else None
     if ref is not None:
         return ref["name"]
+    if defaults is not None:
+        return defaults.get((obj.project_id, status)) or status
     name = (
         ProjectStatus.objects.filter(
             project_id=obj.project_id,
