@@ -1,0 +1,243 @@
+# MIP-2494: the system status Rejected (always on, no flag). Does the agent pick Rejected when asked to
+# reject / won't-fix / cancel a task, still pick Closed (or Deleted) when asked for that, and leave
+# Rejected tasks out of progress and "what is left"? Judged on what the model PROPOSES (a write never
+# runs in an eval). Seed `status_desk`: 11 tasks, 2 Rejected, so progress is 2 of 9 (22%), not 2 of 11.
+# `reject` and `close` are also tagged `t2494` so they run with AGENT_CUSTOM_STATUS on.
+# Read the progress and what-is-left answers by hand.
+
+- id: t2494-rej.reject.en
+  lang: en
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Positive: 'reject' becomes status Rejected."
+  query: "Reject the task 'Build the fax integration' in the project 'Eval status desk'. We decided against it."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Rejected$"
+
+- id: t2494-rej.reject.ja
+  lang: ja
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "Positive: 'reject' becomes status Rejected."
+  query: "プロジェクト「評価ステータス管理」のタスク「FAX連携を作る」を却下してください。やらないことにしました。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Rejected$"
+
+- id: t2494-rej.wontfix.en
+  lang: en
+  tags: [eval-group, t2494-rejected]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Positive: 'won't fix' becomes Rejected, not Closed or Deleted."
+  query: "Mark the task 'Support pager alerts' as won't fix."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Rejected$"
+
+- id: t2494-rej.wontfix.ja
+  lang: ja
+  tags: [eval-group, t2494-rejected]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "Positive: 'won't fix' becomes Rejected, not Closed or Deleted."
+  query: "タスク「ポケベル通知に対応する」は対応しない(won't fix)扱いにしてください。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Rejected$"
+
+- id: t2494-rej.cancel.en
+  lang: en
+  tags: [eval-group, t2494-rejected]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Positive: 'cancel' becomes Rejected, not Closed or Deleted."
+  query: "Cancel the task 'Design the kiosk mode'. We are not going to do it, but keep a record of it."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Rejected$"
+
+- id: t2494-rej.cancel.ja
+  lang: ja
+  tags: [eval-group, t2494-rejected]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "Positive: 'cancel' becomes Rejected, not Closed or Deleted."
+  query: "タスク「キオスクモードを設計する」は中止します。やりませんが、記録は残してください。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Rejected$"
+
+- id: t2494-rej.close.en
+  lang: en
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Negative: 'close' stays Closed."
+  query: "Close the task 'Write the release notes'."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Closed$"
+
+- id: t2494-rej.close.ja
+  lang: ja
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "Negative: 'close' stays Closed."
+  query: "タスク「リリースノートを書く」をクローズしてください。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Closed$"
+
+- id: t2494-rej.finished.en
+  lang: en
+  tags: [eval-group, t2494-rejected]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Negative: finished work is Closed."
+  query: "I finished 'Refresh the onboarding copy'. Please mark it as done."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Closed$"
+
+- id: t2494-rej.finished.ja
+  lang: ja
+  tags: [eval-group, t2494-rejected]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "Negative: finished work is Closed."
+  query: "「オンボーディングの文面を直す」は作業が終わりました。完了にしてください。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Closed$"
+
+- id: t2494-rej.delete.en
+  lang: en
+  tags: [eval-group, t2494-rejected]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Guard: 'delete, created by mistake' stays Deleted."
+  query: "Delete the task 'Add the dark mode toggle'. I created it by mistake."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^Deleted$"
+
+- id: t2494-rej.progress.en
+  lang: en
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Progress leaves the 2 Rejected tasks out (2 of 9, 22%)."
+  query: "How far along is the project 'Eval status desk'? Give me the completion rate with the task counts."
+  expect:
+    no_errors: true
+    tools_used_contains_any: [get_project_summary, list_tasks]
+    answer_contains_any: ["22%", "22 %", "22.2", "2 of 9", "2/9", "2 out of 9", "2 of the 9"]
+    answer_does_not_contain: ["2 of 11", "2/11", "2 out of 11", "18%", "36%"]
+    tool_calls_at_most: 5
+
+- id: t2494-rej.left.en
+  lang: en
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "'What is left' lists neither Rejected task."
+  query: "What is left to do in the project 'Eval status desk'? List only the tasks that still need work."
+  expect:
+    no_errors: true
+    tools_used_contains_any: [list_tasks, get_project_summary, get_my_focus_tasks]
+    answer_contains_any: ["Add the dark mode toggle"]
+    answer_does_not_contain: ["Print weekly paper reports", "Ship a desktop widget"]
+    tool_calls_at_most: 5
+
+- id: t2494-rej.progress.ja
+  lang: ja
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "Progress leaves the 2 Rejected tasks out (2 of 9, 22%)."
+  query: "プロジェクト「評価ステータス管理」はどのくらい進んでいますか?完了率とタスク数を教えてください。"
+  expect:
+    no_errors: true
+    tools_used_contains_any: [get_project_summary, list_tasks]
+    answer_contains_any: ["22%", "22%", "22.2", "2/9", "9件中2件", "9件のうち2件", "9 件中 2 件", "9件中の2件", "9件のうち、2件"]
+    answer_does_not_contain: ["2/11", "11件中", "18%", "36%"]
+    tool_calls_at_most: 5
+
+- id: t2494-rej.left.ja
+  lang: ja
+  tags: [eval-group, t2494-rejected, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "'What is left' lists neither Rejected task."
+  query: "プロジェクト「評価ステータス管理」で残っている作業は何ですか?まだ対応が必要なタスクだけを一覧にしてください。"
+  expect:
+    no_errors: true
+    tools_used_contains_any: [list_tasks, get_project_summary, get_my_focus_tasks]
+    answer_contains_any: ["ダークモードの切り替えを追加する"]
+    answer_does_not_contain: ["週次の紙レポートを印刷する", "デスクトップウィジェットを出す"]
+    tool_calls_at_most: 5
+
