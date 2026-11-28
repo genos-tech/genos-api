@@ -4721,8 +4721,9 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
     session, so skipping it opened an empty conversation. Any other such run (still
     running, or an ask refused before it began) is left out.
 
-    A run awaiting approval also carries `pending_approval`: the card the stream sent
-    when it paused, or null when there is nothing left to decide.
+    A run awaiting approval also carries `pending_approval`. For the LAST turn it is
+    the card the stream sent when the run paused (the only one the app can decide
+    from); null for an earlier one, and when no card may be given (`_pending_card_of`).
     """
     runs = (
         AgentRun.objects.filter(session=session)
@@ -4735,11 +4736,13 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
         )
     )
     out: list[dict[str, Any]] = []
+    last: AgentRun | None = None
     for r in runs:
         answer = r.final_answer_text or ""
         error = r.error_message or ""
         if not answer and not error and r.status not in ("cancelled", "awaiting_approval"):
             continue
+        last = r
         out.append(
             {
                 "run_id": str(r.run_id),
@@ -4757,25 +4760,31 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
                 # and that nothing changed since) is checked when it is tried, not
                 # here: a restored turn shows Undo, and the click may be refused.
                 "undo": [info for step in r.steps.all() if (info := undo.step_info(step))],
-                **(
-                    {"pending_approval": _pending_card_of(r)}
-                    if r.status == "awaiting_approval"
-                    else {}
-                ),
+                **({"pending_approval": None} if r.status == "awaiting_approval" else {}),
             }
         )
+    # One card at most: building it reads labels (and, for a calendar write, Google),
+    # and thread and note windows ask for this payload again while they are open.
+    if last is not None and last.status == "awaiting_approval":
+        out[-1]["pending_approval"] = _pending_card_of(session, last)
     return out
 
 
-def _pending_card_of(run: AgentRun) -> dict[str, Any] | None:
+def _pending_card_of(session: AgentSession, run: AgentRun) -> dict[str, Any] | None:
     """The approval card of a paused run, built again from its stored step, or None.
 
     Only ever sent to the run's own asker (every caller of `_build_turns_payload`
     reads one person's session), who was handed the same token when it paused;
-    `/decide/` checks the person, the token and the status again. Never raises: a
-    card that cannot be built costs the buttons, not the whole conversation.
+    `/decide/` checks the person, the token and the status again. None for someone
+    no longer in the team, or who can no longer open what the conversation is about:
+    a card is a way to act, which the stream gave them while they still could. Never
+    raises: a card that cannot be built costs the buttons, not the whole conversation.
     """
     try:
+        if not participates_in_team(run.team_id, run.user_id) or not session_scope.object_readable(
+            session, run.user_id
+        ):
+            return None
         step = pending_step_of(run)
         if step is None or run.pending_approval_token is None:
             return None

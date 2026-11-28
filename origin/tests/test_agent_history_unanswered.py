@@ -20,6 +20,7 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine import agent_views
 from origin.search_engine.agent.controller import PENDING_APPROVAL_MARKER
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
@@ -116,6 +117,22 @@ class UnansweredRunsAreTurnsTests(HistoryBase):
         session = self.session()
         self.run_row(session, status="awaiting_approval", pending_approval_token=uuid.uuid4())
         (turn,) = self.turns(session)
+        self.assertIsNone(turn["pending_approval"])
+
+    def test_only_the_last_turn_gets_a_card(self):
+        session = self.session()
+        self.paused(session)
+        self.paused(session)
+        first, last = self.turns(session)
+        self.assertIsNone(first["pending_approval"])
+        self.assertIsNotNone(last["pending_approval"])
+
+    def test_someone_no_longer_in_the_team_gets_no_card(self):
+        session = self.session()
+        self.paused(session)
+        TeamMembers.objects.filter(team=self.team, attendee=self.user).delete()
+        TeamMaster.objects.filter(pk=self.team.pk).update(owner=self.other)
+        (turn,) = agent_views._build_turns_payload(session)
         self.assertIsNone(turn["pending_approval"])
 
     def test_a_running_run_and_a_refused_ask_stay_hidden(self):
