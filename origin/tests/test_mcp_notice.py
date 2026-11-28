@@ -16,14 +16,17 @@ Pinned here:
 from __future__ import annotations
 
 import json
+import uuid
 from unittest import mock
 
 import requests
 
-from origin.models.chat.unified_models import Activity, ActivityType
+from origin.models.chat.unified_models import Activity, ActivityType, Channel, ChannelKind
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.models.common.notification_models import NotificationPreference
+from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services import ai_app_switches as switches
 from origin.services import mcp_notice
@@ -519,6 +522,79 @@ class WhatTheNoticeDoesDownstreamTests(NoticeBase):
         self.assertEqual(data["items"], [])
         # Not even counted as something the digest could not place.
         self.assertEqual(data["stats"]["hidden"], {})
+
+
+class LinksTheModalCanOpenTests(NoticeBase):
+    """MIP-1755: the app opens a notice's item in a modal from the `url` alone, so a to-do names its
+    day and a task or chat note's link is built from the note itself, whatever the tool answered."""
+
+    def test_a_new_to_do_links_its_day_and_item(self):
+        self.call("create_todo_item", title="Call the lawyer", target_date="2026-11-30")
+        item = self.only().meta["items"][0]
+        self.assertEqual(item["localDate"], "2026-11-30")
+        self.assertEqual(item["url"], f"/workspace/todo/2026-11-30/item/{item['id']}")
+
+    def test_a_task_note_links_its_task_when_the_answer_names_none(self):
+        note = TaskNoteMaster.objects.create(
+            team=self.team, project=self.project, task=self.task, owner=self.user, title="Spec"
+        )
+        # What `comment_on_note` / `manage_note_sharing` / `edit_note_block` hand over: no task id.
+        (item,) = mcp_notice.build_notice(
+            "comment_on_note",
+            {},
+            {"note_id": note.note_id, "note_type": "task", "thread_id": "abc"},
+        ).items
+        self.assertEqual(
+            item["url"],
+            f"/workspace/notes/task/project/{self.project.project_id}"
+            f"/task/{self.task.task_id}/note/{note.note_id}?comment=abc",
+        )
+        self.assertEqual(item["taskId"], self.task.task_id)
+        self.assertEqual(item["projectId"], self.project.project_id)
+
+    def test_a_chat_note_links_its_chat_and_thread(self):
+        channel = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="Room")
+        root = uuid.uuid4()
+        note = ChatNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            chat_type=2,
+            channel=channel,
+            is_thread=True,
+            thread_root_id=root,
+            title="Minutes",
+        )
+        plain = ChatNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            chat_type=2,
+            channel=channel,
+            is_thread=False,
+            title="Plan",
+        )
+        for row, thread in ((note, root), (plain, 0)):
+            (item,) = mcp_notice.build_notice(
+                "create_note", {}, {"note_id": row.note_id, "note_type": "chat", "title": "x"}
+            ).items
+            self.assertEqual(
+                item["url"],
+                f"/workspace/notes/chat/gm/{channel.id}/thread/{thread}/note/{row.note_id}",
+            )
+
+    def test_a_team_note_links_the_note(self):
+        (item,) = mcp_notice.build_notice(
+            "create_note", {"note_type": "team"}, {"note_id": 5, "title": "Handbook"}
+        ).items
+        self.assertEqual(item["url"], "/workspace/notes/my/5")
+
+    def test_a_note_with_no_task_keeps_the_notes_page(self):
+        note = TaskNoteMaster.objects.create(
+            team=self.team, project=self.project, owner=self.user, title="Loose"
+        )
+        (item,) = mcp_notice.build_notice(
+            "create_note", {}, {"note_id": note.note_id, "note_type": "task", "title": "Loose"}
+        ).items
+        self.assertEqual(item["url"], "/workspace/notes")
 
 
 class SentenceTests(NoticeBase):
