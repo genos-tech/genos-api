@@ -55,7 +55,12 @@ from origin.services.channel_scope import (
     user_channels_qs,
 )
 from origin.services.chat_note_access import revoke_membership_roles
-from origin.services.deleted_account_channel_owners import actor_gm_role
+from origin.services.deleted_account_channel_owners import (
+    actor_gm_role,
+    host_side_member,
+    owner_is_gone,
+    reassign_owner_after_leave,
+)
 from origin.services.external_grants import (
     ExternalGrantError,
     active_grants_for_object,
@@ -66,6 +71,12 @@ from origin.services.external_grants import (
     visible_shares_for_object,
 )
 from origin.services.hidden_scope import channel_hidden_from, project_name_taken_for
+from origin.services.mdm_members import (
+    MDM_LIMIT_CODE,
+    MDM_LIMIT_MESSAGE,
+    MDM_MAX_MEMBERS,
+    has_room_for,
+)
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     OWNER,
@@ -93,6 +104,13 @@ from origin.views.utils.scope_guards import is_guest, is_team_member, is_team_pa
 from origin.views.utils.upload_validation import check_attachment_upload, check_image_upload
 
 User = get_user_model()
+
+
+def _mdm_full_response():
+    return Response(
+        {"error": MDM_LIMIT_MESSAGE, "code": MDM_LIMIT_CODE},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 def _canonical_dm_pair(user_a_id, user_b_id):
@@ -773,6 +791,9 @@ class ChannelListView(AuthenticatedAPIView):
                 {"error": "One or more member_user_ids not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        # The creator counts towards the limit (MIP-2549).
+        if kind == ChannelKind.MDM and len(unique_member_ids) + 1 > MDM_MAX_MEMBERS:
+            return _mdm_full_response()
 
         try:
             with transaction.atomic():
@@ -1264,11 +1285,15 @@ class ChannelMembersView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Who is in the chat NOW: of the people this call writes, only those who are not are
-        # gaining it (a re-add of a live member changes nothing for them).
-        already_in = set(chat_member_rows(channel).values_list("user_id", flat=True))
         try:
-            added = self._add_members(channel, users, request.user)
+            with transaction.atomic():
+                # All or nothing: a list that would pass the limit adds nobody (MIP-2549).
+                if not has_room_for(channel, [u.id for u in users]):
+                    return _mdm_full_response()
+                # Who is in the chat NOW: of the people this call writes, only those who are
+                # not are gaining it (a re-add of a live member changes nothing for them).
+                already_in = set(chat_member_rows(channel).values_list("user_id", flat=True))
+                added = self._add_members(channel, users, request.user)
         except ExternalGrantError as exc:
             return Response({"error": exc.code}, status=_grant_error_status(exc))
         except PermissionError as exc:
@@ -1308,7 +1333,8 @@ class ChannelMembersView(AuthenticatedAPIView):
           exactly how they would drift apart.
 
         An internal channel keeps its original behaviour untouched: any
-        member may add any teammate.
+        member may add any teammate (a multi-person DM up to its limit, checked
+        by the caller).
         """
         if not channel.is_external:
             with transaction.atomic():
@@ -1555,6 +1581,12 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
                 {"error": "PM channel roles are managed via the project."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if channel.kind == ChannelKind.MDM:
+            # Only its creator removes people (MIP-2549), so there is no role to hand out.
+            return Response(
+                {"error": "A multi-person DM has no member roles."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not can_manage(actor_gm_role(channel, request.user.id)):
             return Response(
@@ -1612,7 +1644,9 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
             else None
         )
         actor_role = resolve_gm_role(channel, request.user.id)
-        if is_self and actor_role == OWNER:
+        # Anyone may leave a multi-person DM, its creator too (MIP-2549): there is no transfer
+        # screen for one, so the chat is handed on below instead.
+        if is_self and actor_role == OWNER and channel.kind != ChannelKind.MDM:
             # The page hides Leave for the owner; the server now refuses it too, as it does
             # for a team and a project: an ownerless channel has nobody to manage it.
             return Response(
@@ -1623,6 +1657,14 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
         # Taking out someone else: a group with no live owner is run by any host-side member
         # (MIP-1550). Leaving, above, keeps the real owner only.
         actor_role = actor_gm_role(channel, request.user.id)
+        # In a multi-person DM only the creator takes someone else out (MIP-2549); when the
+        # creator's account is gone, any host-side member may.
+        if (
+            channel.kind == ChannelKind.MDM
+            and owner_is_gone(channel)
+            and host_side_member(channel, request.user.id)
+        ):
+            actor_role = OWNER
         if not is_self and can_manage(actor_role):
             # Taking out SOMEONE ELSE follows `can_remove_member` (MIP-1371): the owner removes
             # anyone but themselves, an editor only viewers. This used to let an editor remove
@@ -1665,8 +1707,20 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
             # Already gone — 204 anyway for idempotency.
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        member.is_deleted = True
-        member.save(update_fields=["is_deleted", "ts_updated_at"])
+        hands_on = channel.kind == ChannelKind.MDM and str(channel.owner_id) == str(user_id)
+        with transaction.atomic():
+            member.is_deleted = True
+            member.save(update_fields=["is_deleted", "ts_updated_at"])
+            if hands_on:
+                reassign_owner_after_leave(channel, user_id)
+        if hands_on:
+            # The others' open apps re-read their list and learn who the creator is now.
+            push_channel_appeared(
+                user_ids=chat_member_rows(channel).values_list("user_id", flat=True),
+                team_id=channel.team_id,
+                channel_id=channel.id,
+                kind=channel.kind,
+            )
         # Leaving ends the roles the chat's membership wrote on its notes (MIP-1482).
         revoke_membership_roles(
             user_id=user_id, channel_id=channel.id, joined_at=member.ts_joined_at
