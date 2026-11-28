@@ -1102,65 +1102,6 @@ def _write_card_messages(rewrites, *, sync_mentions) -> None:
             MessageMention.objects.bulk_create(rows, ignore_conflicts=True)
 
 
-class TaskCardMessageView(AuthenticatedAPIView):
-    """PATCH /api/v3/tasks/{task_id}/card-message/
-
-    The app calls this after an edit to a task, and the Flask WS proxy re-broadcasts the
-    returned row as `message.updated`. The card is REBUILT HERE from the row as stored
-    (`task_card_post.refresh_task_card`, MIP-2483): the `body`, `body_text` and `metadata` the
-    client sends are accepted for compatibility and ignored, so there is one builder and the card
-    cannot say what the task does not. The write that preceded this call has usually refreshed
-    it already.
-
-    Keyed by `task_id` (not message_id) because the caller — the task editor — knows the task id
-    but not the PM message UUID, and the edit can originate from surfaces (Task Home, board) where
-    the PM channel isn't loaded client-side.
-
-    Authorization: the requester must be a member of the PM channel that holds the card
-    (`is_chat_member`: the project's people). A non-member is answered exactly as a task with no
-    card (200 `{"updated": false}`), so the response does not say whether a card exists. This
-    deliberately does NOT require the requester to be the message's sender, which is why it can't
-    reuse `MessageDetailView.patch` (sender-only).
-    """
-
-    def patch(self, request, task_id):
-        data = body_object(request)
-        if not isinstance(data.get("body"), list):
-            return Response(
-                {"error": "body must be a non-empty list of blocks."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # The top-level (non-thread-reply) card header for this task.
-        # There is one per task per PM channel; `order_by("seq")` resolves
-        # a (pathological) duplicate deterministically to the earliest
-        # header. `select_related("channel")` for the membership check +
-        # the broadcast's channel id/kind.
-        message = (
-            Message.objects.select_related("channel")
-            .filter(task_id=task_id, is_thread_reply=False, deleted_at__isnull=True)
-            .order_by("seq")
-            .first()
-        )
-        if message is None:
-            # No card message (task predates the PM-card feature, or the project
-            # has no PM channel). Not an error — nothing to sync. 200 with a
-            # sentinel so the WS proxy knows to skip the broadcast.
-            return Response({"updated": False}, status=status.HTTP_200_OK)
-
-        if not is_chat_member(message.channel_id, request.user.id):
-            # The SAME answer as "no card" (MIP-1494). A 404 here against the 200 sentinel
-            # above told any team member whether a task id has a chat card they cannot read.
-            return Response({"updated": False}, status=status.HTTP_200_OK)
-
-        from origin.services.task_card_post import refresh_task_card  # noqa: PLC0415
-
-        refresh_task_card(message.task_id)
-
-        message = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
-        return Response(MessageSerializer(message).data)
-
-
 # Historical flat cap for chat attachments — now the FALLBACK while
 # the per-tier `upload_max_mb` ships dark (None). Above the resolved
 # limit, the server returns 413. Keep in sync with the frontend

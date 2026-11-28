@@ -11,7 +11,7 @@ stored, whatever wrote it (MIP-2483):
     is never a second;
   * **refreshed** after every write that changes something the card shows, from any path
     (`schedule_refresh`, called by the task signals), so a browser that closes early cannot leave it
-    stale. `PATCH card-message`, which the app sends after an edit, rebuilds it here too;
+    stale. No client writes a card: there is no endpoint for it (MIP-2568);
   * **sent again, unchanged**, to a milestone's open chat when tasks join or leave it or one is
     deleted (`schedule_membership_refresh`, MIP-2570): the progress it shows is not in its body;
   * **made whole** when a comment arrives on a task that has none (`header_parts`): the comment

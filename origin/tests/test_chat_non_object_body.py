@@ -452,26 +452,6 @@ class MessageEditBodyShapeTests(_MissingFieldAnswers, _ChatClient):
         self.assertIsNotNone(self.message.edited_at)
 
 
-class TaskCardBodyShapeTests(_MissingFieldAnswers, _ChatClient):
-    METHOD = "PATCH"
-    MISSING_FIELD = BLOCKS_MISSING
-
-    def url(self):
-        return f"/api/v3/tasks/{self.task.task_id}/card-message/"
-
-    def test_a_valid_body_still_answers_what_it_did(self):
-        new = [{"type": "heading", "content": [{"type": "text", "text": "New title"}]}]
-        resp = self.client.patch(
-            self.url(), {"body": new, "body_text": "New title", "metadata": {"k": 1}}, format="json"
-        )
-        self.assertEqual(resp.status_code, 200)
-        self.card.refresh_from_db()
-        # The card is rebuilt from the row (MIP-2483); what was sent is not stored.
-        self.assertNotEqual(self.card.body, new)
-        self.assertEqual(self.card.metadata["taskId"], self.task.task_id)
-        self.assertNotIn("k", self.card.metadata)
-
-
 # --------------------------------------------------------------------------- #
 # reaction_views_v3, read_cursor_views, pin_flag_views, todo_views            #
 # --------------------------------------------------------------------------- #

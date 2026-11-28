@@ -59,7 +59,6 @@ NOT_A_SHARED_WRITE = {
     "channel_restore_views.ChannelRestoreView post": "the chat's owner only",
     "channel_views.ChannelListView post": "creates a new chat",
     "channel_views.ChannelDetailView delete": "only the chat's owner may delete it",
-    "message_views.TaskCardMessageView patch": "redraws a card from the task's own data",
     "personal_tag_views.PersonalTagListView post": "own tags",
     "personal_tag_views.PersonalTagDetailView patch delete": "own tags",
     "personal_tag_views.ChannelPersonalTagsView put": "own tags",

@@ -9,8 +9,7 @@ English.
 A card is ONE stored BlockNote message for the whole channel, with its field names as text, so it
 cannot be translated per viewer at read time. The server picks ONE language, the card's sender's
 (`CustomUser.language`, English when unknown), for the first post and for every refresh, so a
-card never changes language because somebody else edited the task. The app-written card is
-untouched: the app rewrites its own card (`PATCH card-message`) and the refresh never runs for it.
+card never changes language because somebody else edited the task.
 """
 
 from origin.models.chat.unified_models import Message

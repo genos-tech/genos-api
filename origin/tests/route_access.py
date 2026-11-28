@@ -158,7 +158,6 @@ REGISTRY = {
     "origin.views.chat.message_views.MessageDetailView": checked("_fetch_for_user"),
     "origin.views.chat.message_views.OlderMessagesView": checked("_verify_member_or_404"),
     "origin.views.chat.message_views.MessagesDeltaView": checked("_verify_member_or_404"),
-    "origin.views.chat.message_views.TaskCardMessageView": checked("ChannelMember"),
     "origin.views.chat.message_views.ThreadMessagesDeltaView": checked("_verify_member_or_404"),
     # views.chat.personal_tag_views
     "origin.views.chat.personal_tag_views.ChannelPersonalTagsView": checked(
