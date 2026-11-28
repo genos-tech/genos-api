@@ -7,9 +7,9 @@ workspace?" without forcing the user to pick a project.
 
 Differences from `get_project_summary`:
   * No `project_id` argument — scope is "all my projects".
-  * `status_breakdown` is FIVE rows including "Deleted" (the enum
-    value, distinct from the `is_deleted` tombstone). Soft-deleted
-    rows are still excluded everywhere.
+  * `status_breakdown` keeps a "Deleted" row (the enum value, distinct
+    from the `is_deleted` tombstone), counted apart: Deleted and Rejected
+    are in no total. Soft-deleted rows are still excluded everywhere.
   * Adds `priority_breakdown` (Minimal/Low/Normal/High/Critical).
   * Adds a `per_project` list (top 10 by total task count) so the
     agent can spot which project drives the total without a second tool
@@ -36,6 +36,9 @@ from origin.services.user_time import today_for_user_id
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
 _CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
+# Rejected (MIP-2494) has its own row and is no part of a total. Deleted means gone (MIP-2581, as in
+# the project and milestone summaries): its row is counted apart.
+_NOT_IN_TOTAL = ["Rejected", "Deleted"]
 _PER_PROJECT_LIMIT = 10
 
 
@@ -66,8 +69,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     today = today_for_user_id(ctx.user_id)
     annotations: dict[str, Any] = {
-        # Rejected (MIP-2494) has its own row and is no part of a total.
-        "total_tasks": Count("task_id", distinct=True, filter=~Q(**{sf: "Rejected"})),
+        "total_tasks": Count("task_id", distinct=True, filter=~Q(**{f"{sf}__in": _NOT_IN_TOTAL})),
         "overdue_count": Count(
             "task_id",
             distinct=True,
@@ -93,7 +95,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     per_project_rows = (
         base_qs.values("project_id")
         .annotate(
-            total=Count("task_id", distinct=True, filter=~Q(**{sf: "Rejected"})),
+            total=Count("task_id", distinct=True, filter=~Q(**{f"{sf}__in": _NOT_IN_TOTAL})),
             open_n=Count("task_id", distinct=True, filter=Q(**{sf: "Open"})),
             overdue=Count(
                 "task_id",
