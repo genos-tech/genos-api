@@ -38,12 +38,12 @@ log = logging.getLogger(__name__)
 NOTICE_KIND = "task_moved_by_rule"
 
 
-def notice_text(rule_name: str) -> str:
-    return f'Rule "{rule_name}" moved a task to another project.'
+def notice_text(rule_name: str, what: str = "task") -> str:
+    return f'Rule "{rule_name}" moved a {what} to another project.'
 
 
 def post_move_notice(
-    *, task_id, rule_name: str, source_project_id, destination_project_id
+    *, task_id, rule_name: str, source_project_id, destination_project_id, milestone: bool = False
 ) -> Message | None:
     """The line in the old project's chat. None when it has no chat. Never raises."""
     try:
@@ -52,7 +52,7 @@ def post_move_notice(
             return None
         from origin.views.chat.message_views import _allocate_seq_and_create_message  # noqa: PLC0415
 
-        text = notice_text(rule_name)
+        text = notice_text(rule_name, "milestone" if milestone else "task")
         # A savepoint: a failure rolls back the line alone and leaves the move standing.
         with transaction.atomic():
             message = _allocate_seq_and_create_message(
@@ -66,6 +66,8 @@ def post_move_notice(
                     "movedTaskId": task_id,
                     "destinationProjectId": destination_project_id,
                     "ruleName": rule_name,
+                    # `movedTaskId` is then the milestone's backing task (MIP-2521).
+                    **({"movedMilestone": True} if milestone else {}),
                 },
             )
         # Sent on commit, after the card's removal from this chat (queued first by the move).

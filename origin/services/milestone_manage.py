@@ -103,7 +103,11 @@ def lock_live_milestone(
 
 
 def move_assignee_problem(
-    milestone: MilestoneMaster, destination: ProjectMaster, *, assignee_ids: Any = UNSET
+    milestone: MilestoneMaster,
+    destination: ProjectMaster,
+    *,
+    assignee_ids: Any = UNSET,
+    task_ids: set[int] | None = None,
 ) -> str | None:
     """Why `milestone` may not move to `destination` because of who is assigned, or None (MIP-1583).
 
@@ -120,6 +124,9 @@ def move_assignee_problem(
     person still sees (a deleted one moves too, silently, and is not judged). The reporter is not
     judged: a move reports them instead (`reporters_outside_destination`, MIP-1597).
     The caller must have checked that the milestone is going to another project.
+
+    `task_ids` is for a caller that already holds the tasks that move with it (the backing row
+    left out); without it they are read here.
     """
     if assignee_ids is UNSET:
         milestone_people = {
@@ -130,7 +137,9 @@ def move_assignee_problem(
         }
     else:
         milestone_people = {str(uid) for uid in assignee_ids or [] if uid not in (None, "")}
-    task_people = moving_assignees(milestone_subtree_task_ids(milestone) - {milestone.task_id})
+    if task_ids is None:
+        task_ids = milestone_subtree_task_ids(milestone) - {milestone.task_id}
+    task_people = moving_assignees(task_ids)
 
     outside = people_outside(destination, milestone_people | set(task_people))
     on_milestone = sorted(milestone_people & outside)
