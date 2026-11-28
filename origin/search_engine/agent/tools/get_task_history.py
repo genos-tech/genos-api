@@ -315,12 +315,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if user_ids
         else {}
     )
-    # A name of a project, milestone, sprint or parent this reader may not see is not handed
-    # to the model either (MIP-2523); in memory only.
+    # A name this reader may not see (a relation's, a custom field's, a custom status's) is not
+    # handed to the model either (MIP-2523, MIP-2532); in memory only.
     labels = HistoryLabels(rows, viewer_id=ctx.user_id, task_project_id=task.project_id)
     for r in rows:
-        if r.metadata:
-            r.metadata = labels.metadata(r, r.metadata)
+        labels.cut(r)
     history = [_entry(r, usernames, ctx.user_id) for r in rows]
 
     return {
