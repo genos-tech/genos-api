@@ -46,8 +46,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections import defaultdict
-from datetime import datetime
 from typing import Mapping, Optional
 
 from django.db import transaction
@@ -176,16 +174,18 @@ def refresh(ids) -> int:
         .order_by("-ts")
         .values("ts")[:1]
     )
-    by_ts: dict[datetime, list[int]] = defaultdict(list)
-    for task_id, current, latest in (
-        TaskMaster.objects.filter(task_id__in=ids)
-        .annotate(latest=Subquery(newest))
-        .values_list("task_id", "last_progress_at", "latest")
-    ):
-        if latest is not None and (current is None or current < latest):
-            by_ts[latest].append(task_id)
-    moved = 0
-    for ts, task_ids in by_ts.items():
-        # A queryset update: no post_save, and `auto_now` is not applied.
-        moved += TaskMaster.objects.filter(task_id__in=task_ids).update(last_progress_at=ts)
-    return moved
+    rows = [
+        TaskMaster(task_id=task_id, last_progress_at=latest)
+        for task_id, current, latest in (
+            TaskMaster.objects.filter(task_id__in=ids)
+            .annotate(latest=Subquery(newest))
+            .values_list("task_id", "last_progress_at", "latest")
+        )
+        if latest is not None and (current is None or current < latest)
+    ]
+    if not rows:
+        return 0
+    # One write however many tasks moved: every task of a move or a bulk write has a fact time
+    # of its own, so a write per time was a write per task (MIP-2573). A queryset update
+    # underneath: no post_save, and `auto_now` is not applied.
+    return TaskMaster.objects.bulk_update(rows, ["last_progress_at"], batch_size=500)

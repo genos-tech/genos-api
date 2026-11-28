@@ -151,7 +151,46 @@ def message_payload(message, channel) -> dict:
     }
 
 
-def enqueue_event(team_id, event: str, payload: dict, scope: dict | None = None) -> None:
+class _CommitEndpoints:
+    """The active endpoints of each team, read once for one commit's task events (MIP-2573).
+
+    A move or a bulk write flushes one callback per task, and each read the team's endpoints
+    again. The callbacks of one transaction share this; the first to flush sets `flushed`, so
+    the next transaction gets a new one and sees an endpoint added, switched off or re-filtered
+    since. One that is still unflushed has read nothing (its transaction rolled back), so
+    handing it on carries nothing over.
+    """
+
+    def __init__(self) -> None:
+        self.flushed = False
+        self.by_team: dict = {}
+
+
+def _endpoints_for_transaction() -> _CommitEndpoints:
+    conn = transaction.get_connection()
+    read = getattr(conn, "_genos_webhook_endpoints", None)
+    if read is None or read.flushed:
+        read = conn._genos_webhook_endpoints = _CommitEndpoints()
+    return read
+
+
+def _active_endpoints(team_id, read: dict | None) -> list:
+    if read is not None and team_id in read:
+        return read[team_id]
+    endpoints = list(WebhookEndpoint.objects.filter(team_id=team_id, is_active=True))
+    if read is not None:
+        read[team_id] = endpoints
+    return endpoints
+
+
+def enqueue_event(
+    team_id,
+    event: str,
+    payload: dict,
+    scope: dict | None = None,
+    *,
+    endpoints_read: dict | None = None,
+) -> None:
     """Queue `event` for every active endpoint in `team_id` that wants it.
 
     `scope` is `{"project_id": …}` / `{"channel_id": …}` describing the
@@ -159,15 +198,16 @@ def enqueue_event(team_id, event: str, payload: dict, scope: dict | None = None)
     `WebhookEndpoint.subscribes_to`. Resolved by the caller because the
     caller has the object; this function only ever sees ids.
 
+    `endpoints_read` is a `{team_id: endpoints}` shared by the events of one commit, filled
+    here, so the team's endpoints are read once however many events there are.
+
     Best-effort: any failure is logged at WARNING and swallowed. WARNING
     rather than ERROR because this runs inside a request, and because
     `CronCommand` treats ERROR on the `origin` logger as a failed run.
     """
     try:
         endpoints = [
-            e
-            for e in WebhookEndpoint.objects.filter(team_id=team_id, is_active=True)
-            if e.subscribes_to(event, scope)
+            e for e in _active_endpoints(team_id, endpoints_read) if e.subscribes_to(event, scope)
         ]
         if not endpoints:
             return
@@ -220,7 +260,7 @@ def _pending_for_transaction() -> dict:
     return registry
 
 
-def _flush_one(registry: dict, task_pk) -> None:
+def _flush_one(registry: dict, task_pk, read: _CommitEndpoints) -> None:
     """Send exactly the entry this callback owns.
 
     Per task rather than draining the whole registry: a callback must
@@ -229,11 +269,12 @@ def _flush_one(registry: dict, task_pk) -> None:
     happens under nested atomics, where an inner rollback leaves outer
     callbacks queued.
     """
+    read.flushed = True
     entry = registry.pop(task_pk, None)
     if entry is None:
         return
     team_id, event, payload, scope = entry
-    enqueue_event(team_id, event, payload, scope)
+    enqueue_event(team_id, event, payload, scope, endpoints_read=read.by_team)
 
 
 def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
@@ -276,7 +317,8 @@ def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
         # runs once no matter how many saves follow — and it owns only
         # this task, so a rolled-back sibling can never ride along.
         task_pk = task.pk
-        transaction.on_commit(lambda: _flush_one(registry, task_pk))
+        read = _endpoints_for_transaction()
+        transaction.on_commit(lambda: _flush_one(registry, task_pk, read))
 
     # Scope refreshed alongside the payload: a task moved between
     # projects mid-transaction must be filtered by where it ended up.
