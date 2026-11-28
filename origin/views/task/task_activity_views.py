@@ -9,8 +9,8 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskMaster
 from origin.services import description_edit_runs
 from origin.services.activity_minimal_card import task_reader_pairs
+from origin.services.archive import archived_task_response
 from origin.services.history_labels import HistoryLabels
-from origin.services.share_roles import view_only_task_response
 from origin.services.task_body_restore import RestoreRefused, restore_task_body
 from origin.services.task_status_values import FINISHED_STATUSES
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -573,7 +573,7 @@ class TaskBodyRestoreView(AuthenticatedAPIView):
 
         if not can_access_task(task_id, request.user.id):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
-        if res := view_only_task_response(task_id, request.user.id):
+        if res := archived_task_response(task_id, request.user.id):
             return res
 
         try:
