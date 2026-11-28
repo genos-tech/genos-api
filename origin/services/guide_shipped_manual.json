@@ -87,6 +87,7 @@
   },
   "Setting up Genos for your company: an owner's checklist": {
    "sha256": [
+    "6d8d289f2173835ae50401a63f33bf6d504007e0b56dd0f6c3a7cc93ea2cc89c",
     "f5af912402e8ab50085a451466018682cc5a7a79895415be77797267648da5b9"
    ]
   },
@@ -108,12 +109,14 @@
   "Tasks and projects": {
    "sha256": [
     "3cd469cc59994ebcad9efdcf106ad3c2b7cb943b0a628c3bd3968720e0def9fd",
+    "566bf739a770ec23bfb5a7e8001412fb193a8562286ddd00d15503b69799fc68",
     "8b4be98257be5e166a9d8e3671660cffebcf6a1295a432398a19d54c76eb98be",
     "acb8ddd710176895f74d0ded0c32bb19ef6b2ab7e9b39d47858d69915a1c9448"
    ]
   },
   "Teams, members, and roles": {
    "sha256": [
+    "9e5c8405a770e8b4045af0fb7b08ae624cab3910045d1b65491428692497f5b9",
     "bf87558f65a088814dbb1d02ec2694b5c003292fa65e30376c86aef38d7c9ea1"
    ]
   },
@@ -179,6 +182,7 @@
    "sha256": [
     "664901f7253916831ca93297989f3e702e7b64d71d63e6df1ca53638c9f9fa92",
     "7650d4c0f9084cebe35d9f90b2178ee2bf3c1963fed5fb081d6bedbe834d8cea",
+    "d5384138ce8ed3142377ef31dcfb34845044bbfec31b6fe92f41c7efd836fc56",
     "fb68e0902a2d995abab01213d81329c58e1c045eb08a498c9f6fb29c50012600"
    ]
   },
@@ -189,7 +193,8 @@
   },
   "チーム、メンバー、ロール": {
    "sha256": [
-    "31bf1c23c57bb3e043a0d8fa13a7e3f5afa111efadc2144279a18d334adf3fb5"
+    "31bf1c23c57bb3e043a0d8fa13a7e3f5afa111efadc2144279a18d334adf3fb5",
+    "5108ffc38df7d7514e21f029b2489906e748c2a33a61fa56898925dbf9f2a629"
    ]
   },
   "ノート: 個人用、チーム用、共有": {
@@ -220,7 +225,8 @@
   },
   "会社で Genos を始める: オーナー向けチェックリスト": {
    "sha256": [
-    "04943092516707340c6a20440245e6dce92ee7d106735969491236e217844770"
+    "04943092516707340c6a20440245e6dce92ee7d106735969491236e217844770",
+    "df62ac4e979045b47ee088648aed70b9c81916cbc05658edd8555fdbf9f89593"
    ]
   },
   "便利な使い方、ショートカット、困ったときは": {
