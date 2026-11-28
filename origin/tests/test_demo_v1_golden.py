@@ -46,12 +46,15 @@ User = get_user_model()
 # day it was made. The v1 content was checked unchanged first: with "today" frozen
 # at 2026-11-08 the old digest still equalled the old hashes (en 08c6ae43...,
 # ja b63c0d22...), and the date-normalised digest of that same content is below.
+# MIP-2528: both re-recorded for one style: a `Blocked` task card's status chip is red, not gray.
+# Checked first: with those 6 chips turned back to gray, each digest equals its old hash, so no text
+# an eval reads moved.
 GOLDEN = {
-    "en": "3283ac8ca9cf952bfb415f5aa9f9383c65e5982f49a18f3c03408c94c2dfb372",
+    "en": "62160610d1951e5b5b3f494687dbc72c7e11cbfcf1a02811eb1bc4e8adce1c2a",
     # MIP-1805: re-recorded once, for the Japanese card labels alone (ステータス： etc, the
     # server's words, were ステータス: etc). The en digest did not move; the labels are not
     # in any eval's body_text and evals/fixture.py seeds en only.
-    "ja": "1c3b94c702a7cb8747a8ffb9dc86bfbb4adddb3c57eb647b398a386e78eeb759",
+    "ja": "a65e8b11079eaf186b0fa20b082391d2210fffbd0911951858d44392edf317a0",
 }
 
 
