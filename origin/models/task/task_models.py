@@ -395,6 +395,55 @@ def claim_project_task_number(instance, *, may_return=True):
     )
 
 
+def claim_project_task_numbers(task_ids, project_id) -> None:
+    """`claim_project_task_number` for the tasks a move carries into `project_id` (their numbers
+    already cleared), in a fixed number of queries (MIP-2539).
+
+    Same rules: a task moving back takes the number it had there and that alias row goes; the
+    others get the next free numbers, in task id order. Each task still gets the `post_save` a
+    one-by-one claim's `save()` fired (webhook, calendar sync, caches). If a number is taken by
+    a concurrent claim, the batch rolls back and the tasks are claimed one by one, which retries.
+    """
+    tasks = list(
+        TaskMaster.objects.filter(task_id__in=task_ids)
+        .select_related("project", "assignee")
+        .order_by("task_id")
+    )
+    if not tasks:
+        return
+    try:
+        with transaction.atomic():
+            # The newest alias of a task wins, as in the single claim.
+            former = {
+                alias.task_id: alias
+                for alias in TaskNumberAlias.objects.filter(
+                    project_id=project_id, task_id__in=[task.pk for task in tasks]
+                ).order_by("pk")
+            }
+            # Read while the aliases are still there, so a number handed back below is not
+            # handed out a second time.
+            next_number = _next_project_task_number(project_id, None)
+            for task in tasks:
+                alias = former.get(task.pk)
+                if alias is not None:
+                    task.project_task_number = alias.number
+                else:
+                    task.project_task_number = next_number
+                    next_number += 1
+            if former:
+                TaskNumberAlias.objects.filter(pk__in=[a.pk for a in former.values()]).delete()
+            TaskMaster.objects.bulk_update(tasks, ["project_task_number"])
+    except IntegrityError:
+        for task in tasks:
+            task.project_task_number = None
+            claim_project_task_number(task)
+        return
+    from origin.signals.task_signals import announce_unchanged_save
+
+    for task in tasks:
+        announce_unchanged_save(task, update_fields=["project_task_number"])
+
+
 @receiver(post_save, sender=TaskMaster)
 def assign_project_task_number(sender, instance, created, **kwargs):
     """On task create, claim the next sequential number within the owning

@@ -273,8 +273,10 @@ def update_milestone(
         sync_backing_task(milestone)
 
     if project_move is not None:
+        # Read once: the move changes neither a task's milestone nor its parent.
+        moving = milestone_subtree_task_ids(milestone)
         narrowed = relocate_tasks(
-            milestone_subtree_task_ids(milestone),
+            moving,
             project_id=milestone.project_id,
             team_id=milestone.team_id,
             clear_sprint=True,
@@ -282,7 +284,7 @@ def update_milestone(
         if report is not None:
             report["notes_narrowed"] = narrowed
             report["reporters_outside_destination"] = reporters_outside_destination(
-                milestone_subtree_task_ids(milestone), project_move
+                moving, project_move
             )
         # The assignee join denormalizes the team for scoped reads.
         MilestoneAssignees.objects.filter(milestone=milestone).update(team_id=milestone.team_id)
