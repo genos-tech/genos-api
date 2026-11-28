@@ -825,6 +825,7 @@ origin.ProjectMaster:
   default_task_template: none
   default_milestone_template: none
   task_field_rules: none
+  board_columns_per_status: none
   ts_created_at: none
   ts_updated_at: none
 origin.ProjectMembers:

@@ -253,6 +253,63 @@ class StatusListApiTests(StatusTestBase):
         self.assertEqual(self.rows(task, STATUS), [])
 
 
+class BoardColumnsOptionTests(StatusTestBase):
+    """The board's "one column per status" option (MIP-2495)."""
+
+    def set(self, value, project=None):
+        return self.client.patch(
+            self.url(project), {"board_columns_per_status": value}, format="json"
+        )
+
+    def test_it_is_off_by_default_and_reading_writes_nothing(self):
+        self.assertIs(self.client.get(self.url()).data["boardColumnsPerStatus"], False)
+        self.assertFalse(ProjectStatus.objects.filter(project=self.project).exists())
+
+    def test_turning_it_on_sets_up_the_statuses_and_off_keeps_them(self):
+        on = self.set(True)
+        self.assertEqual(on.status_code, 200)
+        self.assertIs(on.data["boardColumnsPerStatus"], True)
+        self.assertEqual(len(on.data["statuses"]), 7)
+        self.assertIs(self.fresh(self.project).board_columns_per_status, True)
+        off = self.set(False)
+        self.assertIs(off.data["boardColumnsPerStatus"], False)
+        self.assertEqual(len(off.data["statuses"]), 7)
+
+    def test_turning_it_off_writes_no_rows(self):
+        self.assertEqual(self.set(False).data["statuses"], [])
+        self.assertFalse(ProjectStatus.objects.filter(project=self.project).exists())
+
+    def test_it_is_one_projects_own(self):
+        other = self.make_project("Other", "OT")
+        self.set(True)
+        self.assertIs(self.client.get(self.url(other)).data["boardColumnsPerStatus"], False)
+
+    def test_only_a_real_boolean_is_taken(self):
+        for value in ("true", 1, None):
+            response = self.set(value)
+            self.assertEqual(response.status_code, 400, value)
+            self.assertEqual(response.data["code"], "bad_value")
+        self.assertFalse(ProjectStatus.objects.filter(project=self.project).exists())
+
+    def test_only_the_owner_or_an_editor_may_change_it(self):
+        self.authenticate(self.user2)
+        self.assertIs(self.client.get(self.url()).data["boardColumnsPerStatus"], False)
+        self.assertEqual(self.set(True).status_code, 403)
+        ProjectMembers.objects.filter(project=self.project, attendee=self.user2).update(
+            member_role="editor"
+        )
+        self.assertEqual(self.set(True).status_code, 200)
+
+    def test_a_stranger_and_an_archived_project_are_refused(self):
+        other = self.make_project("Mine only", "MO")
+        self.authenticate(self.user2)
+        self.assertEqual(self.set(True, other).status_code, 404)
+        self.authenticate()
+        ProjectMaster.objects.filter(pk=self.project.pk).update(archived_at="2026-01-01T00:00:00Z")
+        self.assertGreaterEqual(self.set(True).status_code, 400)
+        self.assertIs(self.fresh(self.project).board_columns_per_status, False)
+
+
 class TaskCustomStatusTests(StatusTestBase):
     def create_task(self, **overrides):
         payload = {

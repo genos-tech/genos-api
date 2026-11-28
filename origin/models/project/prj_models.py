@@ -83,6 +83,10 @@ class ProjectMaster(models.Model):
     # is_init_task bootstrap row) stay unaffected. The agent and MCP tools
     # enforce them while `AGENT_PARITY_FOLLOWUPS` is on.
     task_field_rules = models.JSONField(default=dict, blank=True)
+    # The sprint board draws one column per status of the project instead of one per category
+    # (MIP-2495). Shared by the project's members, set by its owner or an editor. Off by
+    # default; it changes nothing for a project that set up no statuses.
+    board_columns_per_status = models.BooleanField(default=False, db_default=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
@@ -495,7 +499,7 @@ class ProjectSavedTaskFilter(models.Model):
     display hint, never an authorization gate.
 
     `filters` stores IDENTITY ONLY — the labels and ids the client picked
-    (`{status, tags, priorities, effortLevels, sprintKeys, milestoneKeys,
+    (`{status, statusIds, tags, priorities, effortLevels, sprintKeys, milestoneKeys,
     memberKeys}`), matching the frontend's `StoredTaskFilters`. It must
     never hold the client's `FilterProps` objects: those carry
     `filterModel` predicates and palette colors, so persisting them would
