@@ -654,7 +654,7 @@ def create_self_assign_activity(*, message: Message, actor: CustomUser) -> List[
 
 
 def create_task_assign_activity(
-    *, message: Message, recipient_id, actor: CustomUser
+    *, message: Message, recipient_id, actor: CustomUser, extra: dict | None = None
 ) -> List[Activity]:
     """Tell `recipient_id` that `actor` assigned them an EXISTING task (MIP-1461).
 
@@ -694,7 +694,7 @@ def create_task_assign_activity(
         activity_type=ActivityType.MENTION,
         channel=channel,
         message=message,
-        meta=inbox_via.stamped({"taskAssign": True}),
+        meta=inbox_via.stamped({"taskAssign": True, **(extra or {})}),
     )
     logger.info(
         "[v3_activity] task-assign mention created: id=%s recipient=%s task=%s",
