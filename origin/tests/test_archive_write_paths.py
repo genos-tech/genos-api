@@ -17,7 +17,11 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
-from origin.services.archive import ARCHIVED_MESSAGE, archived_refusal_for_args
+from origin.services.archive import (
+    ARCHIVED_MESSAGE,
+    archived_refusal_for_args,
+    archived_task_response,
+)
 from origin.services.project_catalog import CatalogRefused, add_project_tag
 from origin.services.project_manage import ProjectRefused, set_project_name
 from origin.services.sprint_manage import SprintRefused, create_sprint
@@ -340,6 +344,69 @@ class ArchivedRestPathsTests(ContractTestBase):
         for name, call in calls.items():
             with self.subTest(name):
                 self.assert_archived(call())
+
+    def test_a_malformed_task_id_is_the_views_own_refusal(self):
+        """The guard reads the raw request value: text that is no task id must not be a 500."""
+        self.client.credentials()
+        self.authenticate(self.user)
+        task_id = self.task.task_id
+        mention = "/api/v2/task/comment/mention/"
+        calls = {
+            "dependency blocker": (
+                404,
+                lambda: self.post(
+                    "/api/v2/task/dependency/",
+                    {"blocker_task_id": "abc", "blocked_task_id": task_id},
+                ),
+            ),
+            "dependency blocked": (
+                404,
+                lambda: self.post(
+                    "/api/v2/task/dependency/",
+                    {"blocker_task_id": task_id, "blocked_task_id": "abc"},
+                ),
+            ),
+            "mention post": (
+                404,
+                lambda: self.post(
+                    mention, {"team_id": self.team_id, "task_id": "abc", "mentioned_user_ids": []}
+                ),
+            ),
+            "mention delete": (
+                404,
+                lambda: self.client.delete(
+                    f"{mention}?team_id={self.team_id}&task_id=abc&comment_id=1"
+                    f"&mentioned_user_ids={self.user.id}"
+                ),
+            ),
+            "body attachment": (
+                404,
+                lambda: self.post(
+                    "/api/v2/task/body/attachment/",
+                    {
+                        "task_id": "abc",
+                        "uploader": str(self.user.id),
+                        "body_attachment_file": SimpleUploadedFile("a.txt", b"x"),
+                    },
+                    format="multipart",
+                ),
+            ),
+            "body restore": (
+                400,
+                lambda: self.post(
+                    "/api/v2/task/activity/restore-body/", {"task_id": "abc", "activity_id": 1}
+                ),
+            ),
+            "convert to milestone": (
+                400,
+                lambda: self.post("/api/v2/task/convert-to-milestone/", {"task_id": "abc"}),
+            ),
+        }
+        for name, (expected, call) in calls.items():
+            with self.subTest(name):
+                response = call()
+                self.assertEqual(response.status_code, expected, getattr(response, "data", None))
+        self.assertIsNone(archived_task_response("abc"))
 
 
 def _png():
