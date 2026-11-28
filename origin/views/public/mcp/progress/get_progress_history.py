@@ -9,6 +9,9 @@ Access: the tenant guard first, then PROJECT MEMBERSHIP. That is stricter than
 `get_task`, which also lets the assignee or reporter in: this tool names tasks other
 than the one asked about, and a person who is only the assignee of one task has no
 business reading what happened to its siblings.
+
+A change to a task the caller cannot open (one that has since moved to a project they are not
+on) is left out, title and id included (MIP-2550).
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from origin.search_engine.agent.tools import Tool, ToolContext, ToolError, ToolF
 from origin.search_engine.agent.tools.base import wrap_workspace_content
 from origin.search_engine.agent.tools.get_task_history import _via
 from origin.search_engine.agent.tools.project_gone import task_is_gone
+from origin.views.utils.scope_guards import readable_tasks_q
 
 _DEFAULT_LIMIT = 30
 _MAX_LIMIT = 100
@@ -85,7 +89,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ).exists():
         raise ToolForbidden(f"Not authorized to read the progress under task {task_id}.")
 
-    facts = TaskProgressFact.objects.filter(ancestor_task_id=task_id)
+    # In the query, not after the slice, so `limit` and `has_more` stay right.
+    facts = TaskProgressFact.objects.filter(
+        readable_tasks_q(ctx.user_id, "source_task__"), ancestor_task_id=task_id
+    )
     if since is not None:
         facts = facts.filter(ts__gte=since)
     # One more than asked for, to say whether there is more.

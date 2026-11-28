@@ -62,9 +62,9 @@ from origin.search_engine.quota import (
     increment_usage,
 )
 from origin.services.archive import (
-    ARCHIVED_MESSAGE,
     archived_channel_response,
     archived_project_response,
+    refusal_text,
 )
 from origin.services.hidden_scope import project_hidden_from
 from origin.views.utils.chat_note_target import (
@@ -275,8 +275,8 @@ def _create_task_note(
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to create notes in project {project_id}.")
-    if archived_project_response(project_id) is not None:
-        raise ToolError(f"{ARCHIVED_MESSAGE} Nothing was created.")
+    if refused := archived_project_response(project_id, ctx.user_id):
+        raise ToolError(f"{refusal_text(refused)} Nothing was created.")
 
     # Optional task attachment. If supplied, verify the task lives in the
     # same project we just authorized against — prevents an oblique
@@ -363,8 +363,8 @@ def _create_chat_note(
         )
     except ChatNoteTargetNotFound as e:
         raise ToolError(f"{e} You can only add notes to chats you are a member of.")
-    if archived_channel_response(target.channel) is not None:
-        raise ToolError(f"{ARCHIVED_MESSAGE} Nothing was created.")
+    if refused := archived_channel_response(target.channel, ctx.user_id):
+        raise ToolError(f"{refusal_text(refused)} Nothing was created.")
 
     try:
         with transaction.atomic():

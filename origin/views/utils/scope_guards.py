@@ -607,6 +607,32 @@ def can_access_task(
     return is_project_member(row["project_id"], user_id)
 
 
+def readable_tasks_q(user_id, prefix: str = "") -> Q:
+    """`can_access_task` as a `Q` for a query over many tasks (`prefix` names the path to the
+    task, e.g. `"source_task__"`), so a page is filtered in the database and not after its slice.
+
+    It does NOT test `is_deleted`: a caller that must leave deleted tasks out filters that
+    itself. `tests/test_task_progress_source_access.py` pins it equal to `can_access_task`."""
+    member_teams = TeamMembers.objects.filter(attendee_id=user_id, is_deleted=False).values(
+        "team_id"
+    )
+    owned_teams = TeamMaster.objects.filter(owner_id=user_id).values("team_id")
+    on_projects = ProjectMembers.objects.filter(attendee_id=user_id).values("project_id")
+
+    def q(**terms):
+        return Q(**{f"{prefix}{key}": value for key, value in terms.items()})
+
+    on_team = Q()
+    for teams in (member_teams, owned_teams):
+        # The project's team, else the task's own (a task in no project).
+        on_team |= q(project__team_id__in=teams) | q(
+            project__team_id__isnull=True, team_id__in=teams
+        )
+    on_project = q(project_id__in=on_projects) | q(project__owner_id=user_id)
+    holder = q(assignee_id=user_id) | q(reporter_id=user_id)
+    return not_in_gone_project(prefix) & (on_project | (holder & on_team))
+
+
 def _project_readers_and_team(project_id, wanted):
     """`(ids among wanted on the project (member or owner), the project's team id)`: two queries
     however many ids; `(set(), None)` for no project or a malformed id."""

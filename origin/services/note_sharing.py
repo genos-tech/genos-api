@@ -29,6 +29,7 @@ from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.search_engine.purge import purge_note
 from origin.services import member_events
+from origin.services.share_roles import view_only_note_response
 from origin.views.utils.note_role import (
     NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
@@ -64,12 +65,19 @@ def _note(kind: str, granter_id, team_id, note_type: int, note_id: int, target_u
     )
 
 
+def _refuse_view_only(note_type: int, note_id: int, granter_id) -> None:
+    """A View only participant of another team's share changes nobody's access (MIP-2571)."""
+    if refused := view_only_note_response(note_type, note_id, granter_id):
+        raise SharingRefused(refused.data["error"], 403)
+
+
 def share_note(
     *, team_id, granter_id, note_type: int, note_id: int, target_user_id, role_id: int
 ) -> NotePermissionMaster:
     """Give `target_user_id` the role on the note, or change the one they have."""
     if get_explicit_role(granter_id, note_type, note_id) != ROLE_OWNER:
         raise SharingRefused("Only the note owner can grant roles.", 403)
+    _refuse_view_only(note_type, note_id, granter_id)
     if str(target_user_id) == str(granter_id):
         raise SharingRefused("You cannot change your own role.", 400)
     if not TeamMembers.objects.filter(
@@ -110,6 +118,7 @@ def unshare_note(*, granter_id, note_type: int, note_id: int, target_user_id) ->
     """Take the person's explicit role away."""
     if get_explicit_role(granter_id, note_type, note_id) != ROLE_OWNER:
         raise SharingRefused("Only the note owner can revoke roles.", 403)
+    _refuse_view_only(note_type, note_id, granter_id)
     if str(target_user_id) == str(granter_id):
         raise SharingRefused("Owners cannot revoke themselves.", 400)
     grants = NotePermissionMaster.objects.filter(

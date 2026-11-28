@@ -936,7 +936,7 @@ def _replace_page(
             f"Not authorized to edit note {ref.note_id}. You must be the owner, have editor "
             "permission on it, or be a member of the project or chat it belongs to."
         )
-    if why := archived_note_refusal(ref.family, ref.note_id):
+    if why := archived_note_refusal(ref.family, ref.note_id, ctx.user_id):
         raise ToolError(f"{why} Nothing was changed.")
     # The new version counts against the note OWNER's storage (nobody's, for a note whose owner's
     # account is gone). For someone else's note the save is counted BEFORE the check: a refusal

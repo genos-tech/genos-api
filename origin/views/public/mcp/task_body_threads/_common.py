@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
-from origin.services.archive import ARCHIVED_MESSAGE, archived_task_response
+from origin.services.archive import archived_task_response, refusal_text
 from origin.services.collab_push import ThreadWriteError
 from origin.views.public.mcp.note_threads._common import actor_id
 
@@ -32,10 +32,10 @@ _OPEN_FIRST = (
 
 
 def refuse_if_archived(task: Any) -> None:
-    """A comment on the body is a write: refuse it when the task's project is archived, before
-    anything is sent to collab (MIP-1693, Ken 2026-11-22)."""
-    if archived_task_response(task.task_id) is not None:
-        raise ToolError(f"{ARCHIVED_MESSAGE} Nothing was changed.")
+    """A comment on the body is a write: refuse it when the task's project is archived (MIP-1693,
+    Ken 2026-11-22) or only viewable by the caller (MIP-2571), before anything is sent to collab."""
+    if refused := archived_task_response(task.task_id):
+        raise ToolError(f"{refusal_text(refused)} Nothing was changed.")
 
 
 def clean_thread_id(raw: Any) -> str:

@@ -45,6 +45,7 @@ from origin.search_engine.agent.acl import active_project_owners
 from origin.services.archive import archived_channel_response
 from origin.services.channel_scope import can_read_chat, chat_member_q, chat_member_rows
 from origin.services.schedule_jobs import JOBS
+from origin.services.share_roles import view_only_channel_response
 
 # What a report may be posted into: a group chat (a team's own chat, a topic chat) or a
 # project's chat. A direct message is two people and is not a place for a standing report.
@@ -189,6 +190,8 @@ def send_problem(user_id: Any, team_id: Any, channel: Channel) -> str | None:
         return MESSAGE_EXTERNAL
     if not can_read_chat(channel, team_id, user_id):  # by membership alone: public chats too
         return NOT_FOUND
+    if refused := view_only_channel_response(channel, user_id):
+        return refused.data["error"]
     if archived_channel_response(channel) is not None:
         return MESSAGE_ARCHIVED
     return None
