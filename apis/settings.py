@@ -2030,6 +2030,14 @@ SEARCH_ENGINE["AGENT_INAPP_WAITING_COMMENTS_TOOL"] = (
     os.environ.get("AGENT_INAPP_WAITING_COMMENTS_TOOL", "false").lower() == "true"
 )
 
+# MIP-2522 (model-visible, dark-shipped OFF): task history over the agent and MCP names the project rule
+# that made a change (`via: {kind: "rule", rule_name}`) and says why a rule was not applied. OFF = those
+# rows read `via: unknown` as before. Tool results only: no declaration or prompt moves. Not measured by an
+# eval. Rollback: unset or `false`.
+SEARCH_ENGINE["AGENT_HISTORY_RULES"] = (
+    os.environ.get("AGENT_HISTORY_RULES", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["AGENT_INAPP_NOTE_COMMENT_TOOL"] = (
     os.environ.get("AGENT_INAPP_NOTE_COMMENT_TOOL", "false").lower() == "true"
 )

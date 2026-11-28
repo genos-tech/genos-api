@@ -28,7 +28,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.models.task.task_progress_models import TaskProgressFact
 from origin.search_engine.agent.tools import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.base import wrap_workspace_content
-from origin.search_engine.agent.tools.get_task_history import _via
+from origin.search_engine.agent.tools.get_task_history import _via, rule_names
 from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.views.utils.scope_guards import readable_tasks_q
 
@@ -111,6 +111,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     wanted = {str(r.actor_id) for r in rows if r.actor_id}
     names = LabelAccess(ctx).usernames(wanted) if wanted else {}
 
+    rules = rule_names([r.activity for r in rows])
+
     entries = []
     for r in rows:
         source = r.source_task
@@ -134,7 +136,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     if r.actor_id
                     else None
                 ),
-                "via": _via(r.activity),
+                "via": _via(r.activity, rules),
             }
         )
 
