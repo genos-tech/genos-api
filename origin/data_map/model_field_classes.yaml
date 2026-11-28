@@ -544,6 +544,12 @@ origin.MessageMovedAway:
   is_thread_reply: none
   inline_files: none
   moved_at: none
+origin.MessagePin:
+  id: none
+  channel: none
+  message: none
+  pinned_by: none
+  ts_created_at: none
 origin.MessageReaction:
   id: none
   message: none

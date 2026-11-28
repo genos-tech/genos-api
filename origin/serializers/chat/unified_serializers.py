@@ -26,6 +26,7 @@ from origin.models.chat.unified_models import (
     Message,
     MessageAttachment,
     MessageMention,
+    MessagePin,
     MessageReaction,
     MessageReminder,
     Pin,
@@ -526,6 +527,24 @@ class PinSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pin
         fields = ["id", "channelId", "tsCreated"]
+
+
+class MessagePinSerializer(serializers.ModelSerializer):
+    """One message pinned in a chat for everyone (not `PinSerializer`, a person's chat pin)."""
+
+    id = serializers.UUIDField(read_only=True)
+    messageId = serializers.UUIDField(source="message_id", read_only=True)
+    channelId = serializers.UUIDField(source="channel_id", read_only=True)
+    pinnedBy = serializers.SerializerMethodField()
+    tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
+
+    class Meta:
+        model = MessagePin
+        fields = ["id", "messageId", "channelId", "pinnedBy", "tsCreated"]
+
+    def get_pinnedBy(self, pin):
+        user = pin.pinned_by
+        return {"userId": str(user.id), "username": user.username} if user else None
 
 
 class FlagSerializer(serializers.ModelSerializer):

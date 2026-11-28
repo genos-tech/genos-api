@@ -13,6 +13,7 @@ from rest_framework.response import Response
 
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
+from origin.services.share_roles import view_only_project_response
 from origin.services.task_milestone_conversion import (
     ConversionRefused,
     convert_milestone_to_task,
@@ -75,6 +76,8 @@ class ConvertTaskToMilestoneView(AuthenticatedAPIView):
         project_id = TaskMaster.objects.filter(task_id=task_id).values_list("project_id", flat=True)
         if not project_id or not is_project_member(project_id[0], request.user.id):
             return _not_found("Task")
+        if res := view_only_project_response(project_id[0], request.user.id):
+            return res
 
         try:
             milestone = convert_task_to_milestone(task_id)
@@ -112,6 +115,8 @@ class ConvertMilestoneToTaskView(AuthenticatedAPIView):
         ).values_list("project_id", flat=True)
         if not project_id or not is_project_member(project_id[0], request.user.id, live_only=True):
             return _not_found("Milestone")
+        if res := view_only_project_response(project_id[0], request.user.id):
+            return res
 
         try:
             row, milestone, kept = convert_milestone_to_task(milestone_id)

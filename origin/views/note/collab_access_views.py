@@ -98,7 +98,10 @@ def _archived_note(note_type, note_id) -> bool:
 def _archived_answer() -> Response:
     """Read-only for everyone who may open it: the Viewer role, plus `archived` so genos-collab also
     refuses the comments a viewer may normally add. Reads keep working (200). genos-collab re-asks
-    every minute, so an open editor follows an archive or a restore without reconnecting."""
+    every minute, so an open editor follows an archive or a restore without reconnecting.
+
+    The same answer for a person who holds the item only through another team's View only share
+    (MIP-2571): the `archived_*_response` guards below refuse them too."""
     return Response({"role_id": ROLE_VIEWER, "archived": True}, status=status.HTTP_200_OK)
 
 

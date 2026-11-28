@@ -369,7 +369,7 @@ def _label(payload: dict[str, Any]) -> str:
 
 def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     project = load_project(args["project_id"], ctx)
-    if why := archived_refusal(project):  # MIP-1852
+    if why := archived_refusal(project, ctx.user_id):  # MIP-1852
         raise ToolError(f"{why} Nothing was created.")
     parsed, errors = _parse_fields(args, project, ctx, creating=True)
     if errors:
