@@ -14,6 +14,7 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.models.common.security_event_models import SecurityAction, SecurityEvent
+from origin.services import throttles
 from origin.tests.test_base import BaseAPITestCase
 
 _LOCMEM_CACHE = {
@@ -86,6 +87,9 @@ class RefreshReuseRevokesFamilyTests(BaseAPITestCase):
     def test_a_cache_that_is_down_does_not_revoke_anyone(self):
         r1 = self.refresh(self.t0)
         t1 = r1.cookies["refresh"].value
+        # The refresh throttle reads this cache too, and its error opens a 5 s breaker that
+        # lets every later fail-open throttle in this process allow (MIP-2534).
+        self.addCleanup(setattr, throttles, "_down_until", 0.0)
         with mock.patch.object(cache, "get", side_effect=ConnectionError("cache down")):
             self.assertEqual(self.refresh(self.t0).status_code, 403)
         self.assertEqual(self._reuse_events().count(), 0)
