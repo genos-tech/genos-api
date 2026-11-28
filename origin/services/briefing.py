@@ -358,9 +358,10 @@ def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]
         summary = "unlinked a PR"
         data = {"code": "pr_unlinked"}
     elif action == TaskActivityActionType.CUSTOM_FIELD:
-        name = (row.metadata or {}).get("field_name")
-        summary = f"changed {_short(name or 'a custom field')}"
-        data = {"code": "custom_field_changed", "name": _short(name) if name else None}
+        # Not named: a field's name is its project's data (`history_labels`, MIP-2536), and these
+        # words are also read by others than the viewer (scheduled reports in a chat).
+        summary = "changed a custom field"
+        data = {"code": "custom_field_changed", "name": None}
     else:
         summary = row.get_action_type_display().lower()
         data = {"code": "other"}
