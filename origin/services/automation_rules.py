@@ -608,9 +608,12 @@ def serialize_rule(rule: AutomationRule, *, viewer_projects: set[int]) -> dict:
     named (a hidden project's name must not leak), nor are the values that belong to it.
 
     `destination.gone` (MIP-2544) tells a deleted project apart from a hidden one: the rule needs
-    a new destination, whoever reads it. Neither is named."""
+    a new destination, whoever reads it. Neither is named. A move whose destination ROW is gone
+    (SET_NULL) has nobody left to be on it, so its values are hidden from everyone (MIP-2559)."""
     destination = rule.destination_project
-    visible = destination is None or destination.project_id in viewer_projects
+    visible = not rule.moves_task or (
+        destination is not None and destination.project_id in viewer_projects
+    )
     shown = None
     if rule.moves_task:
         gone = destination is None or destination.is_deleted
