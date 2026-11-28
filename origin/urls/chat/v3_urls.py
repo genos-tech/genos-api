@@ -76,10 +76,12 @@ from origin.views.chat.channel_views import (
     ChannelProfileImageView,
     ChannelSharesView,
 )
+from origin.views.chat.message_pin_views import ChannelMessagePinListView, MessagePinView
 from origin.views.chat.message_views import (
     MessageAttachmentsView,
     MessageDetailView,
     MessagesDeltaView,
+    OlderMessagesView,
     TaskCardMessageView,
     ThreadMessagesDeltaView,
 )
@@ -257,6 +259,22 @@ urlpatterns = [
         "api/v3/pins/",
         PinListView.as_view(),
         name="v3_pin_list",
+    ),
+    # Messages pinned in a chat for everyone (not `channels/<id>/pin/`, a person's chat pin)
+    path(
+        "api/v3/channels/<uuid:channel_id>/message_pins/",
+        ChannelMessagePinListView.as_view(),
+        name="v3_channel_message_pins",
+    ),
+    path(
+        "api/v3/messages/<uuid:message_id>/message_pin/",
+        MessagePinView.as_view(),
+        name="v3_message_pin",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/messages/older/",
+        OlderMessagesView.as_view(),
+        name="v3_channel_messages_older",
     ),
     # Message reminders ("remind me in 3 hours") — a flag with a time on it
     path(
