@@ -102,7 +102,7 @@ class StatusListApiTests(StatusTestBase):
             [(r["name"], r["category"], r["isDefault"]) for r in first.data["statuses"]],
             [
                 ("Open", "Open", True),
-                ("In Review", "Open", False),
+                ("Ready", "Open", False),
                 ("WIP", "WIP", True),
                 ("Blocked", "Blocked", True),
                 ("Pending", "Pending", True),
@@ -150,14 +150,14 @@ class StatusListApiTests(StatusTestBase):
 
     def test_create_keeps_the_list_grouped_by_category(self):
         self.add("Doing", "WIP")
-        self.add("Ready", "Open", color="#aabbcc")
+        self.add("Groomed", "Open", color="#aabbcc")
         names = [r["name"] for r in self.client.get(self.url()).data["statuses"]]
         self.assertEqual(
             names,
             [
                 "Open",
-                "In Review",
                 "Ready",
+                "Groomed",
                 "WIP",
                 "Doing",
                 "Blocked",
@@ -166,6 +166,31 @@ class StatusListApiTests(StatusTestBase):
                 "Rejected",
             ],
         )
+
+    def test_the_built_in_is_ready_and_may_take_its_name_back(self):
+        review = self.builtin("In Review")
+        self.assertEqual((review.name, review.builtin_key), ("Ready", "In Review"))
+        url = self.url(status_id=review.status_id)
+        for name in ("QA", "ready", "QA", "In Review", "Ready"):
+            response = self.client.patch(url, {"name": name}, format="json")
+            self.assertEqual(response.status_code, 200, (name, response.data))
+        for name in ("Ready", "In Review"):
+            response = self.client.post(
+                self.url(), {"name": name, "category": "Open"}, format="json"
+            )
+            self.assertEqual(response.data["code"], "name_reserved", name)
+
+    def test_a_teams_own_ready_from_before_can_still_be_saved(self):
+        ensure_project_statuses(self.project)
+        own = ProjectStatus.objects.create(
+            team=self.team, project=self.project, name="ready!", category="Open"
+        )
+        ProjectStatus.objects.filter(builtin_key="In Review").update(name="In Review")
+        ProjectStatus.objects.filter(pk=own.pk).update(name="Ready")
+        response = self.client.patch(
+            self.url(status_id=own.status_id), {"name": "Ready", "color": "#123456"}, format="json"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
 
     def test_create_refusals(self):
         self.add("Doing", "WIP")
@@ -207,7 +232,7 @@ class StatusListApiTests(StatusTestBase):
         self.assertTrue(self.fresh(wip).is_default)
 
     def test_one_default_per_category_and_it_returns_to_the_built_in(self):
-        ready = self.add("Ready", "Open", is_default=True)
+        ready = self.add("Groomed", "Open", is_default=True)
         self.assertFalse(self.builtin("Open").is_default)
         self.assertTrue(self.fresh(ready).is_default)
         self.client.delete(self.url(status_id=ready.status_id))
@@ -224,7 +249,7 @@ class StatusListApiTests(StatusTestBase):
         self.assertEqual(moved.data["code"], "category_fixed")
 
     def test_category_changes_only_while_nothing_holds_the_status(self):
-        ready = self.add("Ready", "Open", is_default=True)
+        ready = self.add("Groomed", "Open", is_default=True)
         url = self.url(status_id=ready.status_id)
         # A task that no longer reads as it (stale pointer) does not count, and is let go.
         stale = self.task("Open", ready)
@@ -235,7 +260,7 @@ class StatusListApiTests(StatusTestBase):
         self.assertEqual((ready.category, ready.is_default), ("WIP", False))
         self.assertTrue(self.builtin("Open").is_default)
         names = [r["name"] for r in response.data["statuses"]]
-        self.assertEqual(names[:4], ["Open", "In Review", "WIP", "Ready"])
+        self.assertEqual(names[:4], ["Open", "Ready", "WIP", "Groomed"])
         stale.refresh_from_db()
         self.assertIsNone(stale.custom_status_id)
         bad = self.client.patch(url, {"category": "Nope"}, format="json")
@@ -245,7 +270,7 @@ class StatusListApiTests(StatusTestBase):
         held = self.client.patch(url, {"category": "Open", "name": "New"}, format="json")
         self.assertEqual((held.data["code"], held.data["inUse"]), ("status_in_use", 1))
         # Refused as a whole: nothing was written.
-        self.assertEqual(self.fresh(ready).name, "Ready")
+        self.assertEqual(self.fresh(ready).name, "Groomed")
 
     def test_category_of_a_status_a_rule_names_is_kept(self):
         for field in ("set_custom_status", "trigger_value", "conditions"):
@@ -270,10 +295,10 @@ class StatusListApiTests(StatusTestBase):
             self.assertEqual(self.fresh(row).category, "Open", field)
 
     def test_reorder_stays_grouped(self):
-        ready = self.add("Ready", "Open")
+        ready = self.add("Groomed", "Open")
         response = self.client.put(self.url(), {"order": [ready.status_id]}, format="json")
         names = [r["name"] for r in response.data["statuses"]]
-        self.assertEqual(names[:3], ["Ready", "Open", "In Review"])
+        self.assertEqual(names[:3], ["Groomed", "Open", "Ready"])
         self.assertEqual(
             self.client.put(self.url(), {"order": "x"}, format="json").status_code, 400
         )
@@ -281,7 +306,7 @@ class StatusListApiTests(StatusTestBase):
     def test_delete_in_use_needs_a_replacement_of_the_same_category(self):
         doing = self.add("Doing", "WIP")
         testing = self.add("Testing", "WIP")
-        ready = self.add("Ready", "Open")
+        ready = self.add("Groomed", "Open")
         task = self.task("WIP", doing)
         url = self.url(status_id=doing.status_id)
 
@@ -469,14 +494,14 @@ class TaskCustomStatusTests(StatusTestBase):
         self.put(task, custom_status=review.status_id)
         (row,) = self.rows(task, CUSTOM)
         self.assertEqual((row.old_value, row.new_value), (None, review.status_id))
-        self.assertEqual(row.metadata["newLabel"], "In Review")
+        self.assertEqual(row.metadata["newLabel"], "Ready")
         self.assertEqual(self.rows(task, STATUS), [])
 
         # Category and label together: ONE status row, so stats count it once.
         self.put(task, custom_status=doing.status_id)
         (status_row,) = self.rows(task, STATUS)
         self.assertEqual((status_row.old_value, status_row.new_value), ("Open", "WIP"))
-        self.assertEqual(status_row.metadata["customStatus"]["oldLabel"], "In Review")
+        self.assertEqual(status_row.metadata["customStatus"]["oldLabel"], "Ready")
         self.assertEqual(status_row.metadata["customStatus"]["newLabel"], "Doing")
         self.assertEqual(len(self.rows(task, CUSTOM)), 1)
 
@@ -542,7 +567,7 @@ class TaskCustomStatusTests(StatusTestBase):
         payload = task_payload(self.task("Open", review))
         self.assertEqual(
             payload["custom_status"],
-            {"id": review.status_id, "name": "In Review", "category": "Open"},
+            {"id": review.status_id, "name": "Ready", "category": "Open"},
         )
         self.assertEqual(payload["status"], "Open")
 
@@ -623,7 +648,7 @@ class AutomationsKeepWorkingTests(StatusTestBase):
         )
         self.assertIsNone(self.fresh(task).custom_status_id)
         (row,) = self.rows(task, STATUS)
-        self.assertEqual(row.metadata["customStatus"]["oldLabel"], "In Review")
+        self.assertEqual(row.metadata["customStatus"]["oldLabel"], "Ready")
 
         other = self.make_project("Other", "OT")
         task = self.task("Open", review)
