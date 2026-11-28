@@ -250,12 +250,12 @@ class TestAuthEndpoints(TestCase):
     def test_token_refresh(self):
         refresh = RefreshToken.for_user(self.user)
         self.client.cookies["refresh"] = str(refresh)
-        response = self.client.get("/api/v2/user/signin/refresh/")
+        response = self.client.post("/api/v2/user/signin/refresh/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("access", response.data)
 
     def test_token_refresh_no_cookie(self):
-        response = self.client.get("/api/v2/user/signin/refresh/")
+        response = self.client.post("/api/v2/user/signin/refresh/")
         self.assertEqual(response.status_code, 403)
 
     def test_user_profile_update_authenticated(self):

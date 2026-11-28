@@ -60,9 +60,12 @@ class RefreshPostOriginTests(BaseAPITestCase):
         self.assertNotEqual(resp.cookies["refresh"].value, self.raw)
         self.assertEqual(BlacklistedToken.objects.count(), 1)
 
-    def test_get_still_works_for_one_release(self):
+    def test_get_is_not_allowed_and_rotates_nothing(self):
         resp = self._call("get")
-        self.assertEqual(resp.status_code, 200, resp.content[:200])
+        self.assertEqual(resp.status_code, 405, resp.content[:200])
+        self.assertNotIn("refresh", resp.cookies)
+        self.assertEqual(BlacklistedToken.objects.count(), 0)
+        self.assertEqual(self._call("post").status_code, 200, "the token was never spent")
 
     def test_post_ignores_a_token_in_the_body(self):
         resp = self._call("post", raw="", data={"refresh": self.raw}, format="json")
@@ -76,20 +79,18 @@ class RefreshPostOriginTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, 401)
 
     def test_a_foreign_origin_is_refused_without_touching_the_cookie(self):
-        for method in ("get", "post"):
-            resp = self._call(method, HTTP_ORIGIN=BAD)
-            self.assertEqual(resp.status_code, 403, method)
-            self.assertNotIn("refresh", resp.cookies, method)
+        resp = self._call("post", HTTP_ORIGIN=BAD)
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn("refresh", resp.cookies)
         self.assertEqual(BlacklistedToken.objects.count(), 0)
         self.assertEqual(self._call("post").status_code, 200, "the token was never spent")
 
     def test_a_cross_site_request_is_refused_even_without_an_origin(self):
-        for method in ("get", "post"):
-            resp = self._call(method, HTTP_SEC_FETCH_SITE="cross-site")
-            self.assertEqual(resp.status_code, 403, method)
-            self.assertNotIn("refresh", resp.cookies, method)
+        resp = self._call("post", HTTP_SEC_FETCH_SITE="cross-site")
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn("refresh", resp.cookies)
         self.assertEqual(BlacklistedToken.objects.count(), 0)
-        self.assertEqual(self._call("get", HTTP_SEC_FETCH_SITE="same-site").status_code, 200)
+        self.assertEqual(self._call("post", HTTP_SEC_FETCH_SITE="same-site").status_code, 200)
 
     def test_the_literal_null_origin_is_refused(self):
         self.assertEqual(self._call("post", HTTP_ORIGIN="null").status_code, 403)
@@ -109,7 +110,7 @@ class RefreshPostOriginTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, 403)
         self.assertNotIn("refresh", resp.cookies)
         self.assertEqual(BlacklistedToken.objects.count(), 0)
-        self.assertEqual(self._call("get").status_code, 200, "the session is intact")
+        self.assertEqual(self._call("post").status_code, 200, "the session is intact")
 
     def test_signout_with_the_app_origin_still_works(self):
         resp = self._call("post", name="signout", HTTP_ORIGIN=GOOD)

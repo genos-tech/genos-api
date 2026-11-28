@@ -209,7 +209,7 @@ class TestRefreshEndpointRejectsRevokedSessions(RevocationTestMixin, BaseAPITest
 
     def _refresh(self, refresh_value):
         self.client.cookies["refresh"] = refresh_value
-        return self.client.get(reverse("token_refresh"))
+        return self.client.post(reverse("token_refresh"))
 
     def test_valid_session_refreshes_normally(self):
         refresh, _ = self._tokens_for(self.user)
@@ -257,7 +257,7 @@ class TestRefreshEndpointRejectsRevokedSessions(RevocationTestMixin, BaseAPITest
 
     def test_missing_cookie_still_403s(self):
         # Pre-existing contract; the new check must not change it.
-        self.assertEqual(self.client.get(reverse("token_refresh")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("token_refresh")).status_code, 403)
 
     def test_garbage_cookie_is_left_to_the_serializer(self):
         # Our check bails out on unparseable input rather than masking the

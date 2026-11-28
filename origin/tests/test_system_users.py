@@ -204,7 +204,7 @@ class ExistingSystemUserMigrationTests(BaseAPITestCase):
         )
         cookie = APIClient()
         cookie.cookies["refresh"] = str(refresh)
-        self.assertEqual(cookie.get(REFRESH).status_code, 401)
+        self.assertEqual(cookie.post(REFRESH).status_code, 401)
         key.refresh_from_db()
         self.assertIsNotNone(key.revoked_at)
         api = APIClient()

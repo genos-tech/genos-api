@@ -64,7 +64,7 @@ class RefreshScrubsLegacyClaimsTests(BaseAPITestCase):
 
     def _refresh_via_cookie(self, refresh):
         self.client.cookies["refresh"] = refresh
-        return self.client.get(reverse("token_refresh"))
+        return self.client.post(reverse("token_refresh"))
 
     def test_the_legacy_token_really_carries_the_claim(self):
         """Guards the fixture: without this the tests below prove nothing."""

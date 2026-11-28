@@ -48,9 +48,9 @@ class RefreshGraceTests(BaseAPITestCase):
         self.user.save(update_fields=["is_active", "is_email_verified"])
         self.t0 = str(RefreshToken.for_user(self.user))
 
-    def refresh(self, raw, method="post"):
+    def refresh(self, raw):
         self.client.cookies["refresh"] = raw
-        return getattr(self.client, method)(reverse("token_refresh"))
+        return self.client.post(reverse("token_refresh"))
 
     def rotate(self):
         resp = self.refresh(self.t0)
@@ -81,10 +81,6 @@ class RefreshGraceTests(BaseAPITestCase):
         t1 = self.rotate()
         self.assertEqual(self.refresh(self.t0).status_code, 200)
         self.assertEqual(self.refresh(t1).status_code, 200)
-
-    def test_replay_works_by_get_too(self):
-        self.rotate()
-        self.assertEqual(self.refresh(self.t0, "get").status_code, 200)
 
     def test_at_most_three_graced_uses(self):
         self.rotate()
