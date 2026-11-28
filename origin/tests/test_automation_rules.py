@@ -1049,3 +1049,103 @@ class PlanGateTests(BaseAPITestCase):
         for tier, allowed in (("free", False), ("core", True), ("pro", True)):
             with mock.patch.object(quota, "get_effective_tier", return_value=tier):
                 self.assertEqual(automation_rules.plan_allows(self.user.id), allowed)
+
+
+class RulesRejectedTests(AutomationTestBase):
+    """Rejected (MIP-2494) as a trigger and an action, built in or through a custom status."""
+
+    def url(self, name):
+        return reverse(name, args=[self.a.project_id])
+
+    def body(self, **extra):
+        return {
+            "name": "Rejected",
+            "trigger_type": "status_changed",
+            "trigger_value": {"status": "Rejected"},
+            "set_status": "Rejected",
+            **extra,
+        }
+
+    def test_the_api_takes_rejected_as_trigger_and_action(self):
+        created = self.client.post(self.url("automation_rules"), self.body(), format="json")
+        self.assertEqual(created.status_code, 201, created.data)
+        self.assertEqual(
+            (created.data["triggerValue"], created.data["setStatus"]),
+            ({"status": "Rejected"}, "Rejected"),
+        )
+
+    def test_a_rejected_task_sets_off_a_move(self):
+        self.rule(trigger_value={"status": "Rejected"}, set_status="")
+        task = self.task()
+        self.put(task, status="Rejected")
+        task = self.fresh(task)
+        self.assertEqual((task.project_id, task.status), (self.x.project_id, "Rejected"))
+
+    def test_a_rule_rejects_a_task(self):
+        self.rule(destination_project=None, set_status="Rejected")
+        task = self.task()
+        self.start(task)
+        self.assertEqual(self.fresh(task).status, "Rejected")
+        self.assertEqual(len(self.history(task, APPLIED)), 1)
+
+    def test_rejecting_by_rule_frees_what_the_task_blocked(self):
+        self.rule(destination_project=None, set_status="Rejected")
+        blocker, waiting = self.task(), self.task()
+        TaskDependency.objects.create(team=self.team, blocker_task=blocker, blocked_task=waiting)
+        self.assertEqual(self.fresh(waiting).status, "Blocked")
+        self.start(blocker)
+        self.assertEqual(self.fresh(blocker).status, "Rejected")
+        self.assertEqual(self.fresh(waiting).status, "Open")
+
+    def test_a_custom_status_of_the_rejected_category(self):
+        wont = create_status(self.a, name="Won't do", category="Rejected", actor=self.user)
+        dropped = create_status(self.x, name="Dropped", category="Rejected", actor=self.user)
+        self.rule(
+            trigger_value={"custom_status_id": wont.status_id},
+            set_status="Rejected",
+            set_custom_status=dropped,
+        )
+        task = self.task()
+        self.put(task, status="Rejected", custom_status=wont.status_id)
+        task = self.fresh(task)
+        self.assertEqual(
+            (task.project_id, task.status, task.custom_status_id),
+            (self.x.project_id, "Rejected", dropped.status_id),
+        )
+
+    def test_a_custom_rejected_status_also_matches_the_built_in_trigger(self):
+        wont = create_status(self.a, name="Won't do", category="Rejected", actor=self.user)
+        self.rule(trigger_value={"status": "Rejected"}, set_status="")
+        task = self.task()
+        self.put(task, status="Rejected", custom_status=wont.status_id)
+        self.assertEqual(self.fresh(task).project_id, self.x.project_id)
+
+    def test_dry_run_lists_rejected_tasks_with_the_guards(self):
+        task = self.task(status="Rejected")
+        self.task()
+        body = self.body(set_status="", destination_project_id=self.x.project_id)
+        result = self.client.post(self.url("automation_rule_dry_run"), body, format="json")
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertEqual(
+            [(i["taskId"], i["status"], i["outcome"]) for i in result.data["items"]],
+            [(task.task_id, "Rejected", "would_apply")],
+        )
+        rule = self.rule(trigger_value={"status": "Rejected"}, set_status="", enabled=False)
+        TaskMaster.objects.filter(pk=task.pk).update(parent_task_id=self.task().task_id)
+        nested = self.client.post(
+            self.url("automation_rule_dry_run"), {"rule_id": rule.id}, format="json"
+        )
+        self.assertEqual(
+            [(i["outcome"], i["reason"]) for i in nested.data["items"]], [("skipped", "nested")]
+        )
+
+    def test_the_guards_hold_for_a_rejected_task(self):
+        self.x.is_private = False
+        self.a.is_private = True
+        self.a.save(update_fields=["is_private"])
+        self.x.save(update_fields=["is_private"])
+        self.rule(trigger_value={"status": "Rejected"}, set_status="")
+        task = self.task()
+        self.put(task, status="Rejected")
+        self.refused_with(task, "private_to_public")
+        self.assertEqual(self.fresh(task).status, "Rejected")
