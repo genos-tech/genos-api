@@ -50,7 +50,7 @@ from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMas
 from origin.models.task.task_models import TaskMaster
 from origin.services import inbox_via, realtime_push, task_card
 from origin.services.activity_suppression import activity_suppressed
-from origin.services.project_statuses import status_label
+from origin.services.project_statuses import default_status_names, status_label
 
 log = logging.getLogger(__name__)
 
@@ -106,14 +106,16 @@ def _system_user_id(project) -> str | None:
     return str(project.project_system_user_id) if project.project_system_user_id else None
 
 
-def _task_card_parts(task, language: str | None = None) -> tuple[list, str, dict]:
+def _task_card_parts(
+    task, language: str | None = None, *, status_names: dict | None = None
+) -> tuple[list, str, dict]:
     """`(body, body_text, metadata)` of `task`'s card, built from the row as stored, with its
     field names in `language` (English when none)."""
     body = task_card.task_card_body(
         labels=task_card.card_labels(language),
         title=task.title,
         status=task.status or "Open",
-        status_label=status_label(task, task.status or "Open"),
+        status_label=status_label(task, task.status or "Open", defaults=status_names),
         priority=task.priority,
         assignee=task.assignee,
         reporter=task.reporter,
@@ -262,10 +264,21 @@ def post_milestone_created_card(
 # --- keeping the card current (MIP-1460) ------------------------------------------------------
 
 
-def _refresh(project, task_id, build) -> Message | None:
+def _rewritten_card(card, build) -> tuple[list, str, dict] | None:
+    """What `card` must be rewritten to, or None when it already shows what `build(language)`
+    returns. `language` is the card's SENDER's, so a card keeps its language whoever edits the
+    task (MIP-1744); an old English card of a Japanese sender is healed here."""
+    body, body_text, metadata = build(task_card.card_language(card.sender))
+    # Merged, not replaced: the browser's card may carry keys this does not know about.
+    merged = {**(card.metadata or {}), **metadata}
+    if card.body == body and card.body_text == body_text and (card.metadata or {}) == merged:
+        return None
+    return body, body_text, merged
+
+
+def _refresh(project, task_id, build, *, announce: bool = True) -> Message | None:
     """Rewrite the card of `task_id` to what `build(language)` returns, when it differs from
-    what is stored. `language` is the card's SENDER's, so a card keeps its language whoever
-    edits the task (MIP-1744); an old English card of a Japanese sender is healed here.
+    what is stored (`_rewritten_card`), and announce it unless the caller will.
 
     No card means nothing to refresh (a task that predates cards, or one nobody posted for):
     this never makes one. An unchanged card is not written, so a save that touched nothing the
@@ -284,15 +297,15 @@ def _refresh(project, task_id, build) -> Message | None:
     )
     if card is None:
         return None
-    body, body_text, metadata = build(task_card.card_language(card.sender))
-    # Merged, not replaced: the browser's card may carry keys this does not know about.
-    merged = {**(card.metadata or {}), **metadata}
-    if card.body == body and card.body_text == body_text and (card.metadata or {}) == merged:
+    parts = _rewritten_card(card, build)
+    if parts is None:
         return None
+    body, body_text, merged = parts
     # `merged` is the stored row's own metadata (its stamp, if any, is the creation's) plus what the
     # server just built: nothing a client sent (MIP-1570).
     rewrite_card_message(card, body=body, body_text=body_text, metadata=merged, server_built=True)
-    realtime_push.push_message(card, realtime_push.UPDATED)
+    if announce:
+        realtime_push.push_message(card, realtime_push.UPDATED)
     return card
 
 
@@ -321,7 +334,7 @@ def schedule_refresh(*, task_id=None, milestone_id=None) -> None:
         log.warning("card refresh could not be scheduled", exc_info=True)
 
 
-def refresh_task_card(task_id) -> Message | None:
+def refresh_task_card(task_id, *, announce: bool = True) -> Message | None:
     """Bring a task's chat card up to date with the row. A milestone's backing task refreshes
     the milestone's card instead. Never raises.
     """
@@ -331,14 +344,104 @@ def refresh_task_card(task_id) -> Message | None:
             return None
         if task.is_milestone:
             milestone = _fresh_milestone(task_id=task_id)
-            return refresh_milestone_card(milestone.milestone_id) if milestone else None
-        return _refresh(task.project, task.task_id, lambda lang: _task_card_parts(task, lang))
+            if milestone is None:
+                return None
+            return refresh_milestone_card(milestone.milestone_id, announce=announce)
+        return _refresh(
+            task.project,
+            task.task_id,
+            lambda lang: _task_card_parts(task, lang),
+            announce=announce,
+        )
     except Exception:  # noqa: BLE001 — the task is saved; an observer must not fail the write
         log.warning("task card refresh failed task=%s", task_id, exc_info=True)
         return None
 
 
-def refresh_milestone_card(milestone_id) -> Message | None:
+def refresh_task_cards(task_ids) -> list:
+    """`refresh_task_card` for many tasks, in a number of queries that does not grow with them
+    (MIP-2561): a move's cards. Never raises.
+
+    Announces nothing: returns the ids of the cards it rewrote, for the caller to push with the
+    rest (`realtime_push.push_messages`). A milestone's card, and every card when the batch
+    fails, is refreshed on its own.
+    """
+    task_ids = list(task_ids)
+    try:
+        rewritten, one_by_one = _refresh_batch(task_ids)
+    except Exception:  # noqa: BLE001 — one bad card must not cost the others
+        log.warning("task cards batch refresh failed tasks=%s", task_ids, exc_info=True)
+        rewritten, one_by_one = [], task_ids
+    for task_id in one_by_one:
+        card = refresh_task_card(task_id, announce=False)
+        if card is not None:
+            rewritten.append(card.pk)
+    return rewritten
+
+
+def _refresh_batch(task_ids) -> tuple[list, list]:
+    """`(ids of the cards rewritten, task ids to refresh one by one)`."""
+    from origin.views.chat.message_views import rewrite_card_messages  # noqa: PLC0415
+
+    found = {
+        task.task_id: task
+        for task in TaskMaster.objects.select_related(
+            "project", "assignee", "reporter", "custom_status"
+        ).filter(task_id__in=task_ids)
+    }
+    tasks, milestones = [], []
+    for task_id in task_ids:
+        task = found.get(task_id)
+        if task is None or task.project_id is None or task.is_init_task:
+            continue
+        if task.is_milestone:
+            milestones.append(task_id)
+        else:
+            tasks.append(task)
+    if not tasks:
+        return [], milestones
+
+    project_ids = {task.project_id for task in tasks}
+    channels: dict = {}
+    for channel in Channel.objects.filter(
+        kind=ChannelKind.PM, legacy_chat_id__in=project_ids
+    ).order_by("pk"):
+        channels.setdefault(channel.legacy_chat_id, channel)
+    cards: dict = {}
+    for card in (
+        Message.objects.select_related("channel", "sender")
+        .filter(
+            channel__in=channels.values(),
+            task_id__in=[task.task_id for task in tasks],
+            is_thread_reply=False,
+            deleted_at__isnull=True,
+        )
+        .order_by("seq")
+    ):
+        cards.setdefault((card.channel_id, card.task_id), card)
+    status_names = default_status_names(project_ids)
+
+    rewrites = []
+    for task in tasks:
+        channel = channels.get(task.project_id)
+        card = cards.get((channel.pk, task.task_id)) if channel else None
+        if card is None:
+            continue
+        try:
+            parts = _rewritten_card(
+                card,
+                lambda lang: _task_card_parts(task, lang, status_names=status_names),
+            )
+        except Exception:  # noqa: BLE001 — as `refresh_task_card`: logged, costs this card only
+            log.warning("task card refresh failed task=%s", task.task_id, exc_info=True)
+            continue
+        if parts is not None:
+            rewrites.append((card, *parts))
+    rewrite_card_messages(rewrites)
+    return [card.pk for card, *_ in rewrites], milestones
+
+
+def refresh_milestone_card(milestone_id, *, announce: bool = True) -> Message | None:
     """The same for a milestone's card (its status, sprint, assignees, dates). Never raises."""
     try:
         milestone = _fresh_milestone(milestone_id)
@@ -348,6 +451,7 @@ def refresh_milestone_card(milestone_id) -> Message | None:
             milestone.project,
             milestone.task_id,
             lambda lang: _milestone_card_parts(milestone, lang),
+            announce=announce,
         )
     except Exception:  # noqa: BLE001 — the milestone is saved; an observer must not fail the write
         log.warning("milestone card refresh failed milestone=%s", milestone_id, exc_info=True)

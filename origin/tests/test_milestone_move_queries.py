@@ -2,19 +2,28 @@
 
 It cost about 12 per task (the sub-tree walked task by task, numbers claimed one by one, one history
 insert per task, a card moved per task). These pin the count inside the move's transaction and what
-the batched writes leave behind. The after-commit work (one chat card rebuild per card) is not
-counted: it is per card by design.
+the batched writes leave behind. The after-commit card work (the rebuild and the pushes, MIP-2561:
+it was about 20 queries per card) is pinned too.
 """
 
 from unittest import mock
 
 from django.db import IntegrityError, connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
-from origin.models.chat.unified_models import Channel, ChannelKind, Message, ReadCursor
+from origin.models.chat.unified_models import (
+    Channel,
+    ChannelKind,
+    ChannelMember,
+    Message,
+    MessageMention,
+    ReadCursor,
+)
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskDependency, TaskMaster, TaskNumberAlias
+from origin.services import realtime_push, task_card, task_card_move
 from origin.services.milestone_manage import update_milestone
 from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 
@@ -175,3 +184,106 @@ class MilestoneMoveBatchTests(MoveBase):
         self.assertNotIn(
             cursor.last_read_message_id, [m.pk for m in Message.objects.filter(channel=destination)]
         )
+
+
+@override_settings(SOCKETS_INTERNAL_URL="http://sockets", SOCKETS_INTERNAL_SECRET="secret")
+class MilestoneMoveCardRebuildTests(MoveBase):
+    """The cards are rebuilt and pushed together after the commit (MIP-2561)."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(realtime_push, "_post", return_value=True)
+        self.post = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def move_with_cards(self, tasks):
+        """Moves a milestone of `tasks` carded, assigned tasks. Returns the cards and the
+        queries the cards cost after the commit."""
+        milestone = self.milestone(tasks=tasks)
+        members = list(self.members)
+        TaskMaster.objects.filter(pk__in=[t.pk for t in members]).update(assignee=self.user)
+        cards = [self.card(task) for task in members]
+        self.post.reset_mock()
+        queries: list = []
+        announce = task_card_move._announce
+
+        def counted(rows):
+            with CaptureQueriesContext(connection) as captured:
+                announce(rows)
+            queries.append(len(captured))
+
+        with mock.patch.object(task_card_move, "_announce", side_effect=counted):
+            with self.captureOnCommitCallbacks(execute=True):
+                update_milestone(milestone, fields={}, project_move=self.x)
+        self.assertEqual(len(queries), 1)
+        return cards, queries[0]
+
+    def pushed(self):
+        """The ids of the messages pushed, in order."""
+        return [
+            call.args[0]["message"]["id"]
+            for call in self.post.call_args_list
+            if call.args[1] == realtime_push.MESSAGE_PATH
+        ]
+
+    def test_the_queries_do_not_grow_with_the_cards(self):
+        _, small = self.move_with_cards(3)
+        _, large = self.move_with_cards(25)
+        self.assertEqual(small, large)
+        self.assertLessEqual(large, 18)
+
+    def test_each_card_is_rewritten_mentions_and_all_and_pushed_in_order(self):
+        cards, _ = self.move_with_cards(3)
+        member = ChannelMember.objects.filter(channel=self.chat(self.x), user=self.user)
+        self.assertTrue(member.exists())
+        expected = []
+        for card in cards:
+            card.refresh_from_db()
+            task = TaskMaster.objects.get(pk=card.task_id)
+            self.assertEqual(card.metadata["displayId"], task.display_id)
+            self.assertEqual(card.body_text, task.title)
+            self.assertIsNotNone(card.edited_at)
+            self.assertEqual(
+                list(
+                    MessageMention.objects.filter(message=card).values_list(
+                        "mentioned_user_id", flat=True
+                    )
+                ),
+                [self.user.pk],
+            )
+            reply = Message.objects.get(thread_root=card)
+            # For the rewrite, for the move, then its thread.
+            expected += [str(card.pk), str(card.pk), str(reply.pk)]
+        self.assertEqual(self.pushed(), expected)
+
+    def test_a_card_that_cannot_be_built_does_not_stop_the_others(self):
+        build = task_card.task_card_body
+
+        def fail_one(**kwargs):
+            if kwargs["title"] == "t1":
+                raise ValueError("broken")
+            return build(**kwargs)
+
+        with mock.patch.object(task_card, "task_card_body", side_effect=fail_one):
+            with self.assertLogs("origin.services.task_card_post", "WARNING"):
+                cards, _ = self.move_with_cards(3)
+        rewritten = [Message.objects.get(pk=card.pk).edited_at is not None for card in cards]
+        self.assertEqual(rewritten.count(False), 1)
+
+    def test_a_failed_batch_write_falls_back_to_one_card_at_a_time(self):
+        with mock.patch(
+            "origin.views.chat.message_views.rewrite_card_messages",
+            side_effect=IntegrityError("boom"),
+        ):
+            with self.assertLogs("origin.services.task_card_post", "WARNING"):
+                cards, _ = self.move_with_cards(3)
+        for card in cards:
+            card.refresh_from_db()
+            self.assertIsNotNone(card.edited_at)
+        self.assertEqual(self.pushed().count(str(cards[0].pk)), 2)
+
+    def test_a_failing_push_stays_after_the_commit(self):
+        self.post.side_effect = ValueError("boom")
+        with self.assertLogs("django.test", level="ERROR"):
+            cards, _ = self.move_with_cards(2)
+        self.assertEqual(Message.objects.get(pk=cards[0].pk).channel_id, self.chat(self.x).pk)

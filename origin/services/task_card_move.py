@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from functools import partial
 
 from django.db import transaction
 from django.db.models import Case, F, Max, Q, Value, When
@@ -272,8 +271,8 @@ def _write(plan, members) -> None:
             realtime_push.push_messages_deleted(source, messages[start : start + REMOVAL_BATCH])
     # After the removals above (callbacks run in order): someone in both chats sees the rows leave
     # the old one and appear in the new one, never the other way round.
-    for task_id, card_id, reply_ids in plan.announce:
-        transaction.on_commit(partial(_announce, task_id, card_id, reply_ids), robust=True)
+    # A lambda, not a `partial`: Django's robust handler reads the callback's name.
+    transaction.on_commit(lambda: _announce(plan.announce), robust=True)
 
 
 def _move_thread_notes(source, old_root, destination, new_root) -> None:
@@ -379,13 +378,26 @@ def _purge_thread_chunks(channel_id, root_ids) -> None:
     transaction.on_commit(lambda: purge_entities(pairs), robust=True)
 
 
-def _announce(task_id, card_id, reply_ids) -> None:
-    """Rebuild the card from the task as it is now and show it, with its thread, to the open new
-    chat. `UPDATED`, not `CREATED`: nothing here is a new message to be notified about."""
-    task_card_post.refresh_task_card(task_id)
-    card = Message.objects.filter(pk=card_id).first()
-    if card is None:
-        return
-    realtime_push.push_message(card, realtime_push.UPDATED)
-    for reply in Message.objects.filter(pk__in=reply_ids).order_by("seq"):
-        realtime_push.push_message(reply, realtime_push.UPDATED)
+def _announce(announce) -> None:
+    """Rebuild the cards from the tasks as they are now and show them, with their threads, to the
+    open new chat. `UPDATED`, not `CREATED`: nothing here is a new message to be notified about.
+
+    `announce` is `_Plan.announce`. All the cards at once, so the queries after the commit do not
+    grow with their number either (MIP-2561).
+    """
+    rewritten = set(task_card_post.refresh_task_cards([task_id for task_id, _, _ in announce]))
+    here = set(
+        Message.objects.filter(pk__in=[card_id for _, card_id, _ in announce]).values_list(
+            "pk", flat=True
+        )
+    )
+    ids: list = []
+    for _task_id, card_id, reply_ids in announce:
+        if card_id not in here:
+            continue
+        # A rewritten card is sent for the rewrite and again for the move, as one rebuilt on its
+        # own is (`_refresh`, then this).
+        if card_id in rewritten:
+            ids.append(card_id)
+        ids.extend([card_id, *reply_ids])
+    realtime_push.push_messages(ids, realtime_push.UPDATED)

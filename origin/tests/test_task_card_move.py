@@ -75,7 +75,7 @@ class MoveBase(CardPostBase):
         self.new_channel = Channel.objects.get(
             kind=ChannelKind.PM, legacy_chat_id=self.destination.pk
         )
-        for name in ("push_message", "push_messages_deleted"):
+        for name in ("push_messages", "push_messages_deleted"):
             patcher = mock.patch.object(realtime_push, name)
             setattr(self, name, patcher.start())
             self.addCleanup(patcher.stop)
@@ -148,14 +148,14 @@ class AgentMoveTests(MoveBase):
         )
 
     def test_the_old_chat_is_told_the_rows_are_gone_and_the_new_one_gets_the_card(self):
-        self.push_message.reset_mock()
+        self.push_messages.reset_mock()
 
         self._move(self.task)
 
         ((channel, gone), _) = self.push_messages_deleted.call_args
         self.assertEqual(channel.id, self.channel.id)
         self.assertEqual({m.pk for m in gone}, {self.card.pk, self.first.pk, self.second.pk})
-        events = {(c.args[0].pk, c.args[1]) for c in self.push_message.call_args_list}
+        events = {(pk, c.args[1]) for c in self.push_messages.call_args_list for pk in c.args[0]}
         self.assertIn((self.card.pk, realtime_push.UPDATED), events)
         self.assertIn((self.second.pk, realtime_push.UPDATED), events)
         self.assertNotIn(realtime_push.CREATED, {event for _, event in events})
