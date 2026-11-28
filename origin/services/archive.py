@@ -6,6 +6,9 @@ that touches it), it leaves the default lists, and the owner restores it in one 
 removed or moved: tasks, notes, files, history, chat and dependencies stay as they are, and reads and
 links keep working for the people who had access.
 
+The same guards also refuse a person who holds the item through another team's View only share
+(`services/share_roles`, MIP-2571): a 403 in its own words, for the acting user.
+
 Who may archive or restore is checked by the caller (the project owner; the group chat's owner).
 Each change writes one security-log row and one workspace-change row, with counts and ids only.
 """
@@ -31,6 +34,11 @@ from origin.models.project.workspace_change_models import (
 )
 from origin.models.task.task_models import TaskMaster
 from origin.services.security_events import record_security_event
+from origin.services.share_roles import (
+    view_only_channel_response,
+    view_only_project_ids,
+    view_only_project_response,
+)
 from origin.services.workspace_changes import record as record_workspace_change
 
 ARCHIVED_CODE = "archived"
@@ -44,9 +52,15 @@ def _archived_response() -> Response:
     )
 
 
-def archived_project_response(project_id) -> Response | None:
-    """409 when the project is archived, else None. One guard for every write path that names a
-    project: task create and edit, comments, and the project's chat."""
+def refusal_text(response: Response) -> str:
+    """The sentence a write guard's refusal says (archived, or View only)."""
+    return response.data["error"]
+
+
+def archived_project_response(project_id, user_id=None) -> Response | None:
+    """409 when the project is archived, 403 when the acting person may only view it, else None.
+    One guard for every write path that names a project: task create and edit, comments, and the
+    project's chat."""
     try:
         project_id = int(project_id)
     except (TypeError, ValueError):
@@ -56,17 +70,20 @@ def archived_project_response(project_id) -> Response | None:
         .values_list("project_id", flat=True)
         .first()
     )
-    return _archived_response() if archived is not None else None
+    if archived is not None:
+        return _archived_response()
+    return view_only_project_response(project_id, user_id)
 
 
 def ensure_project_writable(project_id, refused) -> None:
-    """Raise `refused(ARCHIVED_MESSAGE, 409)` when the project is archived (MIP-1887).
+    """Raise `refused(message, status)` when the project is archived (MIP-1887), or the acting
+    person may only view it (MIP-2571).
 
     For the services whose own refusal class takes `(message, status)` (SprintRefused,
     CatalogRefused, ProjectRefused): REST, MCP and the in-app agent already turn those into their
     own error, so one call here covers all three."""
-    if archived_project_response(project_id) is not None:
-        raise refused(ARCHIVED_MESSAGE, status.HTTP_409_CONFLICT)
+    if response := archived_project_response(project_id):
+        raise refused(refusal_text(response), response.status_code)
 
 
 # Argument names that point at a project's data, per kind of target. The MCP gate reads these.
@@ -114,8 +131,9 @@ def _project_ids_in(args, found: set[int]) -> None:
             found.update(p for p in pid[:1] if p is not None)
 
 
-def archived_refusal_for_args(args: dict) -> str | None:
-    """The shared refusal text when a write tool call touches an archived project, else None.
+def archived_refusal_for_args(args: dict, user_id=None) -> str | None:
+    """The shared refusal text when a write tool call touches an archived project, or one the
+    caller may only view (`user_id`, default the acting user), else None.
     For the MCP gate (MIP-1887): checks the project the call names, and the project of each task,
     milestone and sprint it names, so a move OUT of or INTO an archive is refused too."""
     found: set[int] = set()
@@ -123,17 +141,22 @@ def archived_refusal_for_args(args: dict) -> str | None:
     if not found:
         return None
     archived = ProjectMaster.objects.filter(project_id__in=found, archived_at__isnull=False)
-    return ARCHIVED_MESSAGE if archived.exists() else None
+    if archived.exists():
+        return ARCHIVED_MESSAGE
+    for project_id in view_only_project_ids(found, user_id):
+        return refusal_text(view_only_project_response(project_id, user_id))
+    return None
 
 
-def archived_channel_response(channel: Channel) -> Response | None:
-    """409 when a group chat is archived, or the project it belongs to is. One guard for the chat's
-    write paths (sending, editing a message, reacting)."""
+def archived_channel_response(channel: Channel, user_id=None) -> Response | None:
+    """409 when a group chat is archived, or the project it belongs to is; 403 when the acting
+    person may only read it. One guard for the chat's write paths (sending, editing a message,
+    reacting)."""
     if channel.archived_at is not None:
         return _archived_response()
     if channel.project_id is not None:
-        return archived_project_response(channel.project_id)
-    return None
+        return archived_project_response(channel.project_id, user_id)
+    return view_only_channel_response(channel, user_id)
 
 
 def archived_project_of_task(task_id):
@@ -141,37 +164,37 @@ def archived_project_of_task(task_id):
     return TaskMaster.objects.filter(task_id=task_id).values_list("project_id", flat=True).first()
 
 
-def archived_task_response(task_id) -> Response | None:
+def archived_task_response(task_id, user_id=None) -> Response | None:
     """409 when the task's project is archived, else None. For the task's own writes (edit, comment)."""
-    return archived_project_response(archived_project_of_task(task_id))
+    return archived_project_response(archived_project_of_task(task_id), user_id)
 
 
-def archived_task_note_response(note_id) -> Response | None:
+def archived_task_note_response(note_id, user_id=None) -> Response | None:
     """409 when the project a task note lives in is archived (a note's own writes: autosave, delete,
     move out, attachments, version restore). A missing note is None: the caller answers 404."""
     project_id = (
         TaskNoteMaster.objects.filter(note_id=note_id).values_list("project_id", flat=True).first()
     )
-    return archived_project_response(project_id)
+    return archived_project_response(project_id, user_id)
 
 
-def archived_chat_note_response(note_id) -> Response | None:
+def archived_chat_note_response(note_id, user_id=None) -> Response | None:
     """409 when the note's channel is archived, or its project is. A missing note is None."""
     channel = Channel.objects.filter(chat_notes__note_id=note_id).first()
-    return archived_channel_response(channel) if channel is not None else None
+    return archived_channel_response(channel, user_id) if channel is not None else None
 
 
-def archived_note_refusal(family: str, note_id) -> str | None:
+def archived_note_refusal(family: str, note_id, user_id=None) -> str | None:
     """The refusal text when a note lives in an archived project or chat, else None (MIP-1939).
     For the note tools of the in-app agent and MCP, which write note rows directly. Personal-family
     notes are never archived."""
     if family == "task":
-        response = archived_task_note_response(note_id)
+        response = archived_task_note_response(note_id, user_id)
     elif family == "chat":
-        response = archived_chat_note_response(note_id)
+        response = archived_chat_note_response(note_id, user_id)
     else:
         return None
-    return ARCHIVED_MESSAGE if response is not None else None
+    return refusal_text(response) if response is not None else None
 
 
 def project_counts(project: ProjectMaster) -> dict[str, int]:
@@ -255,13 +278,14 @@ def restore_group_chat(channel: Channel, *, request=None, actor=None) -> None:
     _set_channel_archived(channel, archived=False, request=request, actor=actor)
 
 
-def archived_refusal(project) -> str | None:
-    """The words that refuse new work in an archived project (a loaded `ProjectMaster`), else None.
-    For the agent and MCP create tools, which run after the membership check so a stranger learns
-    nothing about a project's state."""
+def archived_refusal(project, user_id=None) -> str | None:
+    """The words that refuse new work in a project (a loaded `ProjectMaster`) that is archived or
+    that the person may only view, else None. For the agent and MCP create tools, which run after
+    the membership check so a stranger learns nothing about a project's state."""
     if getattr(project, "archived_at", None) is not None:
         return ARCHIVED_MESSAGE
-    return None
+    response = view_only_project_response(getattr(project, "project_id", None), user_id)
+    return refusal_text(response) if response is not None else None
 
 
 def mark_archived_hits(hits: list[dict]) -> None:

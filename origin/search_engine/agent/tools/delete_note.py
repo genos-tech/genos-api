@@ -41,7 +41,7 @@ def _may_delete(ref, ctx: ToolContext) -> bool:
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ref = load_readable_note(args, ctx)
     title = getattr(ref.note, "title", "") or "Untitled"
-    if why := archived_note_refusal(ref.family, ref.note_id):
+    if why := archived_note_refusal(ref.family, ref.note_id, ctx.user_id):
         raise ToolError(f"{why} Nothing was deleted.")
 
     if not _may_delete(ref, ctx):

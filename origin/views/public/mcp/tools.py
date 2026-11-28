@@ -3460,7 +3460,7 @@ def call(
         if tool.write and tool.name in ARCHIVE_GUARDED_TOOLS:
             # MIP-1887: an archived project is read-only on this surface too. The tools write
             # through the registry, not the REST views, so the guard has to sit here.
-            if why := archived_refusal_for_args(args):
+            if why := archived_refusal_for_args(args, ctx.user_id):
                 raise ToolError(why)
         if (
             limits

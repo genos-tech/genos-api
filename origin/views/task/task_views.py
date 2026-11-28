@@ -56,6 +56,7 @@ from origin.services.project_statuses import (
     is_same_status_id,
     pick_custom_status,
 )
+from origin.services.share_roles import view_only_task_response
 from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_attachment_manage import (
     add_attachment,
@@ -206,6 +207,36 @@ def _thread_not_found():
     return Response({"error": THREAD_NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
 
 
+def _refuse_read_only_link_targets(body, user_id, task=None):
+    """The refusal when a save files the task under a milestone or parent of a project that is
+    archived or that the caller may only view (MIP-2571), else None. The task's own project is
+    checked by the caller; a value the task already has is no change. Only a project the caller is
+    on is asked about, so the answer says nothing about anyone else's."""
+    from origin.models.task.milestone_models import MilestoneMaster
+
+    for key, model, pk in (
+        ("milestone", MilestoneMaster, "milestone_id"),
+        ("parent_task_id", TaskMaster, "task_id"),
+        ("root_task_id", TaskMaster, "task_id"),
+    ):
+        raw = body.get(key)
+        current = f"{key}_id" if key == "milestone" else key
+        if raw in (None, "", "null") or (task and str(raw) == str(getattr(task, current, None))):
+            continue
+        try:
+            project_id = model.objects.filter(**{pk: raw}).values_list("project_id", flat=True)[:1]
+            project_id = next(iter(project_id), None)
+        except (DjangoValidationError, TypeError, ValueError):
+            continue
+        if task and project_id == task.project_id:
+            continue
+        if is_project_member(project_id, user_id) and (
+            res := archived_project_response(project_id)
+        ):
+            return res
+    return None
+
+
 def _refuse_unreachable_task_links(request, project):
     """A 400 if the create payload names anything the caller cannot use.
 
@@ -331,12 +362,14 @@ class TaskMasterView(AuthenticatedAPIView):
 
         # An archived project takes no new tasks (MIP-1693). After the membership check (MIP-1884:
         # a stranger must not learn the archive state) and before the quota, so nothing is charged.
-        if project.archived_at is not None:
-            return archived_project_response(project.project_id)
+        if res := archived_project_response(project.project_id):
+            return res
         if res := check_monthly_creation_quota(request.user.id, TASK_CREATE_KEY, "task_create"):
             return res
 
         if res := _refuse_unreachable_task_links(request, project):
+            return res
+        if res := _refuse_read_only_link_targets(body, request.user.id):
             return res
 
         # Two-way bridge between `milestone` and `parent_task_id`:
@@ -660,6 +693,8 @@ class TaskMasterView(AuthenticatedAPIView):
         if stale_project:
             logger.info("task PUT %s: stale project in a save, not moving", task_id)
             data = {k: v for k, v in data.items() if k not in _PROJECT_SCOPED_SAVE_FIELDS}
+        if res := _refuse_read_only_link_targets(data, request.user.id, task):
+            return res
 
         # MIP-2391: a status this save sets must be one of the six; restating the stored one passes.
         if data.get("status") is not None and (
@@ -918,8 +953,8 @@ class TaskMasterView(AuthenticatedAPIView):
                 )
             # An archived project is read-only: nothing may be filed into it (MIP-1885). After the
             # membership check, so a stranger learns nothing about the archive state (MIP-1884).
-            if dest_project.archived_at is not None:
-                return archived_project_response(dest_project.project_id)
+            if res := archived_project_response(dest_project.project_id):
+                return res
             # Only a milestone, a root task or a task directly in a milestone
             # may change project; anything filed under an ordinary task
             # follows what it sits in. Moving one on its
@@ -3246,6 +3281,8 @@ class TaskCommentMentionView(AuthenticatedAPIView):
         body = body_object(request)
         if not can_access_task(body.get("task_id"), request.user.id):
             return _no_task()
+        if res := view_only_task_response(body.get("task_id"), request.user.id):
+            return res
         mentioned = body.get("mentioned_user_ids")
         if isinstance(mentioned, list) and (
             too_many := check_batch_size(mentioned, MAX_MENTIONS_PER_COMMENT, "mentioned_user_ids")
@@ -3317,6 +3354,8 @@ class TaskCommentMentionView(AuthenticatedAPIView):
             )
         if not can_access_task(task_id, request.user.id):
             return _no_task()
+        if res := view_only_task_response(task_id, request.user.id):
+            return res
 
         try:
             for mentioned_user_id in list(str(mentioned_user_ids).split(",")):
@@ -3357,6 +3396,8 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
         # The uploader was checked against the caller; the task never was.
         if not can_access_task(data["task"], request_user_id):
             return _no_task()
+        if res := view_only_task_response(data["task"], request.user.id):
+            return res
 
         upload, res = check_attachment_upload(request.user, data["body_attachment_url"])
         if res:
@@ -3546,6 +3587,9 @@ class TaskDependencyView(AuthenticatedAPIView):
             and can_access_task(blocked_task_id, request.user.id)
         ):
             return not_found
+        for end in (blocker_task_id, blocked_task_id):
+            if res := view_only_task_response(end, request.user.id):
+                return res
 
         try:
             blocker = TaskMaster.objects.select_related("project").get(
@@ -3615,6 +3659,9 @@ class TaskDependencyView(AuthenticatedAPIView):
                 {"error": "Dependency not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        for end in (dep.blocker_task_id, dep.blocked_task_id):
+            if res := view_only_task_response(end, request.user.id):
+                return res
         dep.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
