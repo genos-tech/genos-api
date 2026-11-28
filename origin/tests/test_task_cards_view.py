@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectStatus
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.services.milestone_rollup import milestone_work_counts
@@ -185,6 +185,21 @@ class TaskCardsViewTests(TestCase):
         self.milestone.is_deleted = True
         self.milestone.save()
         self.assertEqual(self._cards(self.member, [self.row.task_id]), [])
+
+    def test_a_card_names_the_projects_own_status(self):
+        # MIP-2548: the card is drawn from this answer, so the label has to be in it.
+        review = ProjectStatus.objects.create(
+            team=self.team, project=self.project, name="In review", category="WIP"
+        )
+        task = self._task("Copy", status="WIP", custom_status=review)
+        self.milestone.custom_status = review
+        self.milestone.save()
+        plain = self._task("Plain")
+        cards = self._cards(self.member, [task.task_id, self.row.task_id, plain.task_id])
+        self.assertEqual(
+            [(c["status"], c["customStatusId"]) for c in cards],
+            [("WIP", review.status_id), ("WIP", review.status_id), ("Open", None)],
+        )
 
     def test_the_query_count_does_not_grow_with_the_cards(self):
         def make(n):

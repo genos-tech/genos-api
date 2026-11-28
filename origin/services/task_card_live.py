@@ -149,6 +149,8 @@ def _task_card(task, *, others, by_milestone_id, by_backing_id, blockers) -> dic
         **_common(task, task.content),
         "kind": "task",
         "status": task.status or "Open",
+        # The project's own label for that status (MIP-2548); the client names and colours it.
+        "customStatusId": task.custom_status_id,
         "priority": task.priority or None,
         "effortLevel": task.effort_level or None,
         "assignee": _person(task.assignee),
@@ -180,6 +182,7 @@ def _milestone_card(milestone, task, by_status) -> dict:
         "milestoneId": milestone.milestone_id,
         "title": milestone.title,
         "status": milestone.status or "Open",
+        "customStatusId": milestone.custom_status_id,
         "priority": milestone.priority or None,
         "reporter": _person(milestone.reporter),
         "dueDate": _date(milestone.due_date),
