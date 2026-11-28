@@ -9,10 +9,14 @@ Each entry is the activity row EXACTLY as `GET /api/v2/task/activity/` serialise
 draw it) plus `sourceTask`, the task the change happened to, and `depth`, how far
 below the one asked about (0 is its own change, 1 a direct child's...).
 
+A change to a task the caller cannot open (`can_access_task`'s rule: one that has since moved
+to a project they are not on) is left out of the feed, title and all (MIP-2550). A deleted task
+they could otherwise open stays: the feed says it was deleted.
+
 The names a row carries are cut as in the activity feed (`history_labels`, MIP-2536). The rows
 come from several tasks, some of which the caller may not be able to open, so only the asked
 task's project (the caller is on it) and the caller's own memberships pass: a sub-task's current
-project does not pass by itself.
+project does not pass by itself (an assignee off that project still reads the entry).
 
 Access is PROJECT MEMBERSHIP, not `can_access_task`: the answer names tasks other
 than the one asked about, and an assignee who is not a member can read their own task
@@ -31,7 +35,7 @@ from origin.models.task.task_progress_models import TaskProgressFact
 from origin.services.history_labels import HistoryLabels
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.task.task_activity_views import _serialize_activity
-from origin.views.utils.scope_guards import is_project_member
+from origin.views.utils.scope_guards import is_project_member, readable_tasks_q
 
 DEFAULT_LIMIT = 30
 MAX_LIMIT = 100
@@ -86,7 +90,12 @@ class TaskProgressListView(AuthenticatedAPIView):
         ):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        facts = TaskProgressFact.objects.filter(ancestor_task_id=task_id, depth__gte=min_depth)
+        # In the query, not after the slice: a page stays full and its cursor right.
+        facts = TaskProgressFact.objects.filter(
+            readable_tasks_q(request.user.id, "source_task__"),
+            ancestor_task_id=task_id,
+            depth__gte=min_depth,
+        )
         since = request.GET.get("since")
         if since:
             when = parse_datetime(since)
