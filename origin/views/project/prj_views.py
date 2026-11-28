@@ -1061,7 +1061,7 @@ class ProjectTagsView(AuthenticatedAPIView):
         # `project_id` is the first read, and the member check refuses a missing one.
         if res := require_project_member_or_response(request.user, body.get("project_id")):
             return res
-        if res := view_only_project_response(body.get("project_id"), request.user.id):
+        if res := archived_project_response(body.get("project_id"), request.user.id):
             return res
         # The rest were `request.data[...]`: a KeyError (500) when missing.
         if res := require_fields(body, "team_id", "tag_name", "tag_color", "tag_text_color"):
@@ -1151,7 +1151,7 @@ class ProjectTagsView(AuthenticatedAPIView):
             )
         if res := require_project_member_or_response(request.user, project_id):
             return res
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         tag = ProjectTags.objects.filter(project=project_id, tag_name=old_tag_name).first()
@@ -1257,7 +1257,7 @@ class ProjectTagsView(AuthenticatedAPIView):
             )
         if res := require_project_member_or_response(request.user, project_id):
             return res
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         tag = ProjectTags.objects.filter(project=project_id, tag_name=tag_name).first()
@@ -1358,7 +1358,7 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         data = {
@@ -1413,7 +1413,7 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         template = self._find(template_id, project_id)
@@ -1469,7 +1469,7 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         template = self._find(template_id, project_id)
@@ -1585,7 +1585,7 @@ class ProjectSavedTaskFilterView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         data = {
@@ -1654,7 +1654,7 @@ class ProjectSavedTaskFilterView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         row = ProjectSavedTaskFilter.objects.filter(filter_id=filter_id, project=project_id).first()
@@ -1707,7 +1707,7 @@ class ProjectSavedTaskFilterView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
 
         row = ProjectSavedTaskFilter.objects.filter(filter_id=filter_id, project=project_id).first()
@@ -1777,7 +1777,7 @@ class ProjectTemplateDefaultsView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_id, request.user.id):
+        if res := archived_project_response(project_id, request.user.id):
             return res
         project = ProjectMaster.objects.filter(project_id=project_id).first()
         if not project:
@@ -1930,7 +1930,7 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
                 {"error": "Only the project owner or an editor can configure task field rules."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project.project_id, request.user.id):
+        if res := archived_project_response(project.project_id, request.user.id):
             return res
         if err := self._validate(rules):
             return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
@@ -2002,7 +2002,7 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
                 {"error": "Only the project owner or an editor can manage custom fields."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project.project_id, request.user.id):
+        if res := archived_project_response(project.project_id, request.user.id):
             return None, res
         return project, None
 
@@ -2343,7 +2343,7 @@ class ProjectProfileImageView(AuthenticatedAPIView):
                 {"error": "Only the project owner or an editor can change the project image."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if res := view_only_project_response(project_data.project_id, request.user.id):
+        if res := archived_project_response(project_data.project_id, request.user.id):
             return res
 
         # Only update the FileField

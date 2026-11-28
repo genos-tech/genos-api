@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -165,8 +166,13 @@ def archived_project_of_task(task_id):
 
 
 def archived_task_response(task_id, user_id=None) -> Response | None:
-    """409 when the task's project is archived, else None. For the task's own writes (edit, comment)."""
-    return archived_project_response(archived_project_of_task(task_id), user_id)
+    """409 when the task's project is archived, else None. For the task's own writes (edit, comment).
+    `task_id` may be the raw request value: text that is no id is None, and the view answers it."""
+    try:
+        project_id = archived_project_of_task(task_id)
+    except (DjangoValidationError, ValueError, TypeError):
+        return None
+    return archived_project_response(project_id, user_id)
 
 
 def archived_task_note_response(note_id, user_id=None) -> Response | None:

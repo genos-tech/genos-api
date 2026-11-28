@@ -6,7 +6,7 @@ from rest_framework.response import Response
 
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.sprint_models import Sprint, SprintConfig
-from origin.services.share_roles import view_only_project_response
+from origin.services.archive import archived_project_response
 from origin.services.sprint_manage import (
     SprintRefused,
     create_sprint,
@@ -291,7 +291,7 @@ class SprintConfigView(AuthenticatedAPIView):
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(project.project_id, request.user.id):
             return _deny_not_found("Project")
-        if res := view_only_project_response(project.project_id, request.user.id):
+        if res := archived_project_response(project.project_id, request.user.id):
             return res
 
         auto_roll = request.data.get("auto_roll", True)

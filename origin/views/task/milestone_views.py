@@ -39,7 +39,6 @@ from origin.services.project_statuses import (
     is_same_status_id,
     pick_custom_status,
 )
-from origin.services.share_roles import view_only_project_response
 from origin.services.task_assignment_notice import notify_milestone_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card
@@ -830,7 +829,7 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
-        if res := view_only_project_response(milestone.project_id, request.user.id):
+        if res := archived_project_response(milestone.project_id, request.user.id):
             return res
 
         try:
@@ -890,7 +889,7 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
-        if res := view_only_project_response(milestone.project_id, request.user.id):
+        if res := archived_project_response(milestone.project_id, request.user.id):
             return res
         with transaction.atomic():
             if lock_live_milestone(milestone, project_id=milestone.project_id) is None:

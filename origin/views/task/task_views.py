@@ -56,7 +56,6 @@ from origin.services.project_statuses import (
     is_same_status_id,
     pick_custom_status,
 )
-from origin.services.share_roles import view_only_task_response
 from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_attachment_manage import (
     add_attachment,
@@ -3281,7 +3280,7 @@ class TaskCommentMentionView(AuthenticatedAPIView):
         body = body_object(request)
         if not can_access_task(body.get("task_id"), request.user.id):
             return _no_task()
-        if res := view_only_task_response(body.get("task_id"), request.user.id):
+        if res := archived_task_response(body.get("task_id"), request.user.id):
             return res
         mentioned = body.get("mentioned_user_ids")
         if isinstance(mentioned, list) and (
@@ -3354,7 +3353,7 @@ class TaskCommentMentionView(AuthenticatedAPIView):
             )
         if not can_access_task(task_id, request.user.id):
             return _no_task()
-        if res := view_only_task_response(task_id, request.user.id):
+        if res := archived_task_response(task_id, request.user.id):
             return res
 
         try:
@@ -3396,7 +3395,7 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
         # The uploader was checked against the caller; the task never was.
         if not can_access_task(data["task"], request_user_id):
             return _no_task()
-        if res := view_only_task_response(data["task"], request.user.id):
+        if res := archived_task_response(data["task"], request.user.id):
             return res
 
         upload, res = check_attachment_upload(request.user, data["body_attachment_url"])
@@ -3588,7 +3587,7 @@ class TaskDependencyView(AuthenticatedAPIView):
         ):
             return not_found
         for end in (blocker_task_id, blocked_task_id):
-            if res := view_only_task_response(end, request.user.id):
+            if res := archived_task_response(end, request.user.id):
                 return res
 
         try:
@@ -3660,7 +3659,7 @@ class TaskDependencyView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         for end in (dep.blocker_task_id, dep.blocked_task_id):
-            if res := view_only_task_response(end, request.user.id):
+            if res := archived_task_response(end, request.user.id):
                 return res
         dep.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
