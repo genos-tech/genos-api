@@ -1,6 +1,6 @@
 """`purge_orphaned_task_files`: the repair for task files already left in storage (MIP-1824).
 
-Files are real (a temporary MEDIA_ROOT) and their age is set on disk, so the grace period is
+Files are real (a temporary MEDIA_ROOT, one per test) and their age is set on disk, so the grace period is
 exercised, not mocked. Dry run is the default and writes nothing; `--apply` needs `--yes`; a file
 named by any live row, a file younger than the grace period, a file at an unexpected path and a
 file whose row appeared after the scan are never deleted; output is counts only, never a name.
@@ -29,10 +29,8 @@ from origin.models.task.task_models import (
     TaskMaster,
 )
 from origin.services import orphaned_task_files as svc
-from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 
-_MEDIA_ROOT = tempfile.mkdtemp(prefix="test-orphaned-task-files-")
 OLD = 10 * 24 * 3600  # ten days: past the seven-day grace period
 
 
@@ -42,15 +40,19 @@ def _call(*args) -> str:
     return out.getvalue()
 
 
-@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
 class OrphanedTaskFiles(BaseAPITestCase):
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        remove_media_root(_MEDIA_ROOT)
-
     def setUp(self):
         super().setUp()
+        # The command scans ALL of MEDIA_ROOT and deletes what no row of THIS database names, so
+        # the folder must be this test's own: under `--parallel` the classes run in different
+        # workers, each with its own database, and a folder made at import is shared by all of
+        # them (the workers fork after it), so one test's --apply removed another's files
+        # (MIP-2555).
+        self.media_root = tempfile.mkdtemp(prefix="test-orphaned-task-files-")
+        self.addCleanup(shutil.rmtree, self.media_root, ignore_errors=True)
+        media = override_settings(MEDIA_ROOT=self.media_root)
+        media.enable()
+        self.addCleanup(media.disable)
         self.project = ProjectMaster.objects.create(
             team=self.team, project_name="P", owner=self.user, project_system_user=self.user
         )
@@ -61,10 +63,9 @@ class OrphanedTaskFiles(BaseAPITestCase):
     def put(self, name, *, age=OLD):
         """A file on disk under `name`, aged `age` seconds (0 = just written)."""
         stored = default_storage.save(name, ContentFile(b"secret bytes"))
-        path = os.path.join(_MEDIA_ROOT, stored)
+        path = os.path.join(self.media_root, stored)
         when = time.time() - age
         os.utime(path, (when, when))
-        self.addCleanup(lambda: default_storage.exists(stored) and default_storage.delete(stored))
         return stored
 
     def row_for(self, name):
@@ -194,6 +195,6 @@ class WhatIsRemoved(OrphanedTaskFiles):
         self.assertIn("0 orphaned file(s)", out)
 
     def test_a_missing_storage_root_is_not_an_error(self):
-        shutil.rmtree(os.path.join(_MEDIA_ROOT, "tasks"), ignore_errors=True)
+        shutil.rmtree(os.path.join(self.media_root, "tasks"), ignore_errors=True)
         report = svc.scan(apply=False)
         self.assertEqual(report.orphan, 0)
