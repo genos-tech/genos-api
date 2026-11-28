@@ -3,7 +3,8 @@
  "en": {
   "API keys and webhooks, step by step": {
    "sha256": [
-    "4c6304c0205ad5c9d6843c2a0de522d6f38ed218a4194da9c5eee84fa63d503f"
+    "4c6304c0205ad5c9d6843c2a0de522d6f38ed218a4194da9c5eee84fa63d503f",
+    "b710b7c8a3f6fb3e9d7119c7e0bd32141085d0402add44f7bb0072f901f1a270"
    ]
   },
   "Chat: messages, threads, and mentions": {
@@ -108,9 +109,11 @@
   },
   "Tasks and projects": {
    "sha256": [
+    "2b321b443d71af63c96d00be3729a377bf9588afd6b3dc2316b7d3f3ef8bd4d9",
     "3cd469cc59994ebcad9efdcf106ad3c2b7cb943b0a628c3bd3968720e0def9fd",
     "566bf739a770ec23bfb5a7e8001412fb193a8562286ddd00d15503b69799fc68",
     "8b4be98257be5e166a9d8e3671660cffebcf6a1295a432398a19d54c76eb98be",
+    "a2a246701214a9701de71757eed66eff20f7bd822c8becaf3ce4f9fbffa87bae",
     "acb8ddd710176895f74d0ded0c32bb19ef6b2ab7e9b39d47858d69915a1c9448"
    ]
   },
@@ -136,7 +139,8 @@
  "ja": {
   "API キーと Webhook の手順": {
    "sha256": [
-    "62f660b14e17640294123f1f21747dd78bbc91ed09a2d6a383c030bf8c27ee17"
+    "62f660b14e17640294123f1f21747dd78bbc91ed09a2d6a383c030bf8c27ee17",
+    "73cc541de4463573ab2404c0eddd4ef432a30ed94ab8d23ae012bde7f4975268"
    ]
   },
   "Genos AI: 質問し、作業を任せ、先回りする": {
@@ -180,10 +184,12 @@
   },
   "タスクとプロジェクト": {
    "sha256": [
+    "5d7b423da8a7585bd20b53c999edd16cb6197cde1a0dd307fead2931b6d0a5f9",
     "664901f7253916831ca93297989f3e702e7b64d71d63e6df1ca53638c9f9fa92",
     "7650d4c0f9084cebe35d9f90b2178ee2bf3c1963fed5fb081d6bedbe834d8cea",
     "d5384138ce8ed3142377ef31dcfb34845044bbfec31b6fe92f41c7efd836fc56",
-    "fb68e0902a2d995abab01213d81329c58e1c045eb08a498c9f6fb29c50012600"
+    "fb68e0902a2d995abab01213d81329c58e1c045eb08a498c9f6fb29c50012600",
+    "fe4be5e1ef16459c7dd604e3d675566604aa240f5552572afed6270b42f1baf6"
    ]
   },
   "チャット: メッセージ、スレッド、メンション": {

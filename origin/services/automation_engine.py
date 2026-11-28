@@ -445,7 +445,11 @@ def _act(rule: AutomationRule, task: TaskMaster, milestone=None) -> Outcome:
             rule,
             task,
             TaskActivityActionType.AUTOMATION_REFUSED,
-            {"reason": rules.public_reason(reason)},
+            {
+                "reason": rules.public_reason(reason),
+                # Lets the history say "milestone" and not "task" (MIP-2540).
+                **({"milestoneId": milestone.milestone_id} if milestone is not None else {}),
+            },
         )
         return Outcome(state, reason, rule.id)
     _record(

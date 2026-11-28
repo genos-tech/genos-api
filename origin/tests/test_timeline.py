@@ -794,6 +794,25 @@ class TestWhatEachAnchorHolds(TimelineBase):
         self.assertEqual(len(only["events"]), 1)
         self.assertEqual(only["omitted"], {"message": 1, "reply": 2})
 
+    def test_a_rule_that_moved_a_milestone_says_milestone(self):
+        root = self.message(self.gm, self.user2, 10, text="root")
+        notices = []
+        for seq, extra in ((11, {}), (12, {"movedMilestone": True})):
+            notice = self.message(
+                self.gm,
+                self.user,
+                seq,
+                text="stored text",
+                root=root,
+                metadata={"systemNotice": "task_moved_by_rule", **extra},
+            )
+            Message.objects.filter(pk=notice.pk).update(sender=None)
+            notices.append(notice)
+        events = {e["key"]: e["text"] for e in self.tl("thread", str(root.id))["events"]}
+        task, milestone = (events[f"m{n.seq}"] for n in notices)
+        self.assertIn("a project rule moved a task to another project", task)
+        self.assertIn("a project rule moved a milestone to another project", milestone)
+
     def test_a_closing_notice_is_dropped_when_its_status_row_is_on_the_timeline(self):
         root = self.message(self.gm, self.user2, 10, text="root")
         task = self.make_task("Export")
