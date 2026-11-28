@@ -30,7 +30,7 @@ from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
-_VALID_STATUSES = {"Open", "WIP", "Pending", "Closed", "Rejected", "Deleted"}
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"}
 _CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 
 
@@ -155,7 +155,7 @@ LIST_MY_MILESTONES = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Pending", "Closed", "Rejected", "Deleted"],
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"],
                 },
                 "description": (
                     "Filter by one or more milestone statuses. Omit to "

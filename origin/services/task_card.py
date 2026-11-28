@@ -149,6 +149,7 @@ def card_language(user) -> str:
 STATUS_COLOR = {
     "Open": "blue",
     "WIP": "orange",
+    "Blocked": "red",  # the client's Blocked tone (MIP-2528)
     "Pending": "purple",
     "Closed": "green",
     "Rejected": "brown",
