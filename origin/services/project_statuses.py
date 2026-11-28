@@ -31,7 +31,8 @@ from origin.models.task.automation_models import AutomationRule
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 
-# (builtin_key, category), in display order. "In Review" is a not-started status under Open.
+# (builtin_key, category), in display order. "In Review" is a not-started status under Open;
+# its name is "Ready" (`builtin_name`).
 BUILTIN_STATUSES = (
     ("Open", "Open"),
     ("In Review", "Open"),
@@ -41,13 +42,24 @@ BUILTIN_STATUSES = (
     ("Closed", "Closed"),
     ("Rejected", "Rejected"),
 )
+# Built-in rows whose default name is not their key. The key is what code and clients match on, so
+# a rename of a default (MIP-2602: "In Review" became "Ready") moves the name only.
+BUILTIN_NAMES = {"In Review": "Ready"}
 CATEGORIES = ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")
 CAN_TURN_OFF = frozenset({"In Review", "WIP", "Pending", "Rejected"})
 # Names that would read as a system value. A built-in row may take its own back.
-RESERVED_NAMES = frozenset(name.casefold() for name, _ in (*BUILTIN_STATUSES, ("Deleted", "")))
+RESERVED_NAMES = frozenset(
+    name.casefold()
+    for name in (*(key for key, _ in BUILTIN_STATUSES), *BUILTIN_NAMES.values(), "Deleted")
+)
 MAX_NAME_LEN = 24
 MAX_STATUSES = 30
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z0-9-]{0,23}")
+
+
+def builtin_name(key: str) -> str:
+    """The name a built-in row is written with."""
+    return BUILTIN_NAMES.get(key, key)
 
 
 class StatusError(Exception):
@@ -73,7 +85,8 @@ def serialize_status(row: ProjectStatus) -> dict:
         "statusId": row.status_id,
         "name": row.name,
         "category": row.category,
-        # Set on a built-in row: the client translates it while `name` still equals the key.
+        # Set on a built-in row: the client translates it while `name` is still its default
+        # (`builtin_name` of the key).
         "builtinKey": row.builtin_key,
         "color": row.color,
         "sortOrder": row.sort_order,
@@ -151,7 +164,7 @@ def ensure_project_statuses(project: ProjectMaster) -> None:
                 ProjectStatus(
                     team_id=project.team_id,
                     project=project,
-                    name=key,
+                    name=builtin_name(key),
                     category=category,
                     builtin_key=key,
                     sort_order=index,
@@ -168,7 +181,10 @@ def _clean_name(raw, *, builtin_key: str | None = None) -> str:
         raise StatusError("name is required.", code="name_required")
     if len(name) > MAX_NAME_LEN:
         raise StatusError(f"name cannot exceed {MAX_NAME_LEN} characters.", code="name_too_long")
-    own = builtin_key is not None and name.casefold() == builtin_key.casefold()
+    own = builtin_key is not None and name.casefold() in (
+        builtin_key.casefold(),
+        builtin_name(builtin_key).casefold(),
+    )
     if name.casefold() in RESERVED_NAMES and not own:
         raise StatusError("That name is a built-in status.", code="name_reserved")
     return name
@@ -277,7 +293,9 @@ def update_status(project, status_id, changes: dict) -> ProjectStatus:
         if "category" in changes and changes["category"] != row.category:
             _change_category(project, row, changes["category"])
             moved_category = True
-        if "name" in changes:
+        # A restated name is not a rename: a team's own "Ready" from before that name was
+        # reserved (MIP-2602) can still be recoloured.
+        if "name" in changes and changes["name"] != row.name:
             name = _clean_name(changes["name"], builtin_key=row.builtin_key)
             _name_taken(project, name, excluding=row.status_id)
             row.name = name
