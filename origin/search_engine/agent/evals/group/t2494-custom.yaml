@@ -1,0 +1,179 @@
+# MIP-2494 (flag AGENT_CUSTOM_STATUS, arm t2494): a project's own status names. Does the agent read
+# `custom_status`, set one by name when the member names it, and on a name that does not fit still
+# apply the rest and offer the names that would? Seed `status_desk`: "Code review" (category WIP),
+# held by "Tidy the API client".
+#
+# A write never runs in a behaviour case, so the server's suggestion reply is only reached by the
+# two `kind: resume` cases (a scripted proposal is approved for real, the model under test narrates
+# it). Their throwaway project has the built-in statuses only, so the candidates are those.
+# The positives `requires_arm: t2494`; the `plain` negatives run on arm0 too. Read the `unfit`
+# answers by hand.
+
+- id: t2494-cs.set.en
+  lang: en
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  requires_arm: t2494
+  note: "Positive: a project's status is set by its name."
+  query: "Move 'Refresh the onboarding copy' to Code review."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        custom_status: "(?i)^Code review$"
+
+- id: t2494-cs.read.en
+  lang: en
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  requires_arm: t2494
+  note: "Positive: the answer uses the project's name for the status."
+  query: "What status is the task 'Tidy the API client' in?"
+  expect:
+    no_errors: true
+    answer_contains_any: ["Code review"]
+    tool_calls_at_most: 4
+
+- id: t2494-cs.unfit-ask.en
+  lang: en
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  requires_arm: t2494
+  note: "A name the project does not have: the priority is still proposed and nothing is closed or rejected."
+  query: "Move 'Refresh the onboarding copy' to 'Ready for QA' and set its priority to High."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        priority: "^High$"
+      args_not_match:
+        status: "^(Closed|Rejected|Deleted)$"
+
+- id: t2494-cs.plain.en
+  lang: en
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: b
+  seed: [status_desk]
+  note: "Negative (arm0 and arm): a plain status change sends no custom_status."
+  query: "Mark 'Add the dark mode toggle' as in progress."
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^WIP$"
+      args_absent: [custom_status]
+
+- id: t2494-cs.set.ja
+  lang: ja
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  requires_arm: t2494
+  note: "Positive: a project's status is set by its name."
+  query: "「オンボーディングの文面を直す」をコードレビューに移してください。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        custom_status: "(?i)^コードレビュー$"
+
+- id: t2494-cs.read.ja
+  lang: ja
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  requires_arm: t2494
+  note: "Positive: the answer uses the project's name for the status."
+  query: "タスク「APIクライアントを整理する」は今どのステータスですか?"
+  expect:
+    no_errors: true
+    answer_contains_any: ["コードレビュー"]
+    tool_calls_at_most: 4
+
+- id: t2494-cs.unfit-ask.ja
+  lang: ja
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  requires_arm: t2494
+  note: "A name the project does not have: the priority is still proposed and nothing is closed or rejected."
+  query: "「オンボーディングの文面を直す」を「QA待ち」に移して、優先度を High にしてください。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        priority: "^High$"
+      args_not_match:
+        status: "^(Closed|Rejected|Deleted)$"
+
+- id: t2494-cs.plain.ja
+  lang: ja
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: sequence
+  viewer: ja-b
+  seed: [status_desk]
+  note: "Negative (arm0 and arm): a plain status change sends no custom_status."
+  query: "「ダークモードの切り替えを追加する」を進行中にしてください。"
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        status: "^WIP$"
+      args_absent: [custom_status]
+
+- id: t2494-cs.unfit-reply.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: false
+  requires_arm: t2494
+  # After approval the name is left out with suggestions: the answer offers names that fit.
+  query: "Move the task to 'Ready for QA' and set its priority to High."
+  tasks: [{key: copy, title: "Refresh the onboarding copy"}]
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:copy}", custom_status: "Ready for QA", priority: High}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["was not applied"]
+    answer_contains_any: ["In Review", "WIP", "Pending", "Open"]
+
+- id: t2494-cs.unfit-reply.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t2494-custom, t2494]
+  fixture: false
+  requires_arm: t2494
+  # After approval the name is left out with suggestions: the answer offers names that fit.
+  query: "このタスクを「QA待ち」に移して、優先度を High にしてください。"
+  tasks: [{key: copy, title: "オンボーディングの文面を直す"}]
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:copy}", custom_status: "Ready for QA", priority: High}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["was not applied"]
+    answer_contains_any: ["In Review", "WIP", "Pending", "Open", "レビュー", "進行中", "保留"]
+

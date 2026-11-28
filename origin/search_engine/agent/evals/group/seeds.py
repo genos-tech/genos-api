@@ -1133,6 +1133,96 @@ def seed_injection_calendar(info: dict[str, Any]) -> None:
     _calendar_accounts(info, ("invite",))
 
 
+# --------------------------------------------------------------------------- #
+# t2494: Rejected tasks and a project's own status names                       #
+# --------------------------------------------------------------------------- #
+
+#: A project of the viewer's own (ERS). 11 tasks, 2 of them Rejected: with Rejected left out the
+#: project reads 2 of 9 done (22%). `code_review` is the project's own status (category WIP).
+STATUS_DESK = {
+    "en": {
+        "project": "Eval status desk",
+        "code_review": "Code review",
+        "fax": "Build the fax integration",
+        "pager": "Support pager alerts",
+        "kiosk": "Design the kiosk mode",
+        "darkmode": "Add the dark mode toggle",
+        "notes": "Write the release notes",
+        "api": "Tidy the API client",
+        "onboarding": "Refresh the onboarding copy",
+        "staging": "Set up the build machine",
+        "cert": "Rotate the signing certificate",
+        "paper": "Print weekly paper reports",
+        "widget": "Ship a desktop widget",
+    },
+    "ja": {
+        "project": "評価ステータス管理",
+        "code_review": "コードレビュー",
+        "fax": "FAX連携を作る",
+        "pager": "ポケベル通知に対応する",
+        "kiosk": "キオスクモードを設計する",
+        "darkmode": "ダークモードの切り替えを追加する",
+        "notes": "リリースノートを書く",
+        "api": "APIクライアントを整理する",
+        "onboarding": "オンボーディングの文面を直す",
+        "staging": "ビルド用マシンを用意する",
+        "cert": "署名証明書を更新する",
+        "paper": "週次の紙レポートを印刷する",
+        "widget": "デスクトップウィジェットを出す",
+    },
+}
+_STATUS_DESK_TASKS = (
+    ("fax", "Open"),
+    ("pager", "Open"),
+    ("kiosk", "Open"),
+    ("darkmode", "Open"),
+    ("notes", "WIP"),
+    ("api", "WIP"),
+    ("onboarding", "WIP"),
+    ("staging", "Closed"),
+    ("cert", "Closed"),
+    ("paper", "Rejected"),
+    ("widget", "Rejected"),
+)
+
+
+def seed_status_desk(info: dict[str, Any]) -> None:
+    """The project above with its statuses set up, one custom status ("Code review") and one task
+    that holds it. Rows only, the same on every arm."""
+    from django.db import transaction  # noqa: PLC0415
+
+    from origin.models.project.prj_models import ProjectStatus  # noqa: PLC0415
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+    from origin.services.project_statuses import ensure_project_statuses  # noqa: PLC0415
+
+    titles = STATUS_DESK["ja" if info["team"] == "ja" else "en"]
+    me = info["user_id"]
+    with transaction.atomic():
+        project = _isolated_project(info, titles["project"], "ERS", [me])
+        if TaskMaster.objects.filter(project=project).exists():
+            return
+        ensure_project_statuses(project)
+        review = ProjectStatus.objects.create(
+            team_id=info["team_id"],
+            project=project,
+            name=titles["code_review"],
+            category="WIP",
+            sort_order=20,
+        )
+        for number, (key, status) in enumerate(_STATUS_DESK_TASKS, start=1):
+            TaskMaster.objects.create(
+                team_id=info["team_id"],
+                project=project,
+                reporter_id=me,
+                assignee_id=me,
+                title=titles[key],
+                status=status,
+                priority="Normal",
+                project_task_number=number,
+                custom_status=review if key == "api" else None,
+            )
+
+
 #: The story's people (`a` client, `b` PM, `c` developer) who can read a seed's rows: the guard
 #: `test_agent_eval_group_seeds` checks only their cases against the seed's text.
 VISIBLE_TO: dict[str, frozenset[str]] = {
@@ -1150,6 +1240,7 @@ VISIBLE_TO: dict[str, frozenset[str]] = {
     # MIP-2264: applied to viewer v2 only (its own team); no story person is a member of project EIJ.
     "injection_plants": frozenset(),
     "injection_calendar": frozenset(),
+    "status_desk": frozenset({"b"}),  # project ERS: the viewer alone
 }
 
 
@@ -1206,6 +1297,8 @@ def seed_texts(name: str, lang: str) -> list[str]:
             *calendar_stub.INVITE_DESCRIPTIONS.values(),
             *[spec[1] for spec in calendar_stub.EVENTS[lang]["invite"]],
         ]
+    if name == "status_desk":
+        return list(STATUS_DESK[lang].values())
     if name == "note_threads_stub":
         t = NOTE_THREAD_TEXT[lang]
         return [*NOTE_TITLES[lang].values(), NOTE_BODY[lang], *t.values()]
@@ -1225,6 +1318,7 @@ SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "project_field_rules": seed_project_field_rules,
     "injection_plants": seed_injection_plants,
     "injection_calendar": seed_injection_calendar,
+    "status_desk": seed_status_desk,
 }
 
 
