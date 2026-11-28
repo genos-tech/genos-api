@@ -67,6 +67,7 @@ from origin.services.mention_extractor import (
     extract_mention_group_ids,
     extract_mentioned_user_ids,
 )
+from origin.services.share_roles import view_only_channel_response
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
     MAX_MESSAGES_PER_DELTA,
@@ -1236,6 +1237,8 @@ class MessageAttachmentsView(AuthenticatedAPIView):
         # rule used everywhere else.
         if not is_chat_member(message.channel_id, request.user.id):
             raise Http404("Message not found.")
+        if res := view_only_channel_response(message.channel, request.user.id):
+            return res
 
         if message.sender_id != request.user.id:
             return Response(

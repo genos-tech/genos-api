@@ -22,6 +22,7 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services import force_delete as svc
 from origin.services.channel_scope import is_chat_member
 from origin.services.note_delete import FAMILIES
+from origin.services.share_roles import view_only_task_response
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import get_effective_role
 from origin.views.utils.request_validators import body_object
@@ -80,6 +81,10 @@ def _visible_task(request, task_id):
 class TaskForceDeleteView(AuthenticatedAPIView):
     def post(self, request, task_id):
         task = _visible_task(request, task_id)
+        # Removing a whole task changes the project (MIP-2571). Erasing your own message, comment
+        # or note stays open.
+        if refused := view_only_task_response(task.task_id, request.user.id):
+            return refused
         if (refused := _needs_confirmation(request)) is not None:
             return refused
         return _run(lambda: svc.force_delete_task(task, actor=request.user, request=request))

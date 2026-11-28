@@ -94,6 +94,7 @@ from origin.services.realtime_push import (
     push_membership_removed,
 )
 from origin.services.security_events import record_security_event, user_label
+from origin.services.share_roles import is_view_only_channel, view_only_channel_response
 from origin.services.workspace_changes import record as record_workspace_change
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
@@ -1265,6 +1266,11 @@ class ChannelMembersView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if not channel.is_external and (
+            res := view_only_channel_response(channel, request.user.id)
+        ):
+            return res
+
         body = body_object(request)
         user_ids = body.get("user_ids") or []
         if not isinstance(user_ids, list) or not user_ids:
@@ -1594,6 +1600,8 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
                 {"error": "Only the channel owner or an editor can change member roles."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_channel_response(channel, request.user.id):
+            return res
 
         member_role = body_object(request).get("member_role")
         if not is_assignable(member_role):
@@ -1670,7 +1678,9 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
             # Taking out SOMEONE ELSE follows `can_remove_member` (MIP-1371): the owner removes
             # anyone but themselves, an editor only viewers. This used to let an editor remove
             # the channel owner or another editor. Leaving (yourself) is unchanged.
-            if can_remove_member(actor_role, resolve_gm_role(channel, user_id)):
+            if can_remove_member(
+                actor_role, resolve_gm_role(channel, user_id)
+            ) and not is_view_only_channel(channel, request.user.id):
                 manager_may_remove = True
             elif grant is None:
                 return Response(
@@ -1792,6 +1802,8 @@ class ChannelProfileImageView(AuthenticatedAPIView):
                 {"error": "Only the channel owner or an editor can change the avatar."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_channel_response(channel, request.user.id):
+            return res
 
         profile_image = request.FILES.get("profile_image")
         if profile_image is None:
@@ -1892,6 +1904,8 @@ class ChannelInlineUploadView(AuthenticatedAPIView):
                 {"error": "Missing multipart field 'file'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if res := view_only_channel_response(channel, request.user.id):
+            return res
         upload, res = check_attachment_upload(
             request.user, file, fallback_bytes=MAX_INLINE_UPLOAD_BYTES
         )

@@ -11,7 +11,8 @@
    "sha256": [
     "1175205f12e2696d44c3617e991c6bbd525c349013c7c784110282819fd4f7dd",
     "2566d8cd51c0c60e0b8790294cd6458b5e2fbc91e3c9b11d5c8bb4c9bb1f8851",
-    "500f21e02092acd39ab43a33a070a9edfcd38529e331f2b078c9506fe980ef9c"
+    "500f21e02092acd39ab43a33a070a9edfcd38529e331f2b078c9506fe980ef9c",
+    "e2c42fca237c0f258a812278951a6eb3608bc4398aac1f8affa6c8145e4d12b7"
    ]
   },
   "Connecting Genos to other tools: API, MCP, and realtime": {
@@ -202,7 +203,8 @@
   "チャット: メッセージ、スレッド、メンション": {
    "sha256": [
     "298bf7cd24ee2c4af0398ebd031dacefb48dd01e329c606abe67f4738a6e45a5",
-    "76fa8f54fe531f2247a88270f85cd9622f54b026ca1eb987cff11405dd2f0036"
+    "76fa8f54fe531f2247a88270f85cd9622f54b026ca1eb987cff11405dd2f0036",
+    "e958609bb6dd55be4bbd837dc414ee561e275e5c2a11166295feb719f4595bdd"
    ]
   },
   "チーム、メンバー、ロール": {

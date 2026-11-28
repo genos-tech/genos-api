@@ -252,7 +252,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to create tasks in project {project_id}.")
-    if why := archived_refusal(project):  # MIP-1852
+    if why := archived_refusal(project, ctx.user_id):  # MIP-1852
         raise ToolError(f"{why} Nothing was created.")
 
     # A task proposed without a body gets the project's template (MIP-1510): the same text the

@@ -61,6 +61,7 @@ from origin.services.project_statuses import (
     update_status,
 )
 from origin.services.security_events import record_security_event, user_label
+from origin.services.share_roles import view_only_project_response
 from origin.services.workspace_changes import record as record_workspace_change
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields
@@ -951,6 +952,8 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
         project = ProjectMaster.objects.filter(team_id=item.team_id, project_id=project_id).first()
         if project is None or not can_manage(resolve_project_role(project, request.user.id)):
             return not_found()
+        if res := view_only_project_response(project.project_id, request.user.id):
+            return res
 
         attendee_id = str(item.sender_id)
         data = {"team": str(item.team_id), "project": project.project_id, "attendee": attendee_id}
@@ -1058,6 +1061,8 @@ class ProjectTagsView(AuthenticatedAPIView):
         # `project_id` is the first read, and the member check refuses a missing one.
         if res := require_project_member_or_response(request.user, body.get("project_id")):
             return res
+        if res := view_only_project_response(body.get("project_id"), request.user.id):
+            return res
         # The rest were `request.data[...]`: a KeyError (500) when missing.
         if res := require_fields(body, "team_id", "tag_name", "tag_color", "tag_text_color"):
             return res
@@ -1145,6 +1150,8 @@ class ProjectTagsView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if res := require_project_member_or_response(request.user, project_id):
+            return res
+        if res := view_only_project_response(project_id, request.user.id):
             return res
 
         tag = ProjectTags.objects.filter(project=project_id, tag_name=old_tag_name).first()
@@ -1250,6 +1257,8 @@ class ProjectTagsView(AuthenticatedAPIView):
             )
         if res := require_project_member_or_response(request.user, project_id):
             return res
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
 
         tag = ProjectTags.objects.filter(project=project_id, tag_name=tag_name).first()
 
@@ -1349,6 +1358,8 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
 
         data = {
             "team": request.data.get("team_id"),
@@ -1402,6 +1413,8 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
 
         template = self._find(template_id, project_id)
         if not template:
@@ -1456,6 +1469,8 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
 
         template = self._find(template_id, project_id)
         if not template:
@@ -1570,6 +1585,8 @@ class ProjectSavedTaskFilterView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
 
         data = {
             "team": request.data.get("team_id"),
@@ -1637,6 +1654,8 @@ class ProjectSavedTaskFilterView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
 
         row = ProjectSavedTaskFilter.objects.filter(filter_id=filter_id, project=project_id).first()
         if not row:
@@ -1688,6 +1707,8 @@ class ProjectSavedTaskFilterView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
 
         row = ProjectSavedTaskFilter.objects.filter(filter_id=filter_id, project=project_id).first()
         if not row:
@@ -1756,6 +1777,8 @@ class ProjectTemplateDefaultsView(AuthenticatedAPIView):
                 {"error": "Not a member of this project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_id, request.user.id):
+            return res
         project = ProjectMaster.objects.filter(project_id=project_id).first()
         if not project:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -1907,6 +1930,8 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
                 {"error": "Only the project owner or an editor can configure task field rules."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project.project_id, request.user.id):
+            return res
         if err := self._validate(rules):
             return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
         project.task_field_rules = rules
@@ -1977,6 +2002,8 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
                 {"error": "Only the project owner or an editor can manage custom fields."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project.project_id, request.user.id):
+            return None, res
         return project, None
 
     def get(self, request):
@@ -2316,6 +2343,8 @@ class ProjectProfileImageView(AuthenticatedAPIView):
                 {"error": "Only the project owner or an editor can change the project image."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project_data.project_id, request.user.id):
+            return res
 
         # Only update the FileField
         new_profile_image_data = {
@@ -2395,6 +2424,8 @@ def _require_project_manager(request, project_id):
             {"error": "Only the project owner or an editor can manage project labels."},
             status=status.HTTP_403_FORBIDDEN,
         )
+    if res := view_only_project_response(project.project_id, request.user.id):
+        return None, res
     return project, None
 
 
@@ -2646,6 +2677,11 @@ class RemoveProjectMemberView(AuthenticatedAPIView):
         user_id = request.data.get("user_id")
         if project is None or not user_id:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        # Only someone on the project hears "View only"; anyone else gets the usual answer.
+        if is_project_member(project.project_id, request.user.id) and (
+            res := view_only_project_response(project.project_id, request.user.id)
+        ):
+            return res
         try:
             unassigned = remove_member(
                 project,
@@ -2695,6 +2731,8 @@ class ProjectMemberRoleView(AuthenticatedAPIView):
                 {"error": "Only the project owner or an editor can change member roles."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if res := view_only_project_response(project.project_id, request.user.id):
+            return res
 
         try:
             change_member_role(project, user_id, member_role, request=request)
