@@ -379,6 +379,8 @@ def _custom_status_change(old_id: Optional[int], new_id: Optional[int]) -> Optio
         "newLabel": new.get("name"),
         "oldColor": old.get("color"),
         "newColor": new.get("color"),
+        # The system status they count as, for the feed's icon (MIP-2493).
+        "category": new.get("category") or old.get("category"),
     }
 
 
@@ -643,8 +645,12 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
                     task=task, **{**change, "metadata": {**change["metadata"], "cascade": cascade}}
                 )
     # A queryset update fires no signal, so a cascade that wrote a field the chat card shows
-    # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483).
-    if shown := _CARD_FIELDS.intersection(tracked):
+    # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483). So does
+    # one that moved tasks to another custom status (a delete with a replacement, MIP-2493).
+    shown = _CARD_FIELDS.intersection(tracked)
+    if "custom_status_id" in columns:
+        shown = shown | {"custom_status_id"}
+    if shown:
         for pk in _changed_with_a_card(ids, before, shown):
             _schedule_card_refresh(task_id=pk)
     return count
@@ -849,6 +855,10 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
 
             post_close_notice(instance, row.pk)
 
+    # The card names the project's status (MIP-2493), which can change on its own.
+    if status_label_change is not None:
+        card_changed = True
+
     for change in _custom_field_changes(
         instance, original.get("custom_field_values"), instance.custom_field_values
     ):
@@ -904,6 +914,65 @@ def _offer_automation(instance, original, status_label_change, update_fields) ->
             AutomationTrigger.ASSIGNEE_CHANGED,
             {"assignee_to": str(instance.assignee_id) if instance.assignee_id else None},
         )
+
+
+@receiver(pre_save, sender=MilestoneMaster)
+def milestone_stash_for_automation(sender, instance: MilestoneMaster, **kwargs):
+    """The stored values a milestone automation rule compares with (MIP-2521). Read only when
+    the project has a milestone rule."""
+    instance._automation_original = None
+    if instance.pk is None:
+        return
+    try:
+        # A savepoint, so a failure here cannot poison the writer's transaction.
+        with transaction.atomic():
+            if not automation_engine.has_milestone_rules(instance.project_id):
+                return
+            instance._automation_original = (
+                MilestoneMaster.objects.filter(pk=instance.pk)
+                .values("status", "custom_status_id", "tags", "project_id", "is_deleted")
+                .first()
+            )
+    except Exception:  # noqa: BLE001 - an observer must not fail the milestone write
+        _webhook_logger.warning(
+            "milestone automation snapshot failed milestone=%s", instance.pk, exc_info=True
+        )
+
+
+@receiver(post_save, sender=MilestoneMaster)
+def milestone_offer_automation(sender, instance: MilestoneMaster, created: bool, **kwargs):
+    """The changes of this save a milestone rule may react to (MIP-2521). Creation is offered
+    by `create_milestone`, assignees by `sync_milestone_assignees`."""
+    original = getattr(instance, "_automation_original", None)
+    if created or original is None or original["is_deleted"] or instance.is_deleted:
+        return
+    # The automatic Open/Blocked flip is nobody's change.
+    if getattr(instance, "_derived_blocked_sync", False):
+        return
+    update_fields = kwargs.get("update_fields")
+
+    def wrote(*columns) -> bool:
+        return update_fields is None or bool(set(columns) & set(update_fields))
+
+    if wrote("status", "custom_status", "custom_status_id") and (
+        original["status"] != instance.status
+        # A move drops the old project's label: that is not a status change.
+        or (
+            original["project_id"] == instance.project_id
+            and original["custom_status_id"] != instance.custom_status_id
+        )
+    ):
+        automation_engine.offer_milestone(
+            instance,
+            AutomationTrigger.STATUS_CHANGED,
+            {"status_to": instance.status, "custom_status_to": instance.custom_status_id},
+        )
+    if wrote("tags"):
+        added = _tag_names(instance.tags) - _tag_names(original["tags"])
+        if added:
+            automation_engine.offer_milestone(
+                instance, AutomationTrigger.TAG_ADDED, {"tags_added": sorted(added)}
+            )
 
 
 def _tag_names(tags) -> set:

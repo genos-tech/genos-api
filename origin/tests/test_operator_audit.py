@@ -185,6 +185,33 @@ class OperatorAuditTests(TestCase):
             _run("migrate", body=lambda: ran.append(1))
         self.assertEqual(ran, [1])
 
+    def test_a_raising_command_runs_once_with_the_audit_off_or_on(self):
+        """MIP-2501: outside production the command's own error used to run it again."""
+        for env in ({"RAILWAY_ENVIRONMENT": ""}, {"RAILWAY_ENVIRONMENT": "staging"}, PROD):
+            for heartbeat in ((), ("--heartbeat", "some-tick")):
+                with self.subTest(env=env, heartbeat=heartbeat):
+                    ran = []
+
+                    def boom():
+                        ran.append(1)
+                        raise RuntimeError("partway")
+
+                    cmd = _Cmd(stdout=io.StringIO(), stderr=io.StringIO())
+                    # `run_audited` directly: `run_from_argv` prints a traceback and, for a
+                    # CommandError, exits; the exception must reach the caller unchanged.
+                    with mock.patch.dict("os.environ", env):
+                        with self.assertRaisesMessage(RuntimeError, "partway"):
+                            operator_audit.run_audited(
+                                cmd, ["manage.py", "migrate", *heartbeat], boom
+                            )
+                    self.assertEqual(ran, [1])
+
+    def test_a_failing_audit_setup_still_runs_the_command_once(self):
+        ran = []
+        with mock.patch.object(operator_audit, "redact_args", side_effect=RuntimeError("redact")):
+            _run("migrate", body=lambda: ran.append(1))
+        self.assertEqual(ran, [1])
+
     def test_command_started_without_run_from_argv_is_not_counted(self):
         """`call_command` (a command inside a command) is not an operator action."""
         from django.core.management import call_command

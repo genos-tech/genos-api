@@ -46,7 +46,8 @@ class AutomationRule(models.Model):
     # Rules are tried in (position, id) order; the first one that matches is the only one that acts.
     position = models.IntegerField(default=0)
     enabled = models.BooleanField(default=True)
-    # "task" only for now; milestones move through another path.
+    # "task" or "milestone" (MIP-2521). A milestone rule moves the milestone and its whole
+    # sub-tree, through `milestone_manage.update_milestone`, as a move by hand does.
     applies_to = models.CharField(max_length=16, default="task")
 
     trigger_type = models.CharField(max_length=24, choices=AutomationTrigger.choices)
@@ -107,7 +108,8 @@ class AutomationRun(models.Model):
     source_project_id = models.BigIntegerField()
     destination_project_id = models.BigIntegerField(null=True, blank=True)
     trigger_type = models.CharField(max_length=24, choices=AutomationTrigger.choices)
-    # What changed: {"status_to", "custom_status_to", "tags_added", "assignee_to"}.
+    # What changed: {"status_to", "custom_status_to", "tags_added", "assignee_to"}. A milestone's
+    # run hangs off its backing task and says which with "milestone_id" (and "assignees_added").
     payload = models.JSONField(default=dict, blank=True)
     state = models.CharField(
         max_length=16, choices=AutomationRunState.choices, default=AutomationRunState.PENDING

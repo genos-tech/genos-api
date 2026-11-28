@@ -36,6 +36,10 @@ from origin.views.utils.scope_guards import is_project_member, is_team_member
 
 log = logging.getLogger(__name__)
 
+#: What a rule acts on. A milestone rule moves the milestone with its whole sub-tree (MIP-2521).
+APPLIES_TO_TASK = "task"
+APPLIES_TO_MILESTONE = "milestone"
+APPLIES_TO = (APPLIES_TO_TASK, APPLIES_TO_MILESTONE)
 #: Rules one project may hold.
 MAX_RULES = 50
 MAX_CONDITIONS = 10
@@ -207,8 +211,26 @@ def assignee_allowed(project: ProjectMaster, user_id) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Matching a task
+# Matching a task or a milestone
 # ---------------------------------------------------------------------------
+
+
+class MilestoneSubject:
+    """What the triggers and conditions read of a milestone: its OWN values (`MilestoneMaster`
+    and its assignees), never the backing task row's mirror. The one thing that lives on the
+    backing row only is its custom field values."""
+
+    milestone_id = None  # "milestone is X" is a task condition; a milestone is in none
+    assignee_id = None
+
+    def __init__(self, milestone, backing, assignee_ids):
+        self.tags = milestone.tags
+        self.status = milestone.status
+        self.custom_status_id = milestone.custom_status_id
+        self.priority = milestone.priority
+        self.reporter_id = milestone.reporter_id
+        self.assignee_ids = frozenset(str(i) for i in assignee_ids)
+        self.custom_field_values = backing.custom_field_values if backing else None
 
 
 def tag_names_of(task) -> list[str]:
@@ -262,6 +284,9 @@ def trigger_matches(rule: AutomationRule, kind: str, payload: dict, task) -> boo
     wanted = value.get("assignee_id")
     if wanted is None:
         return True
+    ids = getattr(task, "assignee_ids", None)
+    if ids is not None:  # a milestone, which several people hold
+        return wanted in (payload.get("assignees_added") or []) and wanted in ids
     return payload.get("assignee_to") == wanted and str(task.assignee_id) == wanted
 
 
@@ -280,6 +305,9 @@ def trigger_state_holds(rule: AutomationRule, task) -> bool:
     if kind == AutomationTrigger.ASSIGNEE_CHANGED:
         wanted = value.get("assignee_id")
         # "Any change" includes unassigning, as the live trigger does.
+        ids = getattr(task, "assignee_ids", None)
+        if ids is not None:
+            return wanted is None or wanted in ids
         return wanted is None or str(task.assignee_id) == wanted
     return True
 
@@ -324,6 +352,8 @@ def condition_holds(condition: dict, task, refs: ProjectRefs) -> bool:
         if needs_value and str(value).casefold() not in refs.tags:
             return False
         return _compare(op, bool(names), str(value).casefold() in names)
+    if field == "assignee" and (ids := getattr(task, "assignee_ids", None)) is not None:
+        return _compare(op, bool(ids), value in ids)
     if field in ("assignee", "reporter"):
         held = getattr(task, f"{field}_id")
         return _compare(op, held is not None, str(held) == value)
@@ -406,7 +436,7 @@ def _clean_trigger(project: ProjectMaster, kind, value) -> tuple[str, dict]:
     return kind, {"assignee_id": _uuid(value["assignee_id"], code=bad, field="trigger_value")}
 
 
-def _clean_conditions(project: ProjectMaster, raw) -> list[dict]:
+def _clean_conditions(project: ProjectMaster, raw, applies_to: str) -> list[dict]:
     bad = "invalid_condition"
     if raw is None:
         return []
@@ -422,6 +452,12 @@ def _clean_conditions(project: ProjectMaster, raw) -> list[dict]:
         field, op = item.get("field"), item.get("op", "is")
         if field not in CONDITION_FIELDS or op not in CONDITION_OPS:
             raise RuleError("Unknown condition.", code=bad, field="conditions")
+        if field == "milestone" and applies_to == APPLIES_TO_MILESTONE:
+            raise RuleError(
+                "A milestone is not in a milestone: that condition is for task rules.",
+                code=bad,
+                field="conditions",
+            )
         clean = {"field": field, "op": op}
         if field == "custom_field":
             field_id = _int(item.get("field_id"), code=bad, field="conditions")
@@ -458,10 +494,17 @@ def clean_rule(project: ProjectMaster, data: dict, *, owner) -> dict:
     name = " ".join(name.split()) if isinstance(name, str) else ""
     if not name or len(name) > 80:
         raise RuleError("name is required, at most 80 characters.", code="bad_name", field="name")
+    applies_to = data.get("applies_to")
+    if applies_to in (None, ""):
+        applies_to = APPLIES_TO_TASK
+    if applies_to not in APPLIES_TO:
+        raise RuleError(
+            "applies_to must be task or milestone.", code="bad_applies_to", field="applies_to"
+        )
     trigger_type, trigger_value = _clean_trigger(
         project, data.get("trigger_type"), data.get("trigger_value")
     )
-    conditions = _clean_conditions(project, data.get("conditions"))
+    conditions = _clean_conditions(project, data.get("conditions"), applies_to)
 
     destination = None
     raw = data.get("destination_project_id")
@@ -526,6 +569,7 @@ def clean_rule(project: ProjectMaster, data: dict, *, owner) -> dict:
 
     return {
         "name": name,
+        "applies_to": applies_to,
         "trigger_type": trigger_type,
         "trigger_value": trigger_value,
         "conditions": conditions,
@@ -547,6 +591,7 @@ def definition_of(rule: AutomationRule) -> dict:
         destination = rule.destination_project_id
     return {
         "name": rule.name,
+        "applies_to": rule.applies_to,
         "trigger_type": rule.trigger_type,
         "trigger_value": rule.trigger_value,
         "conditions": rule.conditions,

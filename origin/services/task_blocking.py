@@ -155,6 +155,7 @@ def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
                 if new_status is None:
                     continue
                 milestone.status = new_status
+                milestone._derived_blocked_sync = True  # nobody's change: no automation rule
                 milestone.save(update_fields=["status", "ts_updated_at"])
                 task.status = new_status
                 task._derived_blocked_sync = True  # tags the activity row

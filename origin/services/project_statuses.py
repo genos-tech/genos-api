@@ -7,9 +7,10 @@ The model in one line: `status` on a task or milestone stays one of the system v
 A task's label is (1) its `custom_status`, when that row's category equals its `status`;
 (2) otherwise the project's default row for that category; (3) otherwise the built-in label.
 
-**Seeding.** The built-in rows are written the first time the project's list is read or
-changed (`ensure_project_statuses`), not for every project up front: nothing about a project
-nobody opened changes, and no data migration walks the projects.
+**Seeding.** The built-in rows are written the first time the project's list is CHANGED
+(`ensure_project_statuses`: an add, a reorder, the app's "set up"), not for every project up
+front and not on a read (MIP-2493): a project nobody set up keeps behaving as before, and no
+data migration walks the projects.
 
 **Turning off** is archiving: the row leaves the pickers, the tasks that hold it keep it. Open,
 Closed and Blocked cannot be turned off because automations write them (unblock returns to
@@ -91,6 +92,25 @@ def custom_status_ref(obj) -> dict | None:
     if row is None or row.category != obj.status or row.project_id != obj.project_id:
         return None
     return {"id": row.status_id, "name": row.name, "category": row.category}
+
+
+def status_label(obj, status: str) -> str:
+    """What `obj`'s project calls `status` (the order in the module docstring), for text the
+    server writes, such as a chat card. A built-in nobody renamed reads as `status` itself."""
+    ref = custom_status_ref(obj) if status == obj.status else None
+    if ref is not None:
+        return ref["name"]
+    name = (
+        ProjectStatus.objects.filter(
+            project_id=obj.project_id,
+            category=status,
+            is_default=True,
+            archived_at__isnull=True,
+        )
+        .values_list("name", flat=True)
+        .first()
+    )
+    return name or status
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +334,7 @@ def delete_status(project, status_id, *, replacement_id=None) -> int:
     """Delete a status the team added. One that tasks or milestones hold needs a replacement of
     the same category, which they move to. Returns how many moved."""
     from origin.services.task_cache import invalidate_project_tasks_cache
+    from origin.services.task_card_post import schedule_refresh
     from origin.signals.task_signals import update_tasks_recorded
 
     with transaction.atomic():
@@ -350,7 +371,11 @@ def delete_status(project, status_id, *, replacement_id=None) -> int:
                 )
         if replacement is not None:
             update_tasks_recorded(tasks, cascade="status_deleted", custom_status=replacement)
+            # `.update()` fires no signal: their chat cards are refreshed by hand.
+            moved_milestones = list(milestones.values_list("milestone_id", flat=True))
             milestones.update(custom_status=replacement, ts_updated_at=timezone.now())
+            for milestone_id in moved_milestones:
+                schedule_refresh(milestone_id=milestone_id)
         was_default, category = row.is_default, row.category
         row.delete()
         if was_default:

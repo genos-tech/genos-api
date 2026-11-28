@@ -9,10 +9,11 @@ from unittest import mock
 
 from django.urls import reverse
 
+from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectStatus
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskDependency, TaskMaster
-from origin.services import task_ancestry
+from origin.services import task_ancestry, task_card_post
 from origin.services.milestone_rollup import milestone_work_counts
 from origin.services.milestone_service import create_milestone
 from origin.services.project_statuses import ensure_project_statuses
@@ -84,9 +85,16 @@ class StatusListApiTests(StatusTestBase):
     def test_a_project_nobody_opened_has_no_rows(self):
         self.assertFalse(ProjectStatus.objects.filter(project=self.project).exists())
 
-    def test_first_read_writes_the_built_ins_once(self):
-        first = self.client.get(self.url())
-        second = self.client.get(self.url())
+    def test_reading_writes_nothing(self):
+        response = self.client.get(self.url())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["statuses"], [])
+        self.assertTrue(response.data["canManage"])
+        self.assertFalse(ProjectStatus.objects.filter(project=self.project).exists())
+
+    def test_an_empty_reorder_writes_the_built_ins_once(self):
+        first = self.client.put(self.url(), {"order": []}, format="json")
+        second = self.client.put(self.url(), {"order": []}, format="json")
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.data, second.data)
         self.assertEqual(
@@ -241,6 +249,7 @@ class StatusListApiTests(StatusTestBase):
         self.assertEqual(task.status, "WIP")
         (row,) = self.rows(task, CUSTOM)
         self.assertEqual((row.metadata["oldLabel"], row.metadata["newLabel"]), ("Doing", "Testing"))
+        self.assertEqual(row.metadata["category"], "WIP")
         self.assertEqual(self.rows(task, STATUS), [])
 
 
@@ -590,3 +599,64 @@ class MilestoneCustomStatusTests(StatusTestBase):
         self.client.delete(f"/api/v2/milestone/{milestone.milestone_id}/")
         backing = TaskMaster.objects.get(pk=milestone.task_id)
         self.assertEqual((backing.status, backing.custom_status_id), ("Deleted", None))
+
+
+class StatusChatCardTests(StatusTestBase):
+    """The project chat card says what the project calls the status (MIP-2493)."""
+
+    def setUp(self):
+        super().setUp()
+        Channel.objects.get_or_create(
+            kind=ChannelKind.PM,
+            legacy_chat_id=self.project.project_id,
+            defaults={"team": self.team},
+        )
+
+    def posted(self, task):
+        with self.captureOnCommitCallbacks(execute=True):
+            task_card_post.post_task_created_card(task, actor_id=str(self.user.id))
+        return task
+
+    def chip(self, task):
+        card = Message.objects.get(task_id=task.task_id, is_thread_reply=False)
+        return card.body[1]["content"][1]["text"], card.body[1]["content"][1]["styles"]
+
+    def save(self, task, **fields):
+        with self.captureOnCommitCallbacks(execute=True):
+            for name, value in fields.items():
+                setattr(task, name, value)
+            task.save()
+
+    def test_a_project_without_statuses_reads_as_before(self):
+        task = self.posted(self.task("WIP"))
+        self.assertEqual(self.chip(task)[0], "WIP")
+
+    def test_the_card_names_the_custom_status_and_keeps_the_category_colour(self):
+        review = self.add("Code review", "WIP")
+        task = self.posted(self.task("WIP"))
+        self.save(task, custom_status=review)
+        text, styles = self.chip(task)
+        self.assertEqual(text, "Code review")
+        self.assertEqual(styles["textColor"], "orange")
+
+    def test_a_renamed_default_is_named_and_a_category_change_drops_the_custom_name(self):
+        review = self.add("Code review", "WIP")
+        closed = self.builtin("Closed")
+        self.client.patch(self.url(status_id=closed.status_id), {"name": "Done"}, format="json")
+        task = self.posted(self.task("WIP", review))
+        self.assertEqual(self.chip(task)[0], "Code review")
+        self.save(task, status="Closed")
+        self.assertEqual(self.chip(task)[0], "Done")
+
+    def test_deleting_a_status_with_a_replacement_rewrites_the_card(self):
+        review = self.add("Code review", "WIP")
+        testing = self.add("Testing", "WIP")
+        task = self.posted(self.task("WIP", review))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(
+                self.url(status_id=review.status_id),
+                {"replacement_status_id": testing.status_id},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(self.chip(task)[0], "Testing")

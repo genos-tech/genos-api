@@ -46,7 +46,12 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
+from origin.models.project.prj_models import (
+    ProjectMaster,
+    ProjectMembers,
+    ProjectStatus,
+    ProjectTags,
+)
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_delivery_models import (
     TaskDelivery,
@@ -60,6 +65,7 @@ from origin.search_engine.agent_views import AgentStepUndoView
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
 from origin.services import throttles
 from origin.services.collab_push import PushOutcome
+from origin.services.project_statuses import create_status, delete_status
 from origin.services.throttles import AgentUndoThrottle
 from origin.tests.security_clock import MidMinute
 from origin.tests.status_reason_support import with_reason
@@ -673,6 +679,60 @@ class UndoingUpdateTask(UndoBase):
         self.undone(run, step)
         task = self.fresh()
         self.assertEqual((task.title, task.priority), ("Seed", "Low"))
+
+    def labelled(self, name="Triage", category="Open"):
+        """The task given a custom status of its own, as a person would."""
+        row = create_status(self.task.project, name=name, category=category, actor=self.user)
+        self.someone_else_edits(self.task, custom_status=row)
+        return row
+
+    def test_a_status_change_comes_back_with_its_custom_status(self):
+        row = self.labelled()
+        run, step = self.write(status="WIP")
+        self.assertIsNone(self.fresh().custom_status_id)  # cleared by the change
+
+        body = self.undone(run, step)
+
+        task = self.fresh()
+        self.assertEqual((task.status, task.custom_status_id), ("Open", row.status_id))
+        self.assertEqual((body["restored"], body["skipped"]), (["status"], []))
+
+    def test_a_delete_through_status_comes_back_with_its_custom_status(self):
+        row = self.labelled()
+        run, step = self.write(status="Deleted")
+        self.undone(run, step)
+        task = self.fresh()
+        self.assertEqual((task.status, task.custom_status_id), ("Open", row.status_id))
+
+    def test_a_custom_status_deleted_since_is_left_out_without_an_error(self):
+        row = self.labelled()
+        run, step = self.write(status="WIP")
+        delete_status(self.task.project, row.status_id)
+
+        body = self.undone(run, step)
+
+        task = self.fresh()
+        self.assertEqual((task.status, task.custom_status_id), ("Open", None))
+        self.assertEqual((body["restored"], body["skipped"]), (["status"], []))
+
+    def test_a_custom_status_turned_off_since_is_left_out(self):
+        row = self.labelled()
+        run, step = self.write(status="WIP")
+        ProjectStatus.objects.filter(pk=row.pk).update(archived_at=timezone.now())
+        self.undone(run, step)
+        self.assertEqual((self.fresh().status, self.fresh().custom_status_id), ("Open", None))
+
+    def test_a_custom_status_picked_after_the_write_keeps_it_and_the_status(self):
+        self.labelled()
+        run, step = self.write(status="WIP", title="Renamed")
+        later = self.labelled(name="Coding", category="WIP")
+
+        body = self.undone(run, step)
+
+        task = self.fresh()
+        self.assertEqual((task.status, task.custom_status_id), ("WIP", later.status_id))
+        self.assertEqual(body["restored"], ["title"])
+        self.assertEqual(body["skipped"], [{"field": "status", "reason": "changed_since"}])
 
 
 class UndoingRestoreTaskBody(UndoBase):

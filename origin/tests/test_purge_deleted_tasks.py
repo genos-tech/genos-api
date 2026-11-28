@@ -12,7 +12,6 @@ Files are real: a temporary MEDIA_ROOT, so "the file left storage" is checked, n
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 from datetime import timedelta
 from io import StringIO
@@ -41,6 +40,7 @@ from origin.models.task.task_models import (
 from origin.search_engine.models import AgentSession
 from origin.services import deleted_task_purge as svc
 from origin.services import unified_writer
+from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 
 BODY = [{"type": "paragraph", "content": [{"type": "text", "text": "secret words"}]}]
@@ -59,7 +59,7 @@ class PurgeBase(BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
-        shutil.rmtree(_MEDIA_ROOT, ignore_errors=True)
+        remove_media_root(_MEDIA_ROOT)
 
     def setUp(self):
         super().setUp()
