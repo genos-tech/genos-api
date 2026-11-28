@@ -27,6 +27,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMaster, ProjectStatus
+from origin.models.task.automation_models import AutomationRule
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 
@@ -246,10 +247,7 @@ def create_status(project, *, name, category, color=None, is_default=False, acto
             raise StatusError(
                 f"A project can have at most {MAX_STATUSES} statuses.", code="too_many"
             )
-        # After the last status of its category, so the list stays grouped.
-        same = [i for i, r in enumerate(rows) if r.category == category]
-        before = [i for i, r in enumerate(rows) if _rank(r.category) < _rank(category)]
-        position = (same or before or [-1])[-1] + 1
+        position = _position_for(rows, category)
         row = ProjectStatus(
             team_id=project.team_id,
             project=project,
@@ -269,13 +267,16 @@ def create_status(project, *, name, category, color=None, is_default=False, acto
 
 
 def update_status(project, status_id, changes: dict) -> ProjectStatus:
-    """`changes` may hold `name`, `color`, `is_default` and `archived`. The category of a
-    status is fixed: the tasks that hold it were given that category's `status`."""
+    """`changes` may hold `name`, `color`, `is_default`, `archived` and `category`. The category
+    changes only for a status the team added that nothing holds yet (`_change_category`): the
+    tasks that hold one were given its category as their `status`."""
+    moved_category = False
     with transaction.atomic():
         _lock_project(project)
         row = get_status(project, status_id)
         if "category" in changes and changes["category"] != row.category:
-            raise StatusError("The category of a status cannot be changed.", code="category_fixed")
+            _change_category(project, row, changes["category"])
+            moved_category = True
         if "name" in changes:
             name = _clean_name(changes["name"], builtin_key=row.builtin_key)
             _name_taken(project, name, excluding=row.status_id)
@@ -313,7 +314,80 @@ def update_status(project, status_id, changes: dict) -> ProjectStatus:
         if lost_default:
             _restore_builtin_default(project, row.category)
             row.refresh_from_db()
-        return row
+    if moved_category:
+        from origin.services.task_cache import invalidate_project_tasks_cache
+
+        invalidate_project_tasks_cache(project.team_id, project.project_id)
+    return row
+
+
+def _held_count(row: ProjectStatus) -> int:
+    """How many tasks and milestones read as this status. Only a row that really reads as it is
+    "held": a stale pointer left by a write that skipped `save()` does not count. A milestone
+    and its backing task are one thing to a person."""
+    held = Q(custom_status=row, status=row.category)
+    return (
+        TaskMaster.objects.filter(held, is_deleted=False).count()
+        + MilestoneMaster.objects.filter(held, is_deleted=False)
+        .exclude(task__custom_status=row)
+        .count()
+    )
+
+
+def _named_by_a_rule(row: ProjectStatus) -> bool:
+    """Whether an automation rule reads or writes this status (any project's rule may move a
+    task into it)."""
+    if AutomationRule.objects.filter(set_custom_status=row).exists():
+        return True
+    own = AutomationRule.objects.filter(project_id=row.project_id)
+    if own.filter(trigger_value__custom_status_id=row.status_id).exists():
+        return True
+    return own.filter(
+        conditions__contains=[{"field": "custom_status", "value": row.status_id}]
+    ).exists()
+
+
+def _change_category(project, row: ProjectStatus, category) -> None:
+    """Move a status to another category, saving it. Refused while anything depends on the one
+    it has: a built-in, a status that tasks or milestones hold, or one a rule names."""
+    if row.builtin_key is not None:
+        raise StatusError("The category of a built-in status is fixed.", code="category_fixed")
+    if category not in CATEGORIES:
+        raise StatusError(
+            "category must be one of: " + ", ".join(CATEGORIES) + ".", code="bad_category"
+        )
+    in_use = _held_count(row)
+    if in_use:
+        raise StatusError(
+            "This status is in use. Move its tasks to another status first.",
+            code="status_in_use",
+            inUse=in_use,
+        )
+    if _named_by_a_rule(row):
+        raise StatusError("An automation rule uses this status.", code="status_in_rules")
+    # Stale and deleted rows still point here: they must not start reading as it again.
+    TaskMaster.objects.filter(custom_status=row).update(custom_status=None)
+    MilestoneMaster.objects.filter(custom_status=row).update(custom_status=None)
+    was_default, previous = row.is_default, row.category
+    rows = [r for r in list_statuses(project) if r.status_id != row.status_id]
+    row.category = category
+    row.is_default = False
+    # After the last status of its new category, as an added one is.
+    position = _position_for(rows, category)
+    row.sort_order = position
+    row.save(update_fields=["category", "is_default", "sort_order", "ts_updated_at"])
+    rows.insert(position, row)
+    _renumber(rows)
+    if was_default:
+        _restore_builtin_default(project, previous)
+
+
+def _position_for(rows: list[ProjectStatus], category: str) -> int:
+    """Where a status of `category` goes: after the last of its category, so the list stays
+    grouped."""
+    same = [i for i, r in enumerate(rows) if r.category == category]
+    before = [i for i, r in enumerate(rows) if _rank(r.category) < _rank(category)]
+    return (same or before or [-1])[-1] + 1
 
 
 def reorder_statuses(project, order) -> None:
@@ -363,11 +437,7 @@ def delete_status(project, status_id, *, replacement_id=None) -> int:
         held = Q(custom_status=row, status=row.category)
         tasks = TaskMaster.objects.filter(held)
         milestones = MilestoneMaster.objects.filter(held)
-        # A milestone and its backing task are one thing to a person.
-        in_use = (
-            tasks.filter(is_deleted=False).count()
-            + milestones.filter(is_deleted=False).exclude(task__custom_status=row).count()
-        )
+        in_use = _held_count(row)
         if replacement_id in (None, ""):
             if in_use:
                 raise StatusError(

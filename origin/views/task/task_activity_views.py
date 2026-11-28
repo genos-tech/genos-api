@@ -305,8 +305,10 @@ class MilestoneBurndownView(AuthenticatedAPIView):
         # Walkable-id batch, same shape as TaskDependencyBatchListView
         # (closed in #255). Narrow to the ids the caller can actually
         # reach rather than refusing the whole call, so a chart
-        # containing one stray id still renders the rest.
-        task_ids = [t for t in task_ids if can_access_task(t, request.user.id)]
+        # containing one stray id still renders the rest. All the ids at
+        # once, as the velocity view below does (MIP-2552, MIP-2584).
+        readable = {task for _, task in task_reader_pairs([request.user.id], task_ids)}
+        task_ids = [t for t in task_ids if t in readable]
 
         tasks = list(
             TaskMaster.objects.filter(task_id__in=task_ids).values_list("task_id", "status")
