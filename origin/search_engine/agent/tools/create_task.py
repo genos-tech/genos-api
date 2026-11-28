@@ -474,7 +474,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # post-save write (collaborators, root, mentions) has landed.
     if ctx.capture_undo and (image := created_task_capture(task)):
         result[UNDO_KEY] = image
-    return result
+    return custom_status.lead_with_notice(result, choice)
 
 
 #: What `AGENT_PARITY_TOOLS` adds to this tool's schema (`tool_flag_params`); the tool takes

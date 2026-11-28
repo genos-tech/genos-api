@@ -75,7 +75,8 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # MIP-2485: the arm `t2485` puts `list_my_waiting_comments` into the union: 143,890 with a Long member's block, so 144,500.
 # MIP-2494: the value "Rejected" (unflagged) and the arm `t2494` (`AGENT_CUSTOM_STATUS`: `custom_status` on five writes,
 # three description sentences): 145,846 with a Long member's block, so 146,000. Not measured by a paid eval.
-ALL_ON_BUDGET_CHARS = 146_000
+# MIP-2546 (the sentence in `test_agent_prefix_budget`): 146,243 with a Long member's block, so 146,500.
+ALL_ON_BUDGET_CHARS = 146_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped
