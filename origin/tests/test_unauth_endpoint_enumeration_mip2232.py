@@ -18,6 +18,7 @@ from django.test import override_settings
 from django.urls import reverse
 
 from origin.services import email as email_service
+from origin.services import throttles
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.common import auth_views, oauth_views
 
@@ -186,6 +187,13 @@ class TestTheEmailDoesNotHoldTheResponse(_Base):
 
 
 class TestThrottlesOnTheOpenViews(_Base):
+    def setUp(self):
+        super().setUp()
+        # TokenRefreshThrottle fails open: a cache error in an earlier test leaves a 5 s breaker
+        # during which it allows everything (MIP-2534). The window itself slides, so the clock
+        # needs no pinning.
+        throttles._down_until = 0.0
+
     def _codes(self, scope_cls, call, n=2):
         with mock.patch.object(scope_cls, "rate", "1/min"):
             return [call().status_code for _ in range(n)]
