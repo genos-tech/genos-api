@@ -576,6 +576,9 @@ class TaskUpdateCapture:
         self.task = task
         self.blocker = update_task_blocker(args, is_milestone=bool(task.is_milestone))
         self.before: dict[str, Any] = {}
+        # The project's own label under `status` (MIP-2519): a status change clears it, so
+        # putting `status` back alone would not put it back.
+        self.before_custom_status = task.custom_status_id
         self.body: BodyCapture | None = None
         if self.blocker:
             return
@@ -592,7 +595,16 @@ class TaskUpdateCapture:
             body = self.body.finish() if self.body is not None else None
             if body is None:
                 return None
-        if not columns and body is None:
+        custom_status = None
+        if "status" in update_fields or "custom_status" in update_fields:
+            after = (
+                TaskMaster.objects.filter(task_id=self.task.task_id)
+                .values_list("custom_status_id", flat=True)
+                .first()
+            )
+            if after != self.before_custom_status:
+                custom_status = {"before": self.before_custom_status, "after": after}
+        if not columns and body is None and custom_status is None:
             return None
         row = (
             TaskMaster.objects.filter(task_id=self.task.task_id).values(*columns).first()
@@ -603,10 +615,10 @@ class TaskUpdateCapture:
             column: {"before": self.before[column], "after": jsonable(row.get(column))}
             for column in columns
         }
-        return {
-            "entity": task_entity(self.task),
-            "image": {"task_id": int(self.task.task_id), "fields": fields, "body": body},
-        }
+        image = {"task_id": int(self.task.task_id), "fields": fields, "body": body}
+        if custom_status is not None:
+            image["custom_status"] = custom_status
+        return {"entity": task_entity(self.task), "image": image}
 
 
 def task_fingerprint(task_id: int) -> dict[str, Any] | None:
