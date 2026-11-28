@@ -45,6 +45,7 @@ from origin.models.chat.unified_models import (
     MessageAttachment,
     MessageMention,
     MessageReaction,
+    main_timeline_q,
 )
 from origin.search_engine.quota import get_message_retention_days
 from origin.serializers.chat.unified_serializers import (
@@ -220,6 +221,7 @@ def _allocate_seq_and_create_message_with_activities(
     correlation_id=None,
     self_assign=True,
     via=None,
+    also_in_channel=False,
 ):
     """Wraps `_allocate_seq_and_create_message` and additionally fans out
     `Activity` rows for the recipients who should see a sidebar entry.
@@ -247,6 +249,7 @@ def _allocate_seq_and_create_message_with_activities(
         correlation_id=correlation_id,
         return_parent=True,
         via=via,
+        also_in_channel=also_in_channel,
     )
     # Idempotent re-send (reconnect flush after a lost ack): the row
     # already existed, so DON'T re-create activities. Doing so would
@@ -307,14 +310,22 @@ def _allocate_seq_and_create_message_with_activities(
     # Plain-message fan-out: every TOP-LEVEL message web-pushes the other
     # channel members (presence + per-chat mute gated). Thread replies are
     # excluded (their participants are covered by the thread-reply activity
-    # above). Members who already got a more-specific activity (a mention)
-    # for THIS message are excluded so they aren't double-notified.
-    if parent is None:
+    # above), except one also sent to the chat (MIP-2486), which tells the
+    # members OUTSIDE the thread. Members who already got a more-specific
+    # activity (a mention) for THIS message are excluded so they aren't
+    # double-notified.
+    if parent is None or msg.also_in_channel:
         # Unions the mention TARGETS for the same reason `mentioned_recipient_ids`
         # is built from them: a mention silenced because the recipient is reading
         # the chat must not resurface as a plain-message notification, which is
         # also a different push category and so a different mute setting.
         already_notified = {str(a.recipient_id) for a in activities} | mentioned_recipient_ids
+        if parent is not None:
+            # Keyed on who is IN the thread, not on the rows made: a participant reading the
+            # thread gets no thread-reply row, and must not get a plain-message one instead.
+            already_notified |= v3_activity.thread_participant_ids(
+                reply=msg, parent=parent, actor=sender
+            )
         member_ids = (
             chat_member_rows(channel).exclude(user_id=sender.id).values_list("user_id", flat=True)
         )
@@ -379,6 +390,7 @@ def _allocate_seq_and_create_message(
     correlation_id=None,
     return_parent=False,
     via=None,
+    also_in_channel=False,
 ):
     """Atomically allocate the next per-channel seq and create the row.
 
@@ -480,6 +492,7 @@ def _allocate_seq_and_create_message(
             parent=parent,
             thread_root_id=thread_root_id,
             is_thread_reply=is_thread_reply,
+            also_in_channel=also_in_channel and is_thread_reply,
             task=task_obj,
             metadata=metadata or {},
             correlation_id=correlation_id,
@@ -610,7 +623,8 @@ class MessagesDeltaView(AuthenticatedAPIView):
         server_time = capture_server_time()
         since, force_full = check_since(request)
 
-        qs = Message.objects.filter(channel=channel, is_thread_reply=False)
+        # Top-level messages, plus the replies also sent to the chat (MIP-2486).
+        qs = Message.objects.filter(main_timeline_q(), channel=channel)
         qs = _apply_message_since_filter(qs, since)
 
         # Indirect change: messages whose reactions changed since checkpoint
@@ -620,8 +634,8 @@ class MessagesDeltaView(AuthenticatedAPIView):
         if since is not None and not force_full:
             recent_reaction_msg_ids = set(
                 MessageReaction.objects.filter(
+                    main_timeline_q("message__"),
                     message__channel=channel,
-                    message__is_thread_reply=False,
                     ts_updated_at__gt=since,
                 ).values_list("message_id", flat=True)
             )
@@ -630,8 +644,8 @@ class MessagesDeltaView(AuthenticatedAPIView):
                 missing_ids = recent_reaction_msg_ids - already_included
                 if missing_ids:
                     extra = Message.objects.filter(
+                        main_timeline_q(),
                         channel=channel,
-                        is_thread_reply=False,
                         id__in=missing_ids,
                     )
                     qs = qs | extra
@@ -675,6 +689,7 @@ class MessagesDeltaView(AuthenticatedAPIView):
               "body": [...],             # JSON block array (required)
               "body_text": "<str>",      # first-line preview (optional, derived if missing)
               "parent_id": "<uuid>",     # thread reply target (optional)
+              "also_in_channel": true,   # with parent_id: also show it in the main chat
               "metadata": {...}          # PM: taskId/displayId/etc. (optional)
             }
 
@@ -705,6 +720,19 @@ class MessagesDeltaView(AuthenticatedAPIView):
         # the client's socket `correlation_id`. Lets a reconnect re-send
         # collapse to the existing row instead of duplicating.
         correlation_id = body.get("correlation_id") or None
+        # "Also send to <chat>" (MIP-2486). Only `true` counts. Refused before anything is
+        # written, so the client's composer gets its text back.
+        also_in_channel = body.get("also_in_channel") is True
+        if also_in_channel and not parent_id:
+            return Response(
+                {"error": "also_in_channel requires parent_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if also_in_channel and channel.kind == ChannelKind.PM:
+            return Response(
+                {"error": "A project chat has no 'also send to chat'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         msg, activities = _allocate_seq_and_create_message_with_activities(
             channel=channel,
@@ -714,6 +742,7 @@ class MessagesDeltaView(AuthenticatedAPIView):
             parent_id=parent_id,
             metadata=metadata,
             correlation_id=correlation_id,
+            also_in_channel=also_in_channel,
         )
 
         # Refresh with prefetches so the response matches what the

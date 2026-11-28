@@ -37,6 +37,7 @@ from origin.models.chat.unified_models import (
     MessageAttachment,
     MessageReaction,
     ReadCursor,
+    main_timeline_q,
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster
@@ -274,7 +275,7 @@ def _get_channel_for_roster_admin(channel_id, user):
 
 def _annotate_unread(qs, user):
     """Attach `_unread_count` to each channel in qs: the EXACT count of
-    top-level, non-deleted messages whose seq is beyond the user's
+    main-timeline (`main_timeline_q`), non-deleted messages whose seq is beyond the user's
     main-timeline read cursor. A single correlated COUNT subquery (NOT
     N+1). `seq` is allocated per channel across thread replies AND
     soft-deleted rows, so a `latest_seq - read_seq` difference would
@@ -291,8 +292,8 @@ def _annotate_unread(qs, user):
 
     unread_count = (
         Message.objects.filter(
+            main_timeline_q(),
             channel=OuterRef("pk"),
-            is_thread_reply=False,
             deleted_at__isnull=True,
             seq__gt=Coalesce(Subquery(read_cursor_seq), 0),
         )
@@ -305,7 +306,7 @@ def _annotate_unread(qs, user):
 
 
 def _annotate_latest_and_unread(qs, user):
-    """`_annotate_unread` + `_latest_seq` (the highest top-level
+    """`_annotate_unread` + `_latest_seq` (the highest main-timeline
     non-deleted seq per channel, used to resolve `latestMessage`).
 
     Only ChannelDetailView needs `_latest_seq`. The LIST view resolves
@@ -315,8 +316,8 @@ def _annotate_latest_and_unread(qs, user):
     """
     latest_seq = (
         Message.objects.filter(
+            main_timeline_q(),
             channel=OuterRef("pk"),
-            is_thread_reply=False,
             deleted_at__isnull=True,
         )
         .order_by("-seq")
@@ -451,20 +452,20 @@ class ChannelListView(AuthenticatedAPIView):
                 empty.update({"has_more": False, "next_cursor": None})
             return Response(empty)
 
-        # Latest non-thread, non-deleted message per channel in ONE query.
+        # Latest main-timeline, non-deleted message per channel in ONE query.
         # Postgres DISTINCT ON (channel_id) ordered by (channel_id, -seq)
         # keeps the highest-seq row per channel — replacing the previous
         # N-term `Q(channel_id=, seq=) | …` OR chain (one OR branch per
         # channel, which degraded linearly with channel count). The
         # (channel, seq) unique constraint guarantees exactly one row per
         # channel (no tie ambiguity), and the filters mirror `_latest_seq`
-        # exactly (top-level, non-deleted) so the resolved message is
+        # exactly (main timeline, non-deleted) so the resolved message is
         # identical to what the OR chain returned.
         ids = [c.id for c in channels]
         latest_messages = MessageSerializer.annotate_task_comment_count(
             Message.objects.filter(
+                main_timeline_q(),
                 channel_id__in=ids,
-                is_thread_reply=False,
                 deleted_at__isnull=True,
             )
             .order_by("channel_id", "-seq")

@@ -125,6 +125,7 @@ class MessageSerializer(serializers.ModelSerializer):
           "parentId": "<uuid>" | null,
           "threadRootId": "<uuid>" | null,
           "isThreadReply": <bool>,
+          "alsoInChannel": <bool>,    // a reply also shown in the main chat
           "replyCount": <int>,
           "reactions": [<MessageReaction>, ...],
           "mentions": [<MessageMention>, ...],
@@ -151,6 +152,7 @@ class MessageSerializer(serializers.ModelSerializer):
     parentId = serializers.UUIDField(source="parent_id", read_only=True, allow_null=True)
     threadRootId = serializers.UUIDField(source="thread_root_id", read_only=True, allow_null=True)
     isThreadReply = serializers.BooleanField(source="is_thread_reply", read_only=True)
+    alsoInChannel = serializers.BooleanField(source="also_in_channel", read_only=True)
     replyCount = serializers.IntegerField(source="reply_count", read_only=True)
     reactions = MessageReactionSerializer(many=True, read_only=True)
     mentions = MessageMentionSerializer(many=True, read_only=True)
@@ -197,6 +199,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "parentId",
             "threadRootId",
             "isThreadReply",
+            "alsoInChannel",
             "replyCount",
             "reactions",
             "mentions",

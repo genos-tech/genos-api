@@ -705,6 +705,35 @@ def create_task_assign_activity(
     return [row]
 
 
+def thread_participant_ids(*, reply: Message, parent: Message, actor: CustomUser) -> set[str]:
+    """Who a reply is "for": the people `create_thread_reply_activity` tells, before anyone is
+    left out for being mentioned or for reading the thread. Also used by the send path to keep
+    them out of the plain-message notification of a reply also sent to the chat (MIP-2486)."""
+    root_id = reply.thread_root_id or parent.id
+    actor_id = str(actor.id)
+    channel = reply.channel
+    # DM / MDM: notify every non-actor channel member, regardless of whether
+    # they have sent a message in the thread yet.  The participant-tracking
+    # approach (sender-based lookup below) silently produces an empty set when
+    # the actor is also the only prior sender — e.g. User A sends a DM, then
+    # User A replies to their own message before User B has written anything.
+    # In a two-person DM that means nobody is notified.  Using the member list
+    # directly is both correct (the other party must always be told) and cheap
+    # (DM/MDM channels are small).
+    if channel.kind in (ChannelKind.DM, ChannelKind.MDM):
+        member_ids = (
+            chat_member_rows(channel).exclude(user_id=actor_id).values_list("user_id", flat=True)
+        )
+        return {str(uid) for uid in member_ids}
+    participant_ids = (
+        Message.objects.filter(Q(id=root_id) | Q(thread_root_id=root_id))
+        .exclude(sender_id=None)
+        .values_list("sender_id", flat=True)
+        .distinct()
+    )
+    return {str(s) for s in participant_ids if str(s) != actor_id}
+
+
 def create_thread_reply_activity(
     *,
     reply: Message,
@@ -738,34 +767,10 @@ def create_thread_reply_activity(
     # The reply is already persisted with `thread_root` set; fall back to
     # the parent id for a direct reply to a top-level message.
     root_id = reply.thread_root_id or parent.id
-    actor_id = str(actor.id)
     excluded = {str(u) for u in exclude_recipient_ids if u}
     channel = reply.channel
 
-    # DM / MDM: notify every non-actor channel member, regardless of whether
-    # they have sent a message in the thread yet.  The participant-tracking
-    # approach (sender-based lookup below) silently produces an empty set when
-    # the actor is also the only prior sender — e.g. User A sends a DM, then
-    # User A replies to their own message before User B has written anything.
-    # In a two-person DM that means nobody is notified.  Using the member list
-    # directly is both correct (the other party must always be told) and cheap
-    # (DM/MDM channels are small).
-    if channel.kind in (ChannelKind.DM, ChannelKind.MDM):
-        member_ids = (
-            chat_member_rows(channel).exclude(user_id=actor_id).values_list("user_id", flat=True)
-        )
-        recipients = {str(uid) for uid in member_ids if str(uid) not in excluded}
-    else:
-        participant_ids = (
-            Message.objects.filter(Q(id=root_id) | Q(thread_root_id=root_id))
-            .exclude(sender_id=None)
-            .values_list("sender_id", flat=True)
-            .distinct()
-        )
-        recipients = {
-            str(s) for s in participant_ids if str(s) != actor_id and str(s) not in excluded
-        }
-
+    recipients = thread_participant_ids(reply=reply, parent=parent, actor=actor) - excluded
     recipients = set(_drop_deleted_accounts(recipients))
     if not recipients:
         logger.info("[v3_activity] thread_reply skipped: no other participants")
