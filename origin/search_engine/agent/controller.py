@@ -1432,6 +1432,51 @@ def _friendly_arguments(
     return out
 
 
+def approval_card(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    step: int,
+    approval_token: uuid.UUID,
+    run_id: uuid.UUID | None,
+    ctx: ToolContext,
+) -> dict[str, Any]:
+    """The Approve / Reject card of a write the run paused on: what the
+    `tool_call_pending_approval` event carries, and what the history sends again for a
+    run nobody has answered (MIP-2604). One builder, so the two cannot differ.
+
+    `run_id` is included so the frontend has everything it needs to POST `/decide/`.
+    When it is None (eval / test paths) the field is omitted rather than serialized
+    as a `null` that the wire schema doesn't expect.
+    """
+    # Edit before approve: the paths of `arguments` the card may render as editable,
+    # and the only ones `/decide/` accepts in `edited_args`. `[]` when nothing in this
+    # call is. At those paths `arguments` carries the value as the tool will receive it
+    # (a fence the model copied taken off): the editor starts from it.
+    editable = approval_edits.editable_paths(tool_name, arguments)
+    card: dict[str, Any] = {
+        "step": step,
+        "tool_name": tool_name,
+        "arguments": approval_edits.for_card(
+            _friendly_arguments(arguments, tool_name, ctx=ctx, card=True),
+            arguments,
+            editable,
+        ),
+        "editable": editable,
+        "approval_token": str(approval_token),
+    }
+    if run_id is not None:
+        card["run_id"] = str(run_id)
+    # Whether this call could be undone once approved, so the card says "can't be
+    # undone" BEFORE the person approves. A prediction from the arguments
+    # (`undo.proposal`); the result event's `undo` is what says it was.
+    undoable = undo.proposal(tool_name, arguments)
+    card["undoable"] = undoable.undoable
+    if not undoable.undoable:
+        card["undo_reason"] = undoable.reason
+    return card
+
+
 def _coerce_signature(raw: Any) -> bytes | None:
     """Normalise a persisted thought_signature back to `bytes | None`.
 
@@ -4271,39 +4316,19 @@ def _drive_loop(
                     thought_signature=call.thought_signature,
                     summary=PENDING_APPROVAL_MARKER,
                 )
-                # `run_id` is included so the frontend has everything it
-                # needs to POST `/decide/`. When `run_id` is None (eval
-                # / test paths) we omit the field rather than serialize
-                # a `null` that the wire schema doesn't expect.
-                # Edit before approve: the paths of `arguments` the card may
-                # render as editable, and the only ones `/decide/` accepts in
-                # `edited_args`. `[]` when nothing in this call is. At those paths
-                # `arguments` carries the value as the tool will receive it (a
-                # fence the model copied taken off): the editor starts from it.
-                editable = approval_edits.editable_paths(call_name, call_args)
-                event: dict[str, Any] = {
-                    "type": "tool_call_pending_approval",
-                    "step": step,
-                    "tool_name": call_name,
-                    "arguments": approval_edits.for_card(
-                        _friendly_arguments(call_args, call_name, ctx=ctx, card=True),
-                        call_args,
-                        editable,
-                    ),
-                    "editable": editable,
-                    "approval_token": str(approval_token),
-                }
-                if run_id is not None:
-                    event["run_id"] = str(run_id)
-                # Whether this call could be undone once approved, so the card
-                # says "can't be undone" BEFORE the person approves. A prediction
-                # from the arguments (`undo.proposal`); the result event's `undo`
-                # is what says it was.
-                undoable = undo.proposal(call_name, call_args)
-                event["undoable"] = undoable.undoable
-                if not undoable.undoable:
-                    event["undo_reason"] = undoable.reason
-                emit(event)
+                emit(
+                    {
+                        "type": "tool_call_pending_approval",
+                        **approval_card(
+                            call_name,
+                            call_args,
+                            step=step,
+                            approval_token=approval_token,
+                            run_id=run_id,
+                            ctx=ctx,
+                        ),
+                    }
+                )
                 return {
                     "paused": True,
                     "approval_token": approval_token,
