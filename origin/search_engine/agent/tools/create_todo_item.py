@@ -40,7 +40,7 @@ from origin.search_engine.agent.tools.todo_source import (
     source_block,
     source_from,
 )
-from origin.services import todo_reminders
+from origin.services import todo_items, todo_reminders
 from origin.services.user_time import today_for_user_id, zone_for_user_id
 
 
@@ -81,12 +81,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         notes = [source_block(source), *(notes or [])]
 
     with transaction.atomic():
-        group, _ = ToDoGroup.objects.get_or_create(
-            team_id=ctx.team_id,
-            user_id=ctx.user_id,
-            local_date=target_date,
-            defaults={"is_completed": False},
-        )
+        group = todo_items.get_or_create_group(ctx.team_id, ctx.user_id, target_date)
         category = None
         if category_name:
             category, _ = ToDoCategory.objects.get_or_create(

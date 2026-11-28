@@ -156,6 +156,7 @@ REGISTRY = {
     # views.chat.message_views
     "origin.views.chat.message_views.MessageAttachmentsView": checked("ChannelMember"),
     "origin.views.chat.message_views.MessageDetailView": checked("_fetch_for_user"),
+    "origin.views.chat.message_views.OlderMessagesView": checked("_verify_member_or_404"),
     "origin.views.chat.message_views.MessagesDeltaView": checked("_verify_member_or_404"),
     "origin.views.chat.message_views.TaskCardMessageView": checked("ChannelMember"),
     "origin.views.chat.message_views.ThreadMessagesDeltaView": checked("_verify_member_or_404"),
@@ -165,6 +166,11 @@ REGISTRY = {
     ),
     "origin.views.chat.personal_tag_views.PersonalTagDetailView": checked("_get_owned"),
     "origin.views.chat.personal_tag_views.PersonalTagListView": self_only("the caller's own tags"),
+    # views.chat.message_pin_views
+    "origin.views.chat.message_pin_views.ChannelMessagePinListView": checked(
+        "_verify_member_or_404"
+    ),
+    "origin.views.chat.message_pin_views.MessagePinView": checked("_verify_message_member"),
     # views.chat.pin_flag_views
     "origin.views.chat.pin_flag_views.FlagListView": self_only("the caller's own flags"),
     "origin.views.chat.pin_flag_views.FlagView": checked("_verify_message_member"),
