@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.services import description_edit_runs
+from origin.services.activity_minimal_card import task_reader_pairs
 from origin.services.history_labels import HistoryLabels
 from origin.services.share_roles import view_only_task_response
 from origin.services.task_body_restore import RestoreRefused, restore_task_body
@@ -473,8 +474,12 @@ class TaskVelocityView(AuthenticatedAPIView):
         # Walkable-id batch, same shape as TaskDependencyBatchListView
         # (closed in #255). Narrow to the ids the caller can actually
         # reach rather than refusing the whole call, so a chart
-        # containing one stray id still renders the rest.
-        task_ids = [t for t in task_ids if can_access_task(t, request.user.id)]
+        # containing one stray id still renders the rest. Asked for all the
+        # ids at once: `task_reader_pairs` is `can_access_task`'s rule in batch
+        # form, a fixed number of queries. Asking per id cost 2-3 queries each,
+        # over 1,500 for a full chunk of 500 (MIP-2552).
+        readable = {task for _, task in task_reader_pairs([request.user.id], task_ids)}
+        task_ids = [t for t in task_ids if t in readable]
 
         rows = (
             TaskActivity.objects.filter(task_id__in=task_ids)
