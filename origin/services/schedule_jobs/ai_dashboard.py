@@ -56,6 +56,7 @@ from origin.services.schedule_jobs.report_kit import (
     clip,
     item,
 )
+from origin.services.task_status_values import UNCOUNTED_STATUSES
 from origin.services.user_time import zone_for_user_id
 
 
@@ -215,8 +216,9 @@ def _stand(summary: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str
     breakdown = [
         {"label": s, "count": n}
         for s, n in (summary.get("status_breakdown") or {}).items()
-        # Rejected is not in the total, and the page has no segment for it (MIP-2494).
-        if n and s != "Rejected"
+        # Rejected and Deleted are not in the total, and the page has no segment for them
+        # (MIP-2494, MIP-2527).
+        if n and s not in UNCOUNTED_STATUSES
     ]
     total = summary.get("total_tasks") or 0
     closed = (summary.get("status_breakdown") or {}).get("Closed", 0)
