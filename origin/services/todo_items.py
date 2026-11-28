@@ -14,6 +14,8 @@ inconsistent rather than merely wrong:
   created on demand. Its sub-items go with it — a child lives in its
   parent's group by construction — and both days' "completed" flags are
   recomputed, because the day a to-do left may now be all done.
+* **A day with nothing on it does not stay** (`delete_day_if_empty`, MIP-2574): the app shows a
+  day that exists, so the day a delete or a move empties is deleted. The owner's today is kept.
 * **A sub-item's category is its parent's** (`check_can_set_category`,
   `cascade_category`): it can't be set on a child, and setting it on a parent
   carries it to every child.
@@ -44,6 +46,7 @@ from origin.models.common.member_event_models import (
 )
 from origin.search_engine.purge import purge_todo_item
 from origin.services import member_events, todo_reminders
+from origin.services.user_time import today_for_user_id
 
 SUBITEM_MOVE_REFUSAL = "Subitems move with their parent — move the parent instead."
 SUBITEM_CATEGORY_REFUSAL = "Children inherit the parent's tag — set it on the parent."
@@ -54,14 +57,20 @@ class TodoItemError(ValueError):
 
 
 def get_or_create_group(team_id, user_id, local_date) -> ToDoGroup:
-    """The user's group for `local_date`, created on first use. Nothing
-    creates a day but this (item creation, and moving an item into one)."""
-    group, _ = ToDoGroup.objects.get_or_create(
-        team_id=team_id,
-        user_id=user_id,
-        local_date=local_date,
-        defaults={"is_completed": False},
-    )
+    """The user's group for `local_date`, created on first use. Item creation and
+    moving an item into a day go through here.
+
+    An existing day is locked for the rest of the caller's transaction, so that
+    `delete_day_if_empty` cannot delete it between this read and the commit of
+    the item about to be put in it: it waits, then sees the item. Call this and
+    write the item inside one `transaction.atomic()`."""
+    with transaction.atomic():
+        group, _ = ToDoGroup.objects.select_for_update().get_or_create(
+            team_id=team_id,
+            user_id=user_id,
+            local_date=local_date,
+            defaults={"is_completed": False},
+        )
     return group
 
 
@@ -70,6 +79,24 @@ def recompute_group_completion(group_id) -> None:
     anything that adds, removes, moves or ticks an item has to refresh it."""
     has_open = ToDoItem.objects.filter(group_id=group_id, is_completed=False).exists()
     ToDoGroup.objects.filter(group_id=group_id).update(is_completed=not has_open)
+
+
+def delete_day_if_empty(group_id) -> bool:
+    """Delete the day `group_id` when no to-do is left on it. True if it did.
+
+    The owner's today is kept (their own time zone, `user_time`): the app is
+    most likely showing it, and an emptied today stayed before this rule too.
+    Every other day, past or future, goes.
+    """
+    with transaction.atomic():
+        # Locked before the items are counted: see `get_or_create_group`.
+        group = ToDoGroup.objects.select_for_update().filter(group_id=group_id).first()
+        if group is None or group.local_date == today_for_user_id(group.user_id):
+            return False
+        if ToDoItem.objects.filter(group_id=group_id).exists():
+            return False
+        group.delete()
+    return True
 
 
 def check_can_move(item) -> None:
@@ -154,7 +181,8 @@ class ItemSave:
 
 def save_item(item, *, move_to=None) -> ItemSave:
     """Save `item`, re-homing it into the `move_to` day first when that is a
-    different day from the one it is on.
+    different day from the one it is on. A day the move empties is deleted
+    (`delete_day_if_empty`).
 
     The caller has already set the item's own fields and validated the move
     (`check_can_move`). Children follow the parent, keeping the whole to-do in
@@ -204,6 +232,7 @@ def save_item(item, *, move_to=None) -> ItemSave:
             # Emptying a group can flip its completion flag: a day whose only
             # open to-do just left is now a completed day.
             recompute_group_completion(old_group_id)
+            delete_day_if_empty(old_group_id)
         recompute_group_completion(item.group_id)
     return ItemSave(item_id=item.item_id, moved=moved, moved_child_ids=tuple(moved_child_ids))
 
@@ -214,7 +243,8 @@ def delete_item(item) -> None:
     Any pending reminder goes with it through the FK cascade —
     `ToDoItemReminder.item` is CASCADE, and a subitem's reminders cascade
     twice (parent → child → reminder). The day's completion flag is
-    recomputed: deleting the only open to-do completes the day.
+    recomputed: deleting the only open to-do completes the day. A day left
+    with nothing on it is deleted (`delete_day_if_empty`).
     """
     # Django clears the pk off the instance once it is deleted.
     item_id = item.item_id
@@ -224,6 +254,7 @@ def delete_item(item) -> None:
     with transaction.atomic():
         item.delete()
         recompute_group_completion(group_id)
+        delete_day_if_empty(group_id)
         member_events.record_activity(
             user_id=owner_id,
             team_id=team_id,

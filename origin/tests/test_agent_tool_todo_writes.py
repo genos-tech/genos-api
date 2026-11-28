@@ -151,9 +151,9 @@ class RescheduleTests(TodoToolBase):
         self.assertEqual(
             [c.args[0] for c in purged_by_ui.call_args_list], [by_ui.item_id, kid_ui.item_id]
         )
-        # Each source day was emptied, so each is now a completed day.
+        # Each source day was emptied, so each is gone (MIP-2574).
         for source in (self.day(-3), self.day(-2)):
-            self.assertTrue(self.group(source).is_completed, source)
+            self.assertFalse(ToDoGroup.objects.filter(user=self.user, local_date=source).exists())
         # Exactly one group was made for the target, by whichever came first.
         self.assertEqual(ToDoGroup.objects.filter(user=self.user, local_date=target).count(), 1)
 
@@ -573,9 +573,9 @@ class DeleteTests(TodoToolBase):
         self.assertEqual(res.status_code, expect)
 
     def test_a_delete_leaves_what_the_uis_delete_leaves(self):
-        """Row, sub-items and every reminder gone, the day recomputed, the
-        search chunk purged. The twin days each held one open to-do, so
-        deleting it completes the day."""
+        """Row, sub-items and every reminder gone, the search chunk purged. The
+        twin days each held one to-do, so deleting it deletes the day
+        (MIP-2574)."""
         by_tool, by_ui = self.todo("by tool", self.day(-2)), self.todo("by ui", self.day(-1))
         kids = [
             self.todo("kid", self.day(-2), parent=by_tool),
@@ -595,8 +595,11 @@ class DeleteTests(TodoToolBase):
             self.assertFalse(ToDoItemReminder.objects.filter(item_id__in=side).exists())
         self.assertEqual([c.args[0] for c in tool_purge.call_args_list], [ids["tool"][0]])
         self.assertEqual([c.args[0] for c in ui_purge.call_args_list], [ids["ui"][0]])
-        self.assertTrue(self.group(self.day(-2)).is_completed)
-        self.assertTrue(self.group(self.day(-1)).is_completed)
+        self.assertFalse(
+            ToDoGroup.objects.filter(
+                user=self.user, local_date__in=[self.day(-2), self.day(-1)]
+            ).exists()
+        )
         self.assertTrue(out["deleted"])
         self.assertEqual(out["deleted_sub_items"], 1)
 
