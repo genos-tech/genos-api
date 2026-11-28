@@ -27,9 +27,11 @@ a failure is logged and never costs the move.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
+from functools import partial
 
 from django.db import transaction
-from django.db.models import F, Max, Q
+from django.db.models import Case, F, Max, Q, Value, When
 from django.utils import timezone
 
 from origin.models.chat.unified_models import (
@@ -117,10 +119,26 @@ def _move(task_ids: set, project_id: int) -> None:
     ).values("attendee_id")
     next_seq = (Message.objects.filter(channel=destination).aggregate(m=Max("seq"))["m"] or 0) + 1
 
+    # What each task's cards do is worked out first, then written for all of them together, so
+    # the queries do not grow with the number of cards (MIP-2539).
+    existing: dict = {}
+    for message in Message.objects.filter(
+        channel=destination, task_id__in=list(by_task), is_thread_reply=False
+    ).order_by(F("deleted_at").asc(nulls_first=True), "seq"):
+        existing.setdefault(message.task_id, message)
+    replies: dict = {}
+    for reply in (
+        Message.objects.select_for_update()
+        .filter(thread_root_id__in=[c.pk for cards in by_task.values() for c in cards])
+        .order_by("seq")
+    ):
+        replies.setdefault(reply.thread_root_id, []).append(reply)
+
+    plan = _Plan(destination=destination, next_seq=next_seq)
     live_budget = LIVE_REPLY_LIMIT
     for task_id, cards in by_task.items():
-        next_seq, shown = _move_one(task_id, cards, destination, members, next_seq, live_budget)
-        live_budget -= shown
+        live_budget -= _move_one(task_id, cards, existing.get(task_id), replies, plan, live_budget)
+    _write(plan, members)
 
     from origin.search_engine.acl_dirty import mark_projects_dirty  # noqa: PLC0415
 
@@ -132,72 +150,127 @@ def _move(task_ids: set, project_id: int) -> None:
     )
 
 
-def _move_one(task_id, cards, destination, members, next_seq, live_budget) -> tuple[int, int]:
-    """One task's cards and threads into `destination`. Returns the next free `seq` there and how
-    many replies will be pushed live."""
-    target = (
-        Message.objects.filter(channel=destination, task_id=task_id, is_thread_reply=False)
-        .order_by(F("deleted_at").asc(nulls_first=True), "seq")
-        .first()
-    )
+@dataclass
+class _Plan:
+    """The writes of one move into `destination`, collected over its cards."""
+
+    destination: Channel
+    next_seq: int
+    #: Source channel -> the cards and replies leaving it.
+    leaving: dict = field(default_factory=dict)
+    #: The rows to update, as bare instances carrying the new values.
+    updates: list = field(default_factory=list)
+    #: The cards that become their task's card in the destination.
+    new_cards: list = field(default_factory=list)
+    #: `(card, target)` of each card whose replies join another card: the card is deleted.
+    merged: list = field(default_factory=list)
+    #: `(source, old root, new root)` of each thread.
+    threads: list = field(default_factory=list)
+    #: `(task id, card id, reply ids)` to show once committed.
+    announce: list = field(default_factory=list)
+
+
+def _move_one(task_id, cards, target, replies, plan, live_budget) -> int:
+    """One task's cards and threads into the destination, added to `plan`. Returns how many
+    replies will be pushed live."""
     # A live card first, so a deleted one never becomes the task's card.
     cards = sorted(cards, key=lambda c: c.deleted_at is not None)
-    gone: dict[Channel, list[Message]] = {}
     arrived: list = []
     for card in cards:
         source = card.channel
-        replies = list(
-            Message.objects.select_for_update().filter(thread_root_id=card.pk).order_by("seq")
-        )
+        thread = replies.get(card.pk, [])
         becomes_card = target is None
-        moving = ([card] if becomes_card else []) + replies
-        _step_back_read_cursors(source, [card, *replies])
-        thread_summary_cleanup.forget_thread(channel_id=source.pk, thread_id=card.pk)
-        # The surplus card of a merge leaves too: it is deleted below.
-        moved_messages.record_moved_away(source.pk, [card, *replies])
-        _purge_thread_chunks(source.pk, card.pk)
+        moving = ([card] if becomes_card else []) + thread
+        # The surplus card of a merge leaves too: it is deleted in `_write`.
+        plan.leaving.setdefault(source, []).extend([card, *thread])
 
         for message in moving:
-            fields = {"channel": destination, "seq": next_seq, "ts_updated_at": timezone.now()}
+            # A copy, so the instances above keep the old values the removal push reads.
+            row = Message(
+                pk=message.pk,
+                channel=plan.destination,
+                seq=plan.next_seq,
+                ts_updated_at=timezone.now(),
+                thread_root_id=message.thread_root_id,
+                parent_id=message.parent_id,
+            )
             if target is not None:
-                fields["thread_root_id"] = target.pk
+                row.thread_root_id = target.pk
                 if message.parent_id == card.pk:
-                    fields["parent_id"] = target.pk
-            Message.objects.filter(pk=message.pk).update(**fields)
+                    row.parent_id = target.pk
+            plan.updates.append(row)
             arrived.append(message.pk)
-            next_seq += 1
-        _carry_satellites([m.pk for m in moving], destination, members)
+            plan.next_seq += 1
 
         if becomes_card:
             target = card
-            threads = ReadCursor.objects.filter(thread_root_id=card.pk)
-            threads.exclude(user_id__in=members).delete()
-            threads.update(channel=destination)
+            plan.new_cards.append(card)
         else:
-            Message.objects.filter(pk=target.pk).update(
-                reply_count=F("reply_count") + card.reply_count, ts_updated_at=timezone.now()
-            )
-            thread_summary_cleanup.forget_thread(channel_id=destination.pk, thread_id=target.pk)
-        _move_thread_notes(source, card.pk, destination, target.pk)
-        # A task made from a message of this thread points at it (`thread_link`).
-        TaskMaster.objects.filter(chat_id=str(source.pk), thread_id=str(card.pk)).update(
-            chat_id=str(destination.pk), thread_id=str(target.pk), ts_updated_at=timezone.now()
-        )
-        gone.setdefault(source, []).extend([card, *replies])
-        if target.pk != card.pk:
-            # Not `card.delete()`: that clears the instance's id, which the removal push needs.
-            Message.objects.filter(pk=card.pk).delete()
-
-    for source, messages in gone.items():
-        for start in range(0, len(messages), REMOVAL_BATCH):
-            realtime_push.push_messages_deleted(source, messages[start : start + REMOVAL_BATCH])
+            plan.merged.append((card, target))
+        plan.threads.append((source, card.pk, target.pk))
     card_id = target.pk
     reply_ids = [pk for pk in arrived if pk != card_id]
     reply_ids = reply_ids[-live_budget:] if live_budget > 0 else []
+    plan.announce.append((task_id, card_id, reply_ids))
+    return len(reply_ids)
+
+
+def _write(plan, members) -> None:
+    destination = plan.destination
+    for source, messages in plan.leaving.items():
+        card_ids = [m.pk for m in messages if not m.is_thread_reply]
+        _step_back_read_cursors(source, messages)
+        thread_summary_cleanup.forget_threads(channel_id=source.pk, thread_ids=card_ids)
+        moved_messages.record_moved_away(source.pk, messages)
+        _purge_thread_chunks(source.pk, card_ids)
+
+    Message.objects.bulk_update(
+        plan.updates, ["channel", "seq", "ts_updated_at", "thread_root", "parent"]
+    )
+    _carry_satellites([m.pk for m in plan.updates], destination, members)
+
+    if plan.new_cards:
+        threads = ReadCursor.objects.filter(thread_root_id__in=[c.pk for c in plan.new_cards])
+        threads.exclude(user_id__in=members).delete()
+        threads.update(channel=destination)
+    for card, target in plan.merged:
+        Message.objects.filter(pk=target.pk).update(
+            reply_count=F("reply_count") + card.reply_count, ts_updated_at=timezone.now()
+        )
+    thread_summary_cleanup.forget_threads(
+        channel_id=destination.pk, thread_ids=[target.pk for _card, target in plan.merged]
+    )
+
+    noted = set(
+        ChatNoteMaster.objects.filter(
+            channel__in=list(plan.leaving),
+            thread_root_id__in=[old for _source, old, _new in plan.threads],
+        ).values_list("channel_id", "thread_root_id")
+    )
+    for source, old_root, new_root in plan.threads:
+        if (source.pk, old_root) in noted:
+            _move_thread_notes(source, old_root, destination, new_root)
+
+    # A task made from a message of one of these threads points at it (`thread_link`).
+    for source in plan.leaving:
+        roots = {str(old): str(new) for src, old, new in plan.threads if src == source}
+        TaskMaster.objects.filter(chat_id=str(source.pk), thread_id__in=list(roots)).update(
+            chat_id=str(destination.pk),
+            thread_id=Case(*[When(thread_id=old, then=Value(new)) for old, new in roots.items()]),
+            ts_updated_at=timezone.now(),
+        )
+
+    if plan.merged:
+        # Not `card.delete()`: that clears the instance's id, which the removal push needs.
+        Message.objects.filter(pk__in=[card.pk for card, _target in plan.merged]).delete()
+
+    for source, messages in plan.leaving.items():
+        for start in range(0, len(messages), REMOVAL_BATCH):
+            realtime_push.push_messages_deleted(source, messages[start : start + REMOVAL_BATCH])
     # After the removals above (callbacks run in order): someone in both chats sees the rows leave
     # the old one and appear in the new one, never the other way round.
-    transaction.on_commit(lambda: _announce(task_id, card_id, reply_ids), robust=True)
-    return next_seq, len(reply_ids)
+    for task_id, card_id, reply_ids in plan.announce:
+        transaction.on_commit(partial(_announce, task_id, card_id, reply_ids), robust=True)
 
 
 def _move_thread_notes(source, old_root, destination, new_root) -> None:
@@ -292,13 +365,15 @@ def _carry_satellites(message_ids, destination, members) -> None:
     ).delete()
 
 
-def _purge_thread_chunks(channel_id, root_id) -> None:
-    """The old chat's search entry for this thread: nothing re-emits it once the rows have left."""
+def _purge_thread_chunks(channel_id, root_ids) -> None:
+    """The old chat's search entries for these threads: nothing re-emits them once the rows have
+    left."""
     from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, chat_entity_id  # noqa: PLC0415
     from origin.search_engine.purge import purge_entities  # noqa: PLC0415
 
-    entity = chat_entity_id(CHAT_TYPE_LABEL[int(ChannelKind.PM)], str(channel_id), str(root_id))
-    transaction.on_commit(lambda: purge_entities([("chat", entity)]), robust=True)
+    label = CHAT_TYPE_LABEL[int(ChannelKind.PM)]
+    pairs = [("chat", chat_entity_id(label, str(channel_id), str(root))) for root in root_ids]
+    transaction.on_commit(lambda: purge_entities(pairs), robust=True)
 
 
 def _announce(task_id, card_id, reply_ids) -> None:

@@ -82,7 +82,7 @@ class ExternalGrantError(Exception):
     `code` is a stable string the API surfaces to the client:
     `not_connected` | `not_found` | `not_a_manager` | `not_pending` |
     `not_active` | `not_owned` | `bad_object` | `bad_role` |
-    `not_guest_member`.
+    `not_guest_member` | `mdm_member_limit`.
     """
 
     def __init__(self, code: str):
@@ -163,6 +163,16 @@ def object_display_name(object_type, object_id) -> str:
     except (DjangoValidationError, ValueError, TypeError):
         return ""
     return ""
+
+
+def _channel_has_room_or_raise(channel_id, user_id) -> None:
+    """A cross-team share cannot take a multi-person DM past its limit (MIP-2549)."""
+    from origin.models.chat.unified_models import Channel
+    from origin.services.mdm_members import MDM_LIMIT_CODE, has_room_for
+
+    channel = Channel.objects.filter(id=channel_id).first()
+    if channel is not None and not has_room_for(channel, [user_id]):
+        raise ExternalGrantError(MDM_LIMIT_CODE)
 
 
 def _channel_shareable_or_raise(channel_id) -> None:
@@ -376,15 +386,18 @@ def respond_to_grant(grant: ExternalGrant, actor, accept: bool) -> ExternalGrant
 
     _manager_or_raise(grant.guest_team_id, actor)
 
-    grant.status = ShareStatus.ACTIVE if accept else ShareStatus.DECLINED
-    grant.approved_by = actor
-    grant.save(update_fields=["status", "approved_by", "ts_updated_at"])
-    if accept:
-        # Straight to the writer: `add_external_participants` would re-ask
-        # the questions this function has already answered (manages the
-        # guest team, grant is live), and the answers cannot have changed
-        # inside the same call.
-        _write_participant(grant, actor.id, grant.role_ceiling)
+    # One transaction: a participant row that is refused (a full multi-person DM, MIP-2549)
+    # leaves the offer pending, not accepted with nobody in it.
+    with transaction.atomic():
+        grant.status = ShareStatus.ACTIVE if accept else ShareStatus.DECLINED
+        grant.approved_by = actor
+        grant.save(update_fields=["status", "approved_by", "ts_updated_at"])
+        if accept:
+            # Straight to the writer: `add_external_participants` would re-ask
+            # the questions this function has already answered (manages the
+            # guest team, grant is live), and the answers cannot have changed
+            # inside the same call.
+            _write_participant(grant, actor.id, grant.role_ceiling)
     # The host asked; tell them the answer. A decline is otherwise silent,
     # because declined grants are withheld from the lists on purpose.
     from origin.services.cross_team_notices import notify_share_answer
@@ -1096,6 +1109,7 @@ def _write_participant(grant: ExternalGrant, user_id, role: str) -> None:
         # ceiling), so a grant made before `offer_grant` refused a DM or a project chat
         # (MIP-1496) cannot admit anyone either.
         _channel_shareable_or_raise(grant.object_id)
+        _channel_has_room_or_raise(grant.object_id, user_id)
 
         # `role` maps onto the channel table's own older vocabulary
         # (`admin`/`member`) — see `member_roles` for why that mapping

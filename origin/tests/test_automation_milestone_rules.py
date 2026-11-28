@@ -659,3 +659,20 @@ class MilestoneRuleApiTests(MilestoneRuleBase):
         )
         self.assertEqual(self.fresh(small).project_id, self.a.project_id)
         self.assertFalse(AutomationRun.objects.exists())
+
+
+class MilestoneRuleRejectedTests(MilestoneRuleBase):
+    def test_rejected_is_a_trigger_and_an_action_for_a_milestone(self):
+        self.mrule(
+            trigger_value={"status": "Rejected"}, destination_project=None, set_status="Closed"
+        )
+        rejected = self.milestone()
+        self.patch(rejected, status="Rejected")
+        self.assertEqual(self.fresh(rejected).status, "Closed")
+
+        AutomationRule.objects.all().delete()
+        self.mrule(destination_project=None, set_status="Rejected")
+        started = self.milestone()
+        self.begin(started)
+        self.assertEqual(self.fresh(started).status, "Rejected")
+        self.assertEqual(self.backing(started).status, "Rejected")

@@ -44,7 +44,7 @@ APPLIES_TO = (APPLIES_TO_TASK, APPLIES_TO_MILESTONE)
 MAX_RULES = 50
 MAX_CONDITIONS = 10
 #: Statuses a rule may set. "Deleted" is a tombstone, never a rule's action.
-SETTABLE_STATUSES = ("Open", "WIP", "Blocked", "Pending", "Closed")
+SETTABLE_STATUSES = ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")
 PRIORITIES = ("Minimal", "Low", "Normal", "High", "Critical")
 CONDITION_FIELDS = (
     "tag",
