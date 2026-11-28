@@ -164,6 +164,19 @@ class CreateAndReadTests(_AlsoSendBase):
         self.assertIsNotNone(main[str(reply.id)]["deletedAt"])
         self.assertNotIn(str(reply.id), self._main_ids())
 
+    def test_an_older_page_of_the_chat_holds_it(self):
+        self._send(self.user2, "private to the thread", parent=self.root)
+        shared = self._also()
+        newest = self._send(self.user, "newest")
+        self.authenticate(self.user)
+        res = self.client.get(
+            f"/api/v3/channels/{self.channel.id}/messages/older/", {"before": str(newest.id)}
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(
+            [m["id"] for m in res.data["messages"]], [str(self.root.id), str(shared.id)]
+        )
+
     def test_a_reaction_reaches_the_main_chat_sync(self):
         reply = self._also()
         old = Message.objects.filter(pk=reply.pk)

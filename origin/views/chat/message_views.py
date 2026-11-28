@@ -786,7 +786,7 @@ class MessagesDeltaView(AuthenticatedAPIView):
 class OlderMessagesView(AuthenticatedAPIView):
     """GET /api/v3/channels/{channel_id}/messages/older/?before={message_id}
 
-    The page of top-level messages just before one the client already holds (MIP-2487: a jump to
+    The page of main-timeline messages (`main_timeline_q`) just before one the client already holds (MIP-2487: a jump to
     a pinned message older than the first load). At most `MAX_MESSAGES_PER_DELTA` rows, oldest
     first, deleted ones left out, the viewer's history window applied. `hasMore` says whether
     older ones remain. `before` must be a message of this chat.
@@ -805,8 +805,8 @@ class OlderMessagesView(AuthenticatedAPIView):
         qs = Message.objects.filter(
             Q(ts_sent_at__lt=before.ts_sent_at)
             | Q(ts_sent_at=before.ts_sent_at, id__lt=before.id),
+            main_timeline_q(),
             channel=channel,
-            is_thread_reply=False,
             deleted_at__isnull=True,
         )
         _days, cutoff = _retention_cutoff(request.user)

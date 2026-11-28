@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
     """
 
     dependencies = [
-        ("origin", "0303_board_columns_per_status_mip2495"),
+        ("origin", "0304_message_pin_mip2487"),
     ]
 
     operations = [
