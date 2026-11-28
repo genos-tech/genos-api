@@ -192,6 +192,12 @@ class TestWhatACallTouches(SimpleTestCase):
         self.assertLessEqual(len(name), member_events.CLIENT_MAX_CHARS)
 
 
+def one_bucket():
+    """For a test that expects its calls to share a marker: without this, a run that crosses a
+    ten-minute boundary between two of them gets a second row (MIP-2537)."""
+    return mock.patch.object(member_events, "_bucket", new=lambda _moment: 1)
+
+
 class Base(McpBase):
     def setUp(self):
         super().setUp()
@@ -225,6 +231,7 @@ class TestRecording(Base):
         )
         self.assertEqual(e.count, 1)
 
+    @one_bucket()
     def test_three_spellings_of_one_task_are_one_marker(self):
         n = self.task.task_id
         for ref in ("WRD-7", str(n), f"https://app.genosai.dev/workspace/tasks/project/1/task/{n}"):
@@ -483,6 +490,7 @@ class TestOneRowPerBucket(Base):
             self.call_ok("get_task", {"task_id": "WRD-7"})
         self.assertEqual(rows().count(), 2)
 
+    @one_bucket()
     def test_another_app_is_its_own_row(self):
         for client in ("Claude", "ChatGPT", "Claude"):
             member_events.record(
