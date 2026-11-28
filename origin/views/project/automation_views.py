@@ -178,11 +178,15 @@ class AutomationRuleDetailView(_RuleBase):
         # A new action replaces the status pair as one: naming only the status drops the old label.
         if "set_status" in changes and "set_custom_status_id" not in changes:
             definition["set_custom_status_id"] = None
-        # A new destination does not inherit values that belong to the old one.
-        if "destination_project_id" in changes and str(changes["destination_project_id"]) != str(
-            rule.destination_project_id
+        # A new destination does not inherit values that belong to the old one. A destination
+        # whose row is gone leaves values nobody can read (`serialize_rule`), so naming a
+        # destination, or none, drops the assignee too: none of it is adopted unseen.
+        gone = rule.moves_task and rule.destination_project_id is None
+        if "destination_project_id" in changes and (
+            gone or str(changes["destination_project_id"]) != str(rule.destination_project_id)
         ):
-            for key in ("set_custom_status_id", "add_tag"):
+            keys = ("set_custom_status_id", "add_tag", *(("set_assignee_id",) if gone else ()))
+            for key in keys:
                 if key not in changes:
                     definition[key] = None
         try:

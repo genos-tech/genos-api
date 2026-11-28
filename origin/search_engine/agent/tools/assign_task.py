@@ -24,20 +24,65 @@ ACL contract (three layers):
      with, while still listing them in `list_project_members`. The first
      half stays because a task need not belong to a project at all, and
      its ACL is then just {assignee, reporter}.
+
+A milestone's own task row (MIP-2557): its people are `MilestoneAssignees`, and the row's
+`assignee_id` is only a mirror `sync_backing_task` rewrites, so writing the row alone was undone
+by the next milestone edit. The assignment goes through the milestone instead, as
+`manage_milestone` writes it: the one person REPLACES the milestone's assignees (none clears
+them), and the result says whom that took off. Like every other milestone write it needs the
+caller to be on the milestone's project.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from django.db import transaction
+
 from apis.request_id import log_failure
 from origin.models.common.user_models import CustomUser
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.project_gone import task_is_gone
-from origin.services.task_assignment_notice import notify_task_assigned
-from origin.views.utils.scope_guards import is_team_member
+from origin.services.milestone_manage import lock_live_milestone, update_milestone
+from origin.services.task_assignment_notice import notify_milestone_assigned, notify_task_assigned
+from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_collaborators import may_name_person
+from origin.views.utils.scope_guards import is_project_member, is_team_member
+
+
+def _assign_milestone(
+    milestone: MilestoneMaster, new_assignee_id: str | None, ctx: ToolContext
+) -> list[str]:
+    """Make `new_assignee_id` (or nobody) the milestone's assignees, as the app's milestone
+    edit does. Returns the ids of the OTHER people this took off it."""
+    wanted = [new_assignee_id] if new_assignee_id else []
+    added: list[str] = []
+    try:
+        with transaction.atomic():
+            # Locked and re-read: a milestone converted or deleted a moment ago must not be
+            # mirrored back onto its row (MIP-1583).
+            if lock_live_milestone(milestone, project_id=milestone.project_id) is None:
+                raise ToolError(f"Task {milestone.task_id} was changed while this was applied.")
+            current = {
+                str(uid)
+                for uid in MilestoneAssignees.objects.filter(milestone=milestone).values_list(
+                    "user_id", flat=True
+                )
+            }
+            if current != set(wanted):
+                added = update_milestone(milestone, fields={}, assignee_ids=wanted)
+    except ToolError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        ref = log_failure("assign_task tool failed", e)
+        raise ToolError(f"Failed to assign task (ref {ref}).")
+    invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+    # Whoever was just added to the milestone is told, as in the app (MIP-1464).
+    notify_milestone_assigned(milestone, actor_id=ctx.user_id, added_user_ids=added)
+    return sorted(current - set(wanted))
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -74,6 +119,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to update task {task_id}.")
+    milestone = (
+        MilestoneMaster.objects.select_related("project")
+        .filter(task_id=task.task_id, is_deleted=False)
+        .first()
+        if task.is_milestone
+        else None
+    )
+    # Holding the row is not enough to change who is on a milestone.
+    if milestone is not None and not is_project_member(milestone.project_id, ctx.user_id):
+        raise ToolForbidden(f"Not authorized to update task {task_id}.")
 
     # --- Resolve the new assignee (or None for unassign). ---
     raw_assignee_id = args.get("assignee_id")
@@ -85,6 +140,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # covers. Both sets are scoped to this team, so neither can reach
         # a UUID from a different tenant.
         assignable = str(raw_assignee_id) in allowed or is_team_member(ctx.team_id, raw_assignee_id)
+        # A milestone takes its project's people or its team's, as `manage_milestone` does: the
+        # row's holders are not enough.
+        if milestone is not None:
+            assignable = may_name_person(milestone.project, raw_assignee_id)
         if not assignable:
             raise ToolError(
                 f"User {raw_assignee_id!r} is not an active member of this team, "
@@ -104,6 +163,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         new_assignee_username = assignee.username or str(assignee.id)
 
     # --- Apply the change. ---
+    if milestone is not None:
+        replaced = _assign_milestone(milestone, new_assignee_id, ctx)
+        summary = (
+            f"Assigned milestone task #{task_id} to {new_assignee_username}"
+            if new_assignee_username
+            else f"Unassigned milestone task #{task_id}"
+        )
+        if replaced:
+            summary += f"; took {len(replaced)} other assignee(s) off the milestone"
+        return {
+            "task_id": task_id,
+            "milestone_id": milestone.milestone_id,
+            "assignee_id": new_assignee_id,
+            "assignee_username": new_assignee_username,
+            **({"removed_assignee_ids": replaced} if replaced else {}),
+            "__summary__": summary,
+        }
     previous_assignee_id = task.assignee_id
     task.assignee_id = new_assignee_id
     try:

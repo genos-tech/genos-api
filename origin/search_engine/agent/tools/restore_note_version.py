@@ -43,7 +43,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ):
         raise ToolForbidden(f'Not authorized: you can read "{title}" but not edit it.')
 
-    if why := archived_note_refusal(ref.family, ref.note_id):
+    if why := archived_note_refusal(ref.family, ref.note_id, ctx.user_id):
         raise ToolError(f"{why} Nothing was changed.")
 
     # Undo (`agent/undo.py`): what the note is, before the restore replaces it.

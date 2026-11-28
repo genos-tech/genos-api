@@ -13,6 +13,7 @@ from origin.serializers.common.inbox_serializers import *
 from origin.services import inbox_ai, inbox_via, realtime_push
 from origin.services.deleted_account_channel_owners import join_request_receiver
 from origin.services.hidden_scope import channel_hidden_from, visible_projects_q
+from origin.services.share_roles import view_only_channel_response, view_only_note_response
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.inbox_approval import (
@@ -652,6 +653,9 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
                 {"error": "GM channel not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        # A View only participant of a shared chat admits nobody into it (MIP-2571).
+        if res := view_only_channel_response(gm_channel, request.user.id):
+            return res
         if not is_still_open(item):
             return already_answered()
 
@@ -1033,6 +1037,9 @@ class GrantNoteAccessFromInboxView(AuthenticatedAPIView):
             # Missing note OR non-owner approver — 404 either way so we
             # don't leak whether the note exists.
             return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+        # As `note_sharing`: a View only participant changes nobody's access (MIP-2571).
+        if res := view_only_note_response(note_type, note_id, request.user.id):
+            return res
         if not is_still_open(item):
             return already_answered()
 
