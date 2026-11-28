@@ -83,7 +83,7 @@ class ExternalGrantError(Exception):
     `code` is a stable string the API surfaces to the client:
     `not_connected` | `not_found` | `not_a_manager` | `not_pending` |
     `not_active` | `not_owned` | `bad_object` | `bad_role` |
-    `not_guest_member` | `mdm_member_limit`.
+    `not_guest_member`.
     """
 
     def __init__(self, code: str):
@@ -166,18 +166,8 @@ def object_display_name(object_type, object_id) -> str:
     return ""
 
 
-def _channel_has_room_or_raise(channel_id, user_id) -> None:
-    """A cross-team share cannot take a multi-person DM past its limit (MIP-2549)."""
-    from origin.models.chat.unified_models import Channel
-    from origin.services.mdm_members import MDM_LIMIT_CODE, has_room_for
-
-    channel = Channel.objects.filter(id=channel_id).first()
-    if channel is not None and not has_room_for(channel, [user_id]):
-        raise ExternalGrantError(MDM_LIMIT_CODE)
-
-
 def _channel_shareable_or_raise(channel_id) -> None:
-    """Only a group chat (GM) or a multi-person DM (MDM) can be lent out by a channel grant.
+    """Only a group chat (GM) can be lent out by a channel grant.
 
     A channel grant admits people by writing a `ChannelMember` row, which is the membership of
     a group chat and of nothing else (MIP-1496):
@@ -186,15 +176,16 @@ def _channel_shareable_or_raise(channel_id) -> None:
         only mirrors that, so the guest got a share that opens nothing and a stray row. A
         project is shared by a PROJECT grant, which writes the real `ProjectMembers` row.
       * a direct message is fixed to its pair; a guest row put a third person (an outside
-        team's) into a two-person private conversation and let them read all of it.
+        team's) into a two-person private conversation and let them read all of it;
+      * a multi-person DM is a small private chat, and stays inside one team (MIP-2566). The app
+        has no way to share one: only a group chat can be created as external.
 
-    The add-members endpoint already refuses both kinds; the share path must obey the same rule.
     Answers `bad_object`, like an object that does not exist.
     """
     from origin.models.chat.unified_models import Channel, ChannelKind
 
     kind = Channel.objects.filter(id=channel_id).values_list("kind", flat=True).first()
-    if kind not in (ChannelKind.GM, ChannelKind.MDM):
+    if kind != ChannelKind.GM:
         raise ExternalGrantError("bad_object")
 
 
@@ -387,8 +378,8 @@ def respond_to_grant(grant: ExternalGrant, actor, accept: bool) -> ExternalGrant
 
     _manager_or_raise(grant.guest_team_id, actor)
 
-    # One transaction: a participant row that is refused (a full multi-person DM, MIP-2549)
-    # leaves the offer pending, not accepted with nobody in it.
+    # One transaction: a participant row that is refused (a legacy grant on a chat that can no
+    # longer be shared) leaves the offer pending, not accepted with nobody in it.
     with transaction.atomic():
         grant.status = ShareStatus.ACTIVE if accept else ShareStatus.DECLINED
         grant.approved_by = actor
@@ -965,8 +956,8 @@ def rosters_of_held_objects(grants, user_id) -> dict:
 
     keys = keyed(ExternalGrant.ObjectType.CHANNEL)
     if keys:
-        # A channel grant is on a group chat or a multi-person DM, where the row IS the
-        # membership. A legacy one on a PROJECT chat (`_channel_shareable_or_raise` refuses new
+        # A channel grant is on a group chat (a legacy one may be on a multi-person DM), where
+        # the row IS the membership. A legacy one on a PROJECT chat (`_channel_shareable_or_raise` refuses new
         # ones) is read by the project's people, not by its mirror rows (MIP-1523): a stray row
         # there is on nothing, so it neither places its holder on the object nor appears in the
         # roster. `rows_for_grant` / `participant_ids` stay raw: revoking must delete every row
@@ -1108,9 +1099,8 @@ def _write_participant(grant: ExternalGrant, user_id, role: str) -> None:
 
         # The choke point every way in goes through (accepting, adding a person, raising the
         # ceiling), so a grant made before `offer_grant` refused a DM or a project chat
-        # (MIP-1496) cannot admit anyone either.
+        # (MIP-1496), or a multi-person DM (MIP-2566), cannot admit anyone either.
         _channel_shareable_or_raise(grant.object_id)
-        _channel_has_room_or_raise(grant.object_id, user_id)
 
         # `role` maps onto the channel table's own older vocabulary
         # (`admin`/`member`) — see `member_roles` for why that mapping
