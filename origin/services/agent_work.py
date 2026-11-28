@@ -14,6 +14,10 @@ Four sources, each with its own access rule, merged into one answer:
   (`services/agent_sessions`). Not one of the shared sources: a call row is private to the person,
   so this block never holds a teammate's session and is empty while the log is switched off.
 
+**What a row says.** A custom field's values belong to the project the row was written in, so a
+reader who is not on it gets no text for that row (`history_labels`, MIP-2536). Names of other
+things never reach the text: a relation row prints ids.
+
 **Who an agent is.** A row's agent is read through `via_for_viewer`: an API key is `api_key` for
 everyone; a connected Claude or ChatGPT is its family for everyone; any other connected app is
 `other_app` and its name never leaves its owner. A row with no `via`, or one from the web app or the
@@ -51,6 +55,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import agent_sessions
+from origin.services.history_labels import member_project_ids
 from origin.services.mcp_client_family import APP_FAMILIES, app_family
 from origin.services.note_scope import readable_note_rows
 from origin.services.plain_text import body_text
@@ -282,7 +287,20 @@ def _scalar(value: Any) -> str | None:
     return text if len(text) <= SCALAR_CHARS else None
 
 
-def _activity_text(row: dict, comments: dict[tuple[int, int], Any]) -> str | None:
+def _custom_field_projects(viewer_id: Any, rows) -> set[int]:
+    """Of the projects the page's custom field rows were written in, the ones the viewer is on."""
+    return member_project_ids(
+        viewer_id,
+        {r["project_id"] for r in rows if r["action_type"] == A.CUSTOM_FIELD and r["project_id"]},
+    )
+
+
+def _activity_text(row: dict, comments: dict[tuple[int, int], Any], on: set[int]) -> str | None:
+    if row["action_type"] == A.CUSTOM_FIELD:
+        # The task's current project passes: the viewer may open the task (`history_labels`).
+        project_id = row["project_id"]
+        if project_id is None or (project_id != row["task__project_id"] and project_id not in on):
+            return None
     if row["action_type"] == A.COMMENT_ADDED:
         body = comments.get((row["task_id"], row["comment_id"]))
         return _one_line(body_text(body)) if body else None
@@ -483,11 +501,13 @@ def _items(viewer_id, team_id, since, f: Filters, want: int) -> list[dict]:
                 "task_id",
                 "via_json",
                 "comment_id",
+                "project_id",
                 "task__title",
                 "task__project_id",
             )[:want]
         )
         comments = _comment_bodies(rows)
+        on = _custom_field_projects(viewer_id, rows)
         for r in rows:
             shown = via_for_viewer(r["via_json"], r["actor_id"], viewer_id)
             out.append(
@@ -498,7 +518,7 @@ def _items(viewer_id, team_id, since, f: Filters, want: int) -> list[dict]:
                     "agent": _agent_obj(_label_of(shown, r["actor_id"])),
                     "action": _kind_of_action(r["action_type"]),
                     "target": {"type": "task", "id": r["task_id"], "title": r["task__title"]},
-                    "text": _activity_text(r, comments),
+                    "text": _activity_text(r, comments, on),
                     "_project_id": r["task__project_id"],
                     "_sort": r["ts_created_at"],
                 }

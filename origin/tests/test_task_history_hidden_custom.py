@@ -18,7 +18,10 @@ SECRET = ("Client", "Zeta Corp", "Budget note", "forty grand", "Legal hold", "Co
 CUSTOM = (TaskActivityActionType.CUSTOM_FIELD, TaskActivityActionType.CUSTOM_STATUS)
 
 
-class HistoryHiddenCustomNameTests(BaseAPITestCase):
+class MovedTaskSetup(BaseAPITestCase):
+    """A task with custom field and status history in a project it then left. No tests here:
+    `test_task_history_hidden_readers` uses it too."""
+
     _project = relation_labels.HistoryHiddenLabelTests._project
     _task = relation_labels.HistoryHiddenLabelTests._task
     _feed = relation_labels.HistoryHiddenLabelTests._feed
@@ -70,6 +73,8 @@ class HistoryHiddenCustomNameTests(BaseAPITestCase):
             team=self.team, project=project, name=name, category=category
         )
 
+
+class HistoryHiddenCustomNameTests(MovedTaskSetup):
     def _rows(self, feed, action):
         return [r for r in feed if r["actionType"] == action]
 
