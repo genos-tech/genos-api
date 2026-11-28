@@ -44,7 +44,7 @@ import uuid
 from django.db.models import Exists, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce
 
-from origin.models.chat.unified_models import ChannelKind, Message, ReadCursor
+from origin.models.chat.unified_models import ChannelKind, Message, ReadCursor, main_timeline_q
 from origin.models.common.inbox_models import InboxItems
 from origin.services.channel_scope import team_scope_q, user_channels_qs
 
@@ -101,11 +101,11 @@ def _unread_chats(user_id, team_id) -> int:
     The chat list is `ChannelListView`: the user's live memberships,
     narrowed to the team by `team_scope_q` (so a chat another team shared
     into this one counts here, as it is listed here). A chat is new when it
-    has a top-level, undeleted message beyond the user's main-timeline read
+    has a main-timeline, undeleted message beyond the user's main-timeline read
     cursor AND its newest such message is not the user's own: the app treats
     a chat whose last word is yours as read even when the cursor lags
-    (`channelToLegacyChat`'s `latestIsSelfSent`). Thread replies never make a
-    chat new.
+    (`channelToLegacyChat`'s `latestIsSelfSent`). A thread reply makes a chat
+    new only when it was also sent to the chat (MIP-2486).
 
     One query, no loop over chats: both conditions are correlated
     subqueries on the (channel, seq) index.
@@ -115,8 +115,9 @@ def _unread_chats(user_id, team_id) -> int:
     read_seq = ReadCursor.objects.filter(
         user_id=user_id, channel=OuterRef("channel"), thread_root__isnull=True
     ).values("last_read_message__seq")[:1]
+    # "Top level" here is the main timeline: a reply also sent to the chat counts (MIP-2486).
     top_level = Message.objects.filter(
-        channel=OuterRef("pk"), is_thread_reply=False, deleted_at__isnull=True
+        main_timeline_q(), channel=OuterRef("pk"), deleted_at__isnull=True
     )
     beyond_cursor = top_level.filter(seq__gt=Coalesce(Subquery(read_seq), 0))
     newest_sender = top_level.order_by("-seq").values("sender_id")[:1]

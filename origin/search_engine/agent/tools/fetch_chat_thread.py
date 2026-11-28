@@ -31,7 +31,7 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 
-from origin.models.chat.unified_models import Channel, Message
+from origin.models.chat.unified_models import Channel, Message, main_timeline_q
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -158,11 +158,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # Main-channel mode: the newest `limit` top-level messages, oldest-first.
         # `id` is the stable client-facing UUID; `body` is the JSONField.
         qs = Message.objects.filter(
-            channel=channel, is_thread_reply=False, deleted_at__isnull=True
+            main_timeline_q(), channel=channel, deleted_at__isnull=True
         ).select_related("sender")
         if before:
             anchor_seq = (
-                Message.objects.filter(channel=channel, id=before, is_thread_reply=False)
+                Message.objects.filter(main_timeline_q(), channel=channel, id=before)
                 .values_list("seq", flat=True)
                 .first()
             )
@@ -195,6 +195,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if m.reply_count:
                 # Its replies are a thread: pass `message_id` as `thread_id`.
                 row["reply_count"] = m.reply_count
+            if m.is_thread_reply:
+                # A reply also sent to the chat: pass this as `thread_id` for the discussion.
+                row["in_thread"] = str(m.thread_root_id)
             messages.append(row)
     else:
         # Thread mode: the root message (anchor, whose `id` == thread_id) +

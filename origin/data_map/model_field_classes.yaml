@@ -515,6 +515,7 @@ origin.Message:
   parent: none
   thread_root: none
   is_thread_reply: none
+  also_in_channel: none
   metadata: none
   correlation_id: none
   reply_count: none
