@@ -150,6 +150,12 @@ class ToDoItemListView(AuthenticatedAPIView):
         notes = request.data.get("notes")
         sort_order = request.data.get("sort_order", 0)
 
+        def refuse(error):
+            # A `Response` returned inside the block would commit the day
+            # created for this item (MIP-2576).
+            transaction.set_rollback(True)
+            return Response({"error": error}, status=status.HTTP_400_BAD_REQUEST)
+
         with transaction.atomic():
             group = _get_or_create_group(team_id, request.user.id, local_date)
 
@@ -157,15 +163,9 @@ class ToDoItemListView(AuthenticatedAPIView):
             if parent_item_id is not None:
                 parent_item = ToDoItem.objects.filter(item_id=parent_item_id, group=group).first()
                 if parent_item is None:
-                    return Response(
-                        {"error": "parent_item_id not found in this group."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    return refuse("parent_item_id not found in this group.")
                 if parent_item.parent_item_id is not None:
-                    return Response(
-                        {"error": "Only one level of nesting is supported."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    return refuse("Only one level of nesting is supported.")
 
             # Children inherit the parent's category; ignore any
             # `category_id` the client sent for a child item.
@@ -176,10 +176,7 @@ class ToDoItemListView(AuthenticatedAPIView):
                 if category_id is not None:
                     category = _get_team_category(category_id, request.user.id, group.team_id)
                     if category is None:
-                        return Response(
-                            {"error": "category_id not found for this user."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                        return refuse("category_id not found for this user.")
 
             item = ToDoItem.objects.create(
                 group=group,

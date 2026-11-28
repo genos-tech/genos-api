@@ -18,6 +18,7 @@ from django.test.utils import CaptureQueriesContext
 
 from origin.models.chat.todo_models import ToDoGroup, ToDoItem
 from origin.models.common.team_models import TeamMembers
+from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
 from origin.services import todo_items
 from origin.views.public.mcp.tools import SCOPE_WRITE
 
@@ -53,6 +54,51 @@ class EmptyDayBase(TodoToolBase):
             ("app", lambda item, to: self.ui_patch(item, local_date=to.isoformat())),
             ("tool", lambda item, to: self.update(item, target_date=to.isoformat())),
         )
+
+
+class RefusedCreateTests(EmptyDayBase):
+    """A create the app refuses leaves no day behind (MIP-2576)."""
+
+    def ui_create(self, on, **body):
+        return self.client.post(
+            "/api/v2/todo/items/",
+            {"team_id": str(self.team.team_id), "local_date": on.isoformat(), "title": "x", **body},
+            format="json",
+        )
+
+    def test_a_refused_create_leaves_no_new_day(self):
+        elsewhere = self.todo(on=self.day(1))
+        refusals = (
+            ({"parent_item_id": 999999}, "parent_item_id not found in this group."),
+            ({"parent_item_id": elsewhere.item_id}, "parent_item_id not found in this group."),
+            ({"category_id": 999999}, "category_id not found for this user."),
+        )
+        for body, error in refusals:
+            with self.subTest(body=body):
+                res = self.ui_create(self.day(5), **body)
+                self.assertEqual(res.status_code, 400, res.data)
+                self.assertEqual(res.data, {"error": error})
+                self.assertFalse(ToDoGroup.objects.filter(local_date=self.day(5)).exists())
+
+    def test_a_refused_create_keeps_a_day_that_was_already_there(self):
+        parent = self.todo(on=self.day(2))
+        kid = self.todo("kid", on=self.day(2), parent=parent)
+        res = self.ui_create(self.day(2), parent_item_id=kid.item_id)
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertEqual(res.data, {"error": "Only one level of nesting is supported."})
+        self.assertTrue(exists(parent.group))
+        self.assertEqual(ToDoItem.objects.filter(group=parent.group).count(), 2)
+
+    def test_a_tool_create_that_fails_part_way_leaves_no_new_day(self):
+        with (
+            patch("origin.services.todo_reminders.set_reminder", side_effect=RuntimeError("boom")),
+            self.assertRaises(RuntimeError),
+        ):
+            CREATE_TODO_ITEM.run(
+                {"title": "x", "target_date": self.day(5).isoformat(), "remind_in_minutes": 5},
+                self.ctx,
+            )
+        self.assertFalse(ToDoGroup.objects.filter(local_date=self.day(5)).exists())
 
 
 class DeleteTests(EmptyDayBase):
