@@ -12,6 +12,8 @@ stored, whatever wrote it (MIP-2483):
   * **refreshed** after every write that changes something the card shows, from any path
     (`schedule_refresh`, called by the task signals), so a browser that closes early cannot leave it
     stale. `PATCH card-message`, which the app sends after an edit, rebuilds it here too;
+  * **sent again, unchanged**, to a milestone's open chat when tasks join or leave it or one is
+    deleted (`schedule_membership_refresh`, MIP-2570): the progress it shows is not in its body;
   * **made whole** when a comment arrives on a task that has none (`header_parts`): the comment
     needs a message to thread under, and it used to get a bare title.
 
@@ -41,8 +43,10 @@ left alone.
 from __future__ import annotations
 
 import logging
+from functools import partial
 
 from django.db import transaction
+from django.db.models import Q
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.common.user_models import CustomUser
@@ -262,14 +266,15 @@ def post_milestone_created_card(
 # --- keeping the card current (MIP-1460) ------------------------------------------------------
 
 
-def _refresh(project, task_id, build) -> Message | None:
+def _refresh(project, task_id, build, *, push_unchanged: bool = False) -> Message | None:
     """Rewrite the card of `task_id` to what `build(language)` returns, when it differs from
     what is stored. `language` is the card's SENDER's, so a card keeps its language whoever
     edits the task (MIP-1744); an old English card of a Japanese sender is healed here.
 
     No card means nothing to refresh (a task that predates cards, or one nobody posted for):
     this never makes one. An unchanged card is not written, so a save that touched nothing the
-    card shows costs a read and no broadcast.
+    card shows costs a read and no broadcast. `push_unchanged` broadcasts it all the same (still
+    unwritten), for what the open card shows but its stored body does not (MIP-2570).
     """
     from origin.views.chat.message_views import rewrite_card_message  # noqa: PLC0415
 
@@ -288,6 +293,8 @@ def _refresh(project, task_id, build) -> Message | None:
     # Merged, not replaced: the browser's card may carry keys this does not know about.
     merged = {**(card.metadata or {}), **metadata}
     if card.body == body and card.body_text == body_text and (card.metadata or {}) == merged:
+        if push_unchanged:
+            realtime_push.push_message(card, realtime_push.UPDATED)
         return None
     # `merged` is the stored row's own metadata (its stamp, if any, is the creation's) plus what the
     # server just built: nothing a client sent (MIP-1570).
@@ -321,6 +328,54 @@ def schedule_refresh(*, task_id=None, milestone_id=None) -> None:
         log.warning("card refresh could not be scheduled", exc_info=True)
 
 
+def schedule_membership_refresh(*, milestone_ids=(), parent_task_ids=()) -> None:
+    """Tasks joined or left these milestones: after the commit, tell each one's open card, once
+    however many tasks moved (MIP-2570). `parent_task_ids` are parents a task left or joined; the
+    ones that are a milestone's own row count too (membership by sub-task).
+
+    A card shows its progress as it reads it, not from its stored body, so the card is sent again
+    even when nothing in it changed: that is what makes an open chat read the progress again.
+    """
+    try:
+        if activity_suppressed():
+            return
+        wanted = {("milestone", i) for i in milestone_ids if i is not None}
+        wanted |= {("parent", i) for i in parent_task_ids if i is not None}
+        if not wanted:
+            return
+        connection = transaction.get_connection()
+        pending = getattr(connection, "_genos_milestone_cards", None)
+        if pending is None:
+            pending = connection._genos_milestone_cards = set()
+        pending |= wanted
+        # One callback per call, and the first to run for an id takes it, so later ones find
+        # nothing: a rolled back savepoint discards only its own callback, and what it queued is
+        # not sent by anyone who did not ask for it too.
+        transaction.on_commit(partial(_announce_memberships, pending, wanted), robust=True)
+    except Exception:  # noqa: BLE001 — never break a write
+        log.warning("milestone card refresh could not be scheduled", exc_info=True)
+
+
+def _announce_memberships(pending: set, asked: set) -> None:
+    wanted = asked & pending
+    pending -= wanted
+    if not wanted:
+        return
+    try:
+        # A deleted milestone has no progress to move, and its delete refreshes its card itself.
+        found = MilestoneMaster.objects.filter(
+            Q(milestone_id__in=[i for kind, i in wanted if kind == "milestone"])
+            | Q(task_id__in=[i for kind, i in wanted if kind == "parent"]),
+            is_deleted=False,
+        ).values_list("milestone_id", "task_id")
+        for milestone_id, task_id in list(found):
+            # Both names of this milestone are served now (a move can queue each separately).
+            pending.difference_update({("milestone", milestone_id), ("parent", task_id)})
+            refresh_milestone_card(milestone_id, push_unchanged=True)
+    except Exception:  # noqa: BLE001 — the tasks are saved; an observer must not fail the write
+        log.warning("milestone card refresh failed", exc_info=True)
+
+
 def refresh_task_card(task_id) -> Message | None:
     """Bring a task's chat card up to date with the row. A milestone's backing task refreshes
     the milestone's card instead. Never raises.
@@ -338,7 +393,7 @@ def refresh_task_card(task_id) -> Message | None:
         return None
 
 
-def refresh_milestone_card(milestone_id) -> Message | None:
+def refresh_milestone_card(milestone_id, *, push_unchanged: bool = False) -> Message | None:
     """The same for a milestone's card (its status, sprint, assignees, dates). Never raises."""
     try:
         milestone = _fresh_milestone(milestone_id)
@@ -348,6 +403,7 @@ def refresh_milestone_card(milestone_id) -> Message | None:
             milestone.project,
             milestone.task_id,
             lambda lang: _milestone_card_parts(milestone, lang),
+            push_unchanged=push_unchanged,
         )
     except Exception:  # noqa: BLE001 — the milestone is saved; an observer must not fail the write
         log.warning("milestone card refresh failed milestone=%s", milestone_id, exc_info=True)
