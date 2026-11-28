@@ -311,8 +311,15 @@ def push_message(message, event) -> None:
     transaction commits, or at once when there is none. A no-op when `SOCKETS_INTERNAL_URL`
     is unset. Never raises: the message is saved, and the next sync still finds it.
     """
+    push_messages([message.pk], event)
+
+
+def push_messages(message_ids, event) -> None:
+    """`push_message` for many rows, read in one go (MIP-2561): one post each, in the order of
+    `message_ids` (an id given twice is posted twice). A row that is gone is skipped. Never
+    raises."""
     try:
-        if not settings.SOCKETS_INTERNAL_URL:
+        if not settings.SOCKETS_INTERNAL_URL or not message_ids:
             return
         if not settings.SOCKETS_INTERNAL_SECRET:
             logger.warning("sockets message push skipped: SOCKETS_INTERNAL_SECRET is unset")
@@ -323,18 +330,30 @@ def push_message(message, event) -> None:
         from origin.serializers.chat.unified_serializers import MessageSerializer  # noqa: PLC0415
         from origin.views.chat.message_views import _prefetched_messages  # noqa: PLC0415
 
-        fresh = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
-        if fresh is None:
-            return
-        payload: dict[str, Any] = {
-            "event": event,
-            "message": json.loads(JSONRenderer().render(MessageSerializer(fresh).data)),
-            # For the log line only: sockets reads `event` and `message`.
-            "taskId": fresh.task_id,
+        fresh = {
+            row.pk: row
+            for row in _prefetched_messages(Message.objects.filter(pk__in=set(message_ids)))
         }
-        transaction.on_commit(lambda: _post(payload, MESSAGE_PATH, "message"), robust=True)
-    except Exception:  # noqa: BLE001 — the message is saved; an observer must not break it
+    except Exception:  # noqa: BLE001 — the messages are saved; an observer must not break it
         logger.warning("sockets message push could not be scheduled", exc_info=True)
+        return
+    for message_id in message_ids:
+        row = fresh.get(message_id)
+        if row is None:
+            continue
+        try:
+            payload: dict[str, Any] = {
+                "event": event,
+                "message": json.loads(JSONRenderer().render(MessageSerializer(row).data)),
+                # For the log line only: sockets reads `event` and `message`.
+                "taskId": row.task_id,
+            }
+            # A lambda, not a `partial`: Django's robust handler reads the callback's name.
+            transaction.on_commit(
+                lambda payload=payload: _post(payload, MESSAGE_PATH, "message"), robust=True
+            )
+        except Exception:  # noqa: BLE001 — one row that cannot be sent costs only itself
+            logger.warning("sockets message push could not be scheduled", exc_info=True)
 
 
 def push_messages_deleted(channel, messages) -> None:
