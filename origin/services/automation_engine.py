@@ -465,6 +465,7 @@ def _act(rule: AutomationRule, task: TaskMaster, milestone=None) -> Outcome:
             rule_name=rule.name,
             source_project_id=source_id,
             destination_project_id=destination_id,
+            milestone=milestone is not None,
         )
     return Outcome(state, "", rule.id, destination_id)
 

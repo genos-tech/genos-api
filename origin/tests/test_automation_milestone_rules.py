@@ -11,6 +11,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.automation_models import AutomationRule, AutomationRun
@@ -181,6 +182,24 @@ class MilestoneRuleMoveTests(MilestoneRuleBase):
         self.assertEqual(response.data["movedFromProjectId"], self.a.project_id)
         self.assertEqual(response.data["milestone"]["projectId"], self.a.project_id)
 
+    def test_the_old_chat_is_told_that_a_milestone_left(self):
+        old, _new = [
+            Channel.objects.get_or_create(
+                kind=ChannelKind.PM,
+                legacy_chat_id=project.project_id,
+                defaults={"team": self.team, "project": project},
+            )[0]
+            for project in (self.a, self.x)
+        ]
+        self.mrule(name="Handover")
+        milestone = self.milestone()
+        self.begin(milestone)
+        line = Message.objects.get(channel=old, metadata__systemNotice="task_moved_by_rule")
+        self.assertEqual(line.body_text, 'Rule "Handover" moved a milestone to another project.')
+        self.assertEqual(
+            (line.metadata["movedTaskId"], line.metadata["movedMilestone"]),
+            (milestone.task_id, True),
+        )
 
     def test_a_move_drops_the_old_projects_status_label(self):
         triage = create_status(self.a, name="Triage", category="WIP", actor=self.user)
