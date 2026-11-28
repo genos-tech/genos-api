@@ -545,6 +545,15 @@ class ViewOnlyProjectChatTests(_ViewOnlyCase):
         self.view_only_again()
         self.both(lambda: self.client.delete(message))
 
+    def test_pin_a_message_for_everyone(self):
+        message = Message.objects.create(
+            channel=self.chat, sender=self.a_owner, seq=1, body=BODY, body_text="hi"
+        )
+        url = f"/api/v3/messages/{message.id}/message_pin/"
+        self.both(lambda: self.client.post(url))
+        self.view_only_again()
+        self.assert_view_only(self.client.delete(url))
+
     def test_inline_upload(self):
         self.both(
             lambda: self.client.post(
