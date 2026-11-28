@@ -216,6 +216,14 @@ class FiltersBlobTests(SavedTaskFilterTestBase):
         self.assertEqual(created.status_code, status.HTTP_201_CREATED)
         self.assertEqual(created.data["filters"], FILTERS)
 
+    def test_status_ids_survive_the_round_trip(self):
+        """The project's own statuses picked in the filter (MIP-2495): a dimension the
+        server does not list is dropped on write without an error."""
+        filters = {**FILTERS, "status": [], "statusIds": [41, 42]}
+        created = self.create_filter(filters=filters)
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(self.list_filters().data[0]["filters"], filters)
+
     def test_sprint_keys_survive_the_round_trip(self):
         # The failure this guards is silent in both directions: a dimension
         # the client sends but `SAVED_TASK_FILTER_KEYS` omits is dropped on

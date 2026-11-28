@@ -105,6 +105,7 @@ CREATE_PROJECT_SERVER_VALUES = {
     "default_task_template": None,
     "default_milestone_template": None,
     "task_field_rules": {},
+    "board_columns_per_status": False,
     "project_system_user": None,
 }
 
@@ -1490,6 +1491,8 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
 # omits it because that surface hides the dimension.
 SAVED_TASK_FILTER_KEYS = (
     "status",
+    # The project's own statuses picked in the status filter, by id (MIP-2495).
+    "statusIds",
     "tags",
     "priorities",
     "effortLevels",
@@ -2175,6 +2178,8 @@ class _ProjectStatusBase(AuthenticatedAPIView):
             {
                 "statuses": [serialize_status(r) for r in list_statuses(project)],
                 "canManage": can_manage(resolve_project_role(project, request.user.id)),
+                # The board's "one column per status" option (MIP-2495).
+                "boardColumnsPerStatus": project.board_columns_per_status,
             },
             status=code,
         )
@@ -2185,7 +2190,7 @@ class _ProjectStatusBase(AuthenticatedAPIView):
 
 
 class ProjectStatusListView(_ProjectStatusBase):
-    """`projects/<id>/statuses/`: list, add one, reorder.
+    """`projects/<id>/statuses/`: list, add one, reorder, and (PATCH) the board option.
 
     Reading writes nothing (MIP-2493): a project nobody set up lists no statuses, so opening a
     task never changes how its project looks. Adding or reordering writes the built-in rows
@@ -2223,6 +2228,25 @@ class ProjectStatusListView(_ProjectStatusBase):
             reorder_statuses(project, request.data.get("order"))
         except StatusError as exc:
             return self._refusal(exc)
+        return self._list(request, project)
+
+    def patch(self, request, project_id: int):
+        """`board_columns_per_status`: one board column per status (MIP-2495). The columns are
+        the project's statuses, so turning it on writes the built-in rows first."""
+        project, err = self._project(request, project_id, write=True)
+        if err:
+            return err
+        wanted = request.data.get("board_columns_per_status")
+        if not isinstance(wanted, bool):
+            return Response(
+                {"error": "board_columns_per_status must be true or false.", "code": "bad_value"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if wanted:
+            ensure_project_statuses(project)
+        if project.board_columns_per_status != wanted:
+            project.board_columns_per_status = wanted
+            project.save(update_fields=["board_columns_per_status", "ts_updated_at"])
         return self._list(request, project)
 
 

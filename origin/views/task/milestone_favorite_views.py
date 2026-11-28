@@ -39,6 +39,8 @@ def _serialize_favorite(fav) -> dict:
         "displayId": task.display_id if task is not None else None,
         "title": m.title,
         "status": m.status,
+        # The project's own status name for it (MIP-2495).
+        "customStatusId": m.custom_status_id,
         "projectId": m.project_id,
         "projectName": m.project.project_name,
         "teamId": fav.team_id,

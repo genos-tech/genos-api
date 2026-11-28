@@ -89,6 +89,7 @@ class MilestoneFavoriteTests(BaseAPITestCase):
         self.assertEqual(fav["projectId"], self.project.project_id)
         self.assertEqual(fav["projectName"], "Genos")
         self.assertEqual(fav["status"], "Open")
+        self.assertIsNone(fav["customStatusId"])
         self.assertIsNone(fav["tsLastOpened"])
 
     def test_a_milestone_of_a_project_the_caller_is_not_in_is_not_found(self):
