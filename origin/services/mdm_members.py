@@ -5,7 +5,8 @@ included. A group chat has no limit. What counts is who is in the chat NOW
 (`chat_member_rows`: live rows of live accounts), so a person who left or whose account was
 deleted takes no seat. A chat already above the limit keeps everyone; it just takes nobody new.
 
-Every path that writes a member into an MDM asks here: create, add and the cross-team grant.
+Every path that writes a member into an MDM asks here: create and add. A cross-team grant cannot
+name an MDM at all (MIP-2566).
 """
 
 from __future__ import annotations

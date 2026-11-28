@@ -13,7 +13,9 @@ group chat, but:
     guest row would make a third person in a two-person chat.
 
 The add-members endpoint already refuses both kinds; the share path must obey the same rule.
-Only a group chat (GM) or a multi-person DM (MDM) can be shared by a channel grant.
+  * a multi-person DM is a small private chat that stays inside one team (MIP-2566).
+
+Only a group chat (GM) can be shared by a channel grant.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from origin.services.external_grants import (
     add_external_participants,
     offer_grant,
     respond_to_grant,
+    revoke_grant,
 )
 from origin.services.member_roles import EDITOR
 from origin.tests.cross_team_fixtures import CrossTeamTestCase
@@ -42,6 +45,10 @@ class ChannelGrantKinds(CrossTeamTestCase):
         self.dm = Channel.objects.create(team=self.team_a, kind=ChannelKind.DM, title="")
         for u in (self.a_editor, self.a_viewer):
             ChannelMember.objects.create(channel=self.dm, user=u)
+        # The offerer is in it, so only the kind can refuse it.
+        self.mdm = Channel.objects.create(team=self.team_a, kind=ChannelKind.MDM, title="three")
+        for u in (self.a_owner, self.a_editor, self.a_viewer):
+            ChannelMember.objects.create(channel=self.mdm, user=u)
 
     def offer(self, channel):
         return offer_grant(
@@ -80,9 +87,15 @@ class ChannelGrantKinds(CrossTeamTestCase):
         self.assertEqual(ctx.exception.code, "bad_object")
         self.assertFalse(ExternalGrant.objects.filter(object_id=str(self.dm.id)).exists())
 
+    def test_a_multi_person_dm_cannot_be_offered(self):
+        with self.assertRaises(ExternalGrantError) as ctx:
+            self.offer(self.mdm)
+        self.assertEqual(ctx.exception.code, "bad_object")
+        self.assertFalse(ExternalGrant.objects.filter(object_id=str(self.mdm.id)).exists())
+
     def test_the_share_endpoint_refuses_them_like_an_object_that_does_not_exist(self):
         missing = Channel(id="00000000-0000-0000-0000-000000000001")
-        for chat in (self.pm_chat, self.dm):
+        for chat in (self.pm_chat, self.dm, self.mdm):
             with self.subTest(kind=chat.kind):
                 refused = self.offer_over_http(chat)
                 nothing = self.offer_over_http(missing)
@@ -95,36 +108,28 @@ class ChannelGrantKinds(CrossTeamTestCase):
 
     # -- what still works ---------------------------------------------------------------- #
 
-    def test_a_group_chat_and_a_multi_person_dm_can_still_be_shared(self):
-        for kind in (ChannelKind.GM, ChannelKind.MDM):
-            with self.subTest(kind=kind):
-                chat = Channel.objects.create(team=self.team_a, kind=kind, title="room")
-                ChannelMember.objects.create(channel=chat, user=self.a_owner)
-                grant = self.offer(chat)
-                respond_to_grant(grant, self.b_owner, accept=True)
-                self.assertTrue(
-                    ChannelMember.objects.filter(
-                        channel=chat, user=self.b_owner, is_deleted=False
-                    ).exists()
-                )
+    def test_a_group_chat_can_still_be_shared(self):
+        chat = Channel.objects.create(team=self.team_a, kind=ChannelKind.GM, title="room")
+        ChannelMember.objects.create(channel=chat, user=self.a_owner)
+        grant = self.offer(chat)
+        respond_to_grant(grant, self.b_owner, accept=True)
+        self.assertTrue(
+            ChannelMember.objects.filter(channel=chat, user=self.b_owner, is_deleted=False).exists()
+        )
 
     # -- MIP-1522: the offerer must be IN the chat they lend out -------------------------- #
 
     def test_a_manager_who_is_not_in_the_group_chat_cannot_offer_it(self):
-        for kind in (ChannelKind.GM, ChannelKind.MDM):
-            with self.subTest(kind=kind):
-                chat = Channel.objects.create(team=self.team_a, kind=kind, title="private room")
-                ChannelMember.objects.create(
-                    channel=chat, user=self.a_editor
-                )  # a_owner is not in it
-                with self.assertRaises(ExternalGrantError) as ctx:
-                    self.offer(chat)
-                # Same answer as a chat that does not exist: it does not say the chat is there.
-                self.assertEqual(ctx.exception.code, "bad_object")
-                self.assertFalse(
-                    ExternalGrant.objects.filter(object_id=str(chat.id)).exists(),
-                    "nothing was offered, nothing was notified",
-                )
+        chat = Channel.objects.create(team=self.team_a, kind=ChannelKind.GM, title="private room")
+        ChannelMember.objects.create(channel=chat, user=self.a_editor)  # a_owner is not in it
+        with self.assertRaises(ExternalGrantError) as ctx:
+            self.offer(chat)
+        # Same answer as a chat that does not exist: it does not say the chat is there.
+        self.assertEqual(ctx.exception.code, "bad_object")
+        self.assertFalse(
+            ExternalGrant.objects.filter(object_id=str(chat.id)).exists(),
+            "nothing was offered, nothing was notified",
+        )
 
     def test_a_manager_who_left_the_chat_cannot_offer_it(self):
         chat = Channel.objects.create(team=self.team_a, kind=ChannelKind.GM, title="room")
@@ -208,6 +213,26 @@ class GrantsMadeBeforeTheRefusal(CrossTeamTestCase):
             add_external_participants(grant, [self.b_editor.id], self.b_owner)
         self.assertEqual(ctx.exception.code, "bad_object")
         self.assertFalse(ChannelMember.objects.filter(channel=self.dm, user=self.b_editor).exists())
+
+    def test_a_legacy_grant_on_a_multi_person_dm_admits_nobody_and_can_be_revoked(self):
+        mdm = Channel.objects.create(team=self.team_a, kind=ChannelKind.MDM, title="three")
+        ChannelMember.objects.create(channel=mdm, user=self.a_owner)
+        pending = self.legacy_grant(mdm)
+        with self.assertRaises(ExternalGrantError) as ctx:
+            respond_to_grant(pending, self.b_owner, accept=True)
+        self.assertEqual(ctx.exception.code, "bad_object")
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, ShareStatus.PENDING)
+        ChannelMember.objects.create(channel=mdm, user=self.b_owner)
+        pending.status = ShareStatus.ACTIVE
+        pending.save(update_fields=["status"])
+        with self.assertRaises(ExternalGrantError):
+            add_external_participants(pending, [self.b_editor.id], self.b_owner)
+        self.assertFalse(ChannelMember.objects.filter(channel=mdm, user=self.b_editor).exists())
+        revoke_grant(pending, self.a_owner)
+        self.assertFalse(
+            ChannelMember.objects.filter(channel=mdm, user=self.b_owner, is_deleted=False).exists()
+        )
 
     def test_the_guest_cannot_read_a_project_chat_a_legacy_grant_names(self):
         """Evidence kept from the probe: a stray row on a project chat opens nothing."""
