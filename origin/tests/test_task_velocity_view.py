@@ -14,12 +14,18 @@ each test clears the audit table before seeding its own rows.
 
 from datetime import date, datetime, timezone
 
+from django.contrib.auth import get_user_model
+from django.db import connection
 from django.urls import reverse
 
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.tests.test_base import BaseAPITestCase
+from origin.views.utils.scope_guards import can_access_task
+
+User = get_user_model()
 
 
 class TaskVelocityViewTests(BaseAPITestCase):
@@ -224,3 +230,131 @@ class TaskVelocityViewTests(BaseAPITestCase):
         self.unauthenticate()
         res = self._get(start="2026-05-04", end="2026-05-04")
         self.assertIn(res.status_code, (401, 403))
+
+
+class TaskVelocityAccessBatchTests(BaseAPITestCase):
+    """The ids are narrowed to the caller's in one batch (MIP-2552): the same answer as
+    `can_access_task` for each case in its docstring, in a number of queries that does not grow
+    with the number of ids."""
+
+    DAY = date(2026, 5, 4)
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("task_velocity")
+        self.caller = self.user2  # a team member; owns nothing
+        self.other = User.objects.create_user(
+            username="other-owner", email="other-owner@example.com", password="pw12345!"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.other)
+        self.authenticate(self.caller)
+
+    def _project(self, name, *, owner=None, member=False, deleted=False):
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name=name,
+            owner=owner or self.other,
+            project_system_user=self.other,
+            is_deleted=deleted,
+        )
+        if member:
+            ProjectMembers.objects.create(team=self.team, project=project, attendee=self.caller)
+        return project
+
+    def _task(self, project, **fields):
+        return TaskMaster.objects.create(
+            team=self.team, project=project, title="T", status="Open", **fields
+        )
+
+    def _touch(self, *tasks):
+        TaskActivity.objects.all().delete()
+        for task in tasks:
+            row = TaskActivity.objects.create(
+                team=self.team,
+                project=task.project,
+                task=task,
+                actor=self.other,
+                action_type=TaskActivityActionType.TITLE,
+            )
+            TaskActivity.objects.filter(pk=row.pk).update(
+                ts_created_at=datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+            )
+
+    def _counted(self, ids):
+        res = self.client.get(
+            self.url,
+            {
+                "team_id": self.team.team_id,
+                "task_ids": ",".join(str(i) for i in ids),
+                "start": self.DAY.isoformat(),
+                "end": self.DAY.isoformat(),
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        return res.data["velocity"][0]["updated"]
+
+    def test_same_answer_as_can_access_task_for_every_case(self):
+        # A leaver: their team row is soft-deleted and their project rows are gone, so a held
+        # task in a project they are not on is refused.
+        left_team = TeamMaster.objects.create(
+            team_name="Left", team_email="left@example.com", owner=self.other
+        )
+        TeamMembers.objects.create(team=left_team, attendee=self.caller, is_deleted=True)
+        left_project = ProjectMaster.objects.create(
+            team=left_team, project_name="L", owner=self.other, project_system_user=self.other
+        )
+
+        member = self._project("member", member=True)
+        owned = self._project("owned", owner=self.caller)
+        outside = self._project("outside")
+        gone = self._project("gone", member=True, deleted=True)
+        cases = {
+            "project member": (self._task(member), True),
+            "project owner": (self._task(owned), True),
+            "assignee on the team": (self._task(outside, assignee=self.caller), True),
+            "reporter on the team": (self._task(outside, reporter=self.caller), True),
+            "holder of a task in no project": (self._task(None, assignee=self.caller), True),
+            "holder who left the team": (
+                TaskMaster.objects.create(
+                    team=left_team,
+                    project=left_project,
+                    title="T",
+                    status="Open",
+                    assignee=self.caller,
+                ),
+                False,
+            ),
+            "stranger": (self._task(outside, assignee=self.other), False),
+            "deleted task": (self._task(member, is_deleted=True), False),
+            "task of a deleted project": (self._task(gone, assignee=self.caller), False),
+        }
+        tasks = [task for task, _ in cases.values()]
+        self._touch(*tasks)
+        for name, (task, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(can_access_task(task.task_id, self.caller.id), expected)
+                self.assertEqual(self._counted([task.task_id]), int(expected))
+        # All of them at once, with ids that name nothing: the same set.
+        ids = [t.task_id for t in tasks] + [987_654_321, 10**30]
+        self.assertEqual(self._counted(ids), sum(expected for _, expected in cases.values()))
+
+    def _queries(self, ids):
+        seen = []
+
+        def record(execute, sql, params, many, context):
+            seen.append(sql)
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(record):
+            self._counted(ids)
+        return len(seen)
+
+    def test_query_count_does_not_grow_with_the_ids(self):
+        member = self._project("member", member=True)
+        outside = self._project("outside")
+        # Both kinds of reader, so the holder's team lookup is in both counts.
+        tasks = [self._task(member) for _ in range(40)]
+        tasks += [self._task(outside, assignee=self.caller) for _ in range(40)]
+        self._touch(*tasks)
+        few = [tasks[0].task_id, tasks[40].task_id]
+        self.assertEqual(self._queries([t.task_id for t in tasks]), self._queries(few))

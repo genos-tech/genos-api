@@ -145,8 +145,9 @@ def task_reader_pairs(
     queries, five when a holder who is not on the project is among the pairs, however many
     recipients and tasks.
 
-    The ONE place this rule is written for the mention card, the activity feed's gate and the
-    comment-mention row (MIP-1598); `tests/test_mention_followups.py` pins it equal to
+    The ONE place this rule is written for the mention card, the activity feed's gate, the
+    comment-mention row (MIP-1598) and the Pace chart's id list (MIP-2552);
+    `tests/test_mention_followups.py` pins it equal to
     `can_access_task` over every kind of person, so a change to the rule there shows up here."""
     from origin.models.project.prj_models import ProjectMaster, ProjectMembers
     from origin.models.task.task_models import TaskMaster
