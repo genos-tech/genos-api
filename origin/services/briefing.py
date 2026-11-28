@@ -329,6 +329,14 @@ _NAMED_VALUES = (
 )
 
 
+def activity_words(ctx: ToolContext, rows: list, *, viewer_id: Any) -> HistoryWords:
+    """The names the briefing's lines need for `rows`: only the rows whose values it prints as
+    ids are looked up, so a page without one costs no query."""
+    return HistoryWords(
+        ctx, [r for r in rows if r.action_type in _NAMED_VALUES], viewer_id=viewer_id
+    )
+
+
 def _activity_event(
     row: TaskActivity,
     me: str,
@@ -516,7 +524,7 @@ def _changed_tasks(
     readable = LabelAccess(ctx).tasks(candidate_ids)
 
     by_task: dict[int, list[dict[str, Any]]] = {}
-    words = HistoryWords(ctx, [a for a in activities if a.task_id in readable], viewer_id=me)
+    words = activity_words(ctx, [a for a in activities if a.task_id in readable], viewer_id=me)
     for row in activities:
         if row.task_id in readable:
             by_task.setdefault(row.task_id, []).append(
@@ -1609,7 +1617,9 @@ def _did_in(
         {a.task_id for a in acts + automation} | {c.task_id for c in comments}
     )
     by_task: dict[int, list[tuple[datetime, dict[str, Any]]]] = {}
-    words = HistoryWords(ctx, [a for a in acts + automation if a.task_id in readable], viewer_id=me)
+    words = activity_words(
+        ctx, [a for a in acts + automation if a.task_id in readable], viewer_id=me
+    )
     for row in acts + automation:
         if row.task_id in readable:
             event = _activity_event(row, me, names, words, fence=True)

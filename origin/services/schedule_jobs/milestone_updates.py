@@ -21,7 +21,6 @@ from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.get_milestone_summary import GET_MILESTONE_SUMMARY
 from origin.services import briefing
-from origin.services.history_words import HistoryWords
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import (
@@ -106,7 +105,9 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     by_task: dict[int, dict[str, Any]] = {}
     # In a chat other people read nothing is "you": the owner is one reader of several.
     viewer = "" if shared else ctx.user_id
-    words = HistoryWords(ctx, [a for a in activities if a.task_id in readable], viewer_id=viewer)
+    words = briefing.activity_words(
+        ctx, [a for a in activities if a.task_id in readable], viewer_id=viewer
+    )
     for a in activities:
         if a.task_id in readable:
             event = briefing.activity_event(a, viewer, words)

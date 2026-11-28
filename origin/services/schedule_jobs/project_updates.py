@@ -37,7 +37,6 @@ from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUMMARY
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.services import briefing
-from origin.services.history_words import HistoryWords
 from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import (
     AI_SUMMARY_PARAM,
@@ -222,7 +221,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ]
     )
 
-    words = HistoryWords(
+    words = briefing.activity_words(
         ctx,
         [r for _, r in done_rows[:MAX_LIST] + moved_rows[:MAX_LIST]],
         viewer_id="" if params.get(SHARED_KEY) else ctx.user_id,

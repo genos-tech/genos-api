@@ -674,7 +674,7 @@ def _history(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMaster,
     if count:
         return _count_rows(sc, qs, time="ts_created_at")
     rows = _page_rows(sc, qs, time="ts_created_at", tie=("pk",), rank=RANK_ACTIVITY)
-    words = HistoryWords(sc.ctx, rows, viewer_id=sc.me)
+    words = briefing.activity_words(sc.ctx, rows, viewer_id=sc.me)
     return [
         e
         for r in rows
@@ -1159,7 +1159,7 @@ def _claim_events(sc: Scope, kinds: frozenset[str], count: bool, task: TaskMaste
     out: list[TEv] = []
     page = _page_rows(sc, qs, time="ts_created_at", tie=("pk",), rank=RANK_ACTIVITY)
     # A headline of a task the caller cannot open carries no words (below), so none are looked up.
-    words = HistoryWords(sc.ctx, page if can_open else [], viewer_id=sc.me)
+    words = briefing.activity_words(sc.ctx, page if can_open else [], viewer_id=sc.me)
     for row in page:
         ev = _activity_event(sc, row, task=task, own=False, words=words)
         if ev is None:
