@@ -216,8 +216,8 @@ def _stand(summary: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str
     breakdown = [
         {"label": s, "count": n}
         for s, n in (summary.get("status_breakdown") or {}).items()
-        # Rejected and Deleted are not in the total, and the page has no segment for them
-        # (MIP-2494, MIP-2527).
+        # The page's status bar has no segment for Rejected or Deleted: one such label turns
+        # it into generic bars (MIP-2494, MIP-2527).
         if n and s not in UNCOUNTED_STATUSES
     ]
     total = summary.get("total_tasks") or 0
