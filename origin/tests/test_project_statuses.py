@@ -11,6 +11,7 @@ from django.urls import reverse
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectStatus
+from origin.models.task.automation_models import AutomationRule
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.services import task_ancestry, task_card_post
@@ -221,6 +222,52 @@ class StatusListApiTests(StatusTestBase):
         self.assertEqual(self.client.patch(url, {"name": "WIP"}, format="json").status_code, 200)
         moved = self.client.patch(url, {"category": "Open"}, format="json")
         self.assertEqual(moved.data["code"], "category_fixed")
+
+    def test_category_changes_only_while_nothing_holds_the_status(self):
+        ready = self.add("Ready", "Open", is_default=True)
+        url = self.url(status_id=ready.status_id)
+        # A task that no longer reads as it (stale pointer) does not count, and is let go.
+        stale = self.task("Open", ready)
+        TaskMaster.objects.filter(pk=stale.pk).update(status="Closed")
+        response = self.client.patch(url, {"category": "WIP"}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        ready = self.fresh(ready)
+        self.assertEqual((ready.category, ready.is_default), ("WIP", False))
+        self.assertTrue(self.builtin("Open").is_default)
+        names = [r["name"] for r in response.data["statuses"]]
+        self.assertEqual(names[:4], ["Open", "In Review", "WIP", "Ready"])
+        stale.refresh_from_db()
+        self.assertIsNone(stale.custom_status_id)
+        bad = self.client.patch(url, {"category": "Nope"}, format="json")
+        self.assertEqual(bad.data["code"], "bad_category")
+
+        self.task("WIP", ready)
+        held = self.client.patch(url, {"category": "Open", "name": "New"}, format="json")
+        self.assertEqual((held.data["code"], held.data["inUse"]), ("status_in_use", 1))
+        # Refused as a whole: nothing was written.
+        self.assertEqual(self.fresh(ready).name, "Ready")
+
+    def test_category_of_a_status_a_rule_names_is_kept(self):
+        for field in ("set_custom_status", "trigger_value", "conditions"):
+            row = self.add(f"R {field[:10]}", "Open")
+            value = {
+                "set_custom_status": row,
+                "trigger_value": {"custom_status_id": row.status_id},
+                "conditions": [{"field": "custom_status", "op": "is", "value": row.status_id}],
+            }[field]
+            AutomationRule.objects.create(
+                team=self.team,
+                project=self.project,
+                name=field,
+                trigger_type="created" if field != "trigger_value" else "status_changed",
+                owner=self.user,
+                **{field: value},
+            )
+            response = self.client.patch(
+                self.url(status_id=row.status_id), {"category": "WIP"}, format="json"
+            )
+            self.assertEqual(response.data["code"], "status_in_rules", field)
+            self.assertEqual(self.fresh(row).category, "Open", field)
 
     def test_reorder_stays_grouped(self):
         ready = self.add("Ready", "Open")
