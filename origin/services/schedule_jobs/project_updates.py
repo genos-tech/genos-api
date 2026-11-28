@@ -37,6 +37,7 @@ from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUMMARY
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.services import briefing
+from origin.services.history_words import HistoryWords
 from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import (
     AI_SUMMARY_PARAM,
@@ -221,6 +222,12 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ]
     )
 
+    words = HistoryWords(
+        ctx,
+        [r for _, r in done_rows[:MAX_LIST] + moved_rows[:MAX_LIST]],
+        viewer_id="" if params.get(SHARED_KEY) else ctx.user_id,
+    )
+
     def line(task: Any, said: str):
         return links.task_item(
             f"{task.display_id} · {task.title or 'untitled'}: {said}", task.task_id, said
@@ -229,7 +236,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     def moved_line(task: Any, row: TaskActivity):
         # In a chat other people read nothing is "you": the owner is one reader of several.
         viewer = "" if params.get(SHARED_KEY) else ctx.user_id
-        said = f"{briefing.activity_event(row, viewer)['summary']} by {who(row)}"
+        said = f"{briefing.activity_event(row, viewer, words)['summary']} by {who(row)}"
         return line(task, said)
 
     def capped(items: list, total: int) -> list:

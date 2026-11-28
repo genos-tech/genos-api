@@ -133,6 +133,7 @@ from origin.services.description_edit_runs import (
     keeps_previous_body,
     via_identity,
 )
+from origin.services.history_words import HistoryWords
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.plain_text import body_text, chip_task_ids, message_text
 from origin.services.user_time import zone_for_user_id
@@ -422,8 +423,9 @@ def _read_history(rd: _Reader) -> None:
         .exclude(actor__isnull=True, action_type=TaskActivityActionType.CREATED)
         .order_by("-ts_created_at", "-pk"),
     )
+    words = HistoryWords(rd.ctx, activities, viewer_id=rd.me)
     for row in activities:
-        shaped = briefing.activity_event(row, rd.me)
+        shaped = briefing.activity_event(row, rd.me, words)
         rd.add(
             row.task_id,
             Ev(

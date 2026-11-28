@@ -21,6 +21,7 @@ from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.get_milestone_summary import GET_MILESTONE_SUMMARY
 from origin.services import briefing
+from origin.services.history_words import HistoryWords
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import (
@@ -103,10 +104,12 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     if shared:
         readable = {i: t for i, t in readable.items() if t.project_id == milestone.project_id}
     by_task: dict[int, dict[str, Any]] = {}
+    # In a chat other people read nothing is "you": the owner is one reader of several.
+    viewer = "" if shared else ctx.user_id
+    words = HistoryWords(ctx, [a for a in activities if a.task_id in readable], viewer_id=viewer)
     for a in activities:
         if a.task_id in readable:
-            # In a chat other people read nothing is "you": the owner is one reader of several.
-            event = briefing.activity_event(a, "" if params.get(SHARED_KEY) else ctx.user_id)
+            event = briefing.activity_event(a, viewer, words)
             slot = by_task.setdefault(
                 a.task_id, {"at": a.ts_created_at, "n": 0, "what": "", "who": None, "label": None}
             )
