@@ -8,7 +8,6 @@ the attachment detached with its file in storage.
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 from io import StringIO
 from unittest import mock
@@ -29,6 +28,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services import detached_note_attachments as svc
+from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_OWNER
 
@@ -42,7 +42,7 @@ class DetachedBase(BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
-        shutil.rmtree(_MEDIA_ROOT, ignore_errors=True)
+        remove_media_root(_MEDIA_ROOT)
 
     def setUp(self):
         super().setUp()
