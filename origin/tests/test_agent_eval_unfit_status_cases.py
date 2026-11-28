@@ -58,5 +58,5 @@ class UnfitReplyTests(RunnerBase):
                 default=str,
             )
             self.assertIn("list the status names", sent)
-            self.assertIn("In Review", sent)
+            self.assertIn("Ready", sent)
             self.assertLess(sent.index("tell_the_member"), sent.index('"suggestions"'))
