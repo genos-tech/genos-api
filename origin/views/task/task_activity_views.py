@@ -68,13 +68,12 @@ def _metadata_for_viewer(row: TaskActivity, viewer_id) -> dict:
 
 
 def _cut_hidden_labels(rows: list[TaskActivity], task_id: int, viewer_id) -> None:
-    """Take out of the rows' metadata (in memory, never saved) the project, milestone,
-    sprint and parent names this reader may not see (MIP-2523)."""
+    """Take out of the rows (in memory, never saved) the project, milestone, sprint, parent,
+    custom field and custom status names this reader may not see (MIP-2523, MIP-2532)."""
     project_id = TaskMaster.objects.filter(pk=task_id).values_list("project_id", flat=True).first()
     labels = HistoryLabels(rows, viewer_id=viewer_id, task_project_id=project_id)
     for row in rows:
-        if row.metadata:
-            row.metadata = labels.metadata(row, row.metadata)
+        labels.cut(row)
 
 
 def _serialize_activity(row: TaskActivity, viewer_id) -> dict:

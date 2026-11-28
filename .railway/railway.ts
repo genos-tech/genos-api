@@ -414,6 +414,10 @@ export default defineRailway(() => {
       AGENT_TWO_TIER_LOOP: preserve(),
       LLM_LOG_USAGE_METADATA: preserve(),
       MCP_RESULT_LIMITS: preserve(),
+      // Tools a skill run is offered: unset is off. The comments-waiting-on-me skill needs the first (MIP-2485);
+      // the second lets list_uncompleted_todos look past today (MIP-2514).
+      AGENT_INAPP_WAITING_COMMENTS_TOOL: preserve(),
+      AGENT_TODO_DAYS_AHEAD: preserve(),
       // A skill run's search: the index, and the embedder that turns the query into a vector.
       EMBEDDING_PROVIDER: preserve(),
       OPENAI_EMBEDDING_DIMENSIONS: preserve(),
