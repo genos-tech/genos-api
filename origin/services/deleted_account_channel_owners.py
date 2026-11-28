@@ -21,7 +21,8 @@ The rule, per kind. A chat is NEVER deleted.
   account that is still on the team). Ken's decision: when they are not on the project they are
   ADDED (a `ProjectMembers` row; its signal mirrors them into the chat), so the team owner gains
   a seat there; one already on it gets no second row. No live team owner: left as is, counted.
-* **DM and MDM**: not touched (they have no owner role).
+* **DM and MDM**: not touched here. A multi-person DM whose creator's account was deleted lets
+  any member remove people (`channel_views`, MIP-2549).
 
 Only chats whose owner is the one deleted account are selected, and only that owner's own role
 column is rewritten. A live account is never passed in: `prune` selects by `owner__is_deleted`,
@@ -91,6 +92,12 @@ def _reassign_group(channel: Channel, dead_id) -> str:
                 role="owner"
             )
     return "transferred" if new_id is not None else "ownerless"
+
+
+def reassign_owner_after_leave(channel: Channel, leaver_id) -> str:
+    """The creator of a multi-person DM left it (MIP-2549): the longest-standing member takes
+    it over, by the same rule as a group whose owner's account was deleted."""
+    return _reassign_group(channel, leaver_id)
 
 
 def _reassign_project_chat(channel: Channel, dead_id) -> str:
