@@ -30,6 +30,7 @@ from origin.views.utils.scope_guards import can_access_task, is_project_member, 
 #: Input keys of a rule's definition; a PATCH replaces the ones it names.
 _DEFINITION = (
     "name",
+    "applies_to",
     "trigger_type",
     "trigger_value",
     "conditions",

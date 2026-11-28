@@ -112,6 +112,7 @@ from origin.views.project.archive_views import (
     GroupChatChangesView,
     GroupChatRestoreView,
 )
+from origin.views.task.task_card_views import TaskCardsView
 
 urlpatterns = [
     # Channels
@@ -200,6 +201,12 @@ urlpatterns = [
         "api/v3/messages/<uuid:message_id>/",
         MessageDetailView.as_view(),
         name="v3_message_detail",
+    ),
+    # The live fields of the PM task and milestone cards
+    path(
+        "api/v3/tasks/cards/",
+        TaskCardsView.as_view(),
+        name="v3_task_cards",
     ),
     # Task-card header message (rewrite the PM card body after a task edit)
     path(

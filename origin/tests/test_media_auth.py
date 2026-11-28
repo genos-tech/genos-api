@@ -22,7 +22,6 @@ Files are written into a throwaway MEDIA_ROOT, per test, because the
 paths embed real primary keys.
 """
 
-import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -36,6 +35,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.common.media_views import _is_public_media
 
@@ -54,7 +54,7 @@ class MediaTestBase(BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
-        shutil.rmtree(_MEDIA_ROOT, ignore_errors=True)
+        remove_media_root(_MEDIA_ROOT)
 
     def as_user(self, user=None):
         """Authenticate via the refresh cookie — the path a browser

@@ -93,10 +93,33 @@ def milestone_work_counts(milestones, *, ancestor_rule: bool = False) -> dict[in
     columns) so the ancestors are at hand. The agent/MCP rollups keep
     `ancestor_rule=False` until the December eval (what the model sees must not move).
     """
+    counts = {m.milestone_id: [0, 0] for m in milestones}
+    for owner, _status, closed in _milestone_work_rows(milestones, ancestor_rule=ancestor_rule):
+        counts[owner][0] += 1
+        if closed:
+            counts[owner][1] += 1
+    return {milestone_id: (total, closed) for milestone_id, (total, closed) in counts.items()}
+
+
+def milestone_status_counts(milestones) -> dict[int, dict[str, int]]:
+    """`{milestone_id: {status: tasks}}` for the chat card's status bar (MIP-2484), in ONE query.
+
+    The progress bar's own reading (`milestone_work_counts(ancestor_rule=True)`, whose rows
+    these are): a task that reads as closed there counts under "Closed" here, whatever its
+    own status says, so the "Closed" figure and the sum equal that bar's closed and total.
+    """
+    counts: dict[int, dict[str, int]] = {m.milestone_id: defaultdict(int) for m in milestones}
+    for owner, task_status, closed in _milestone_work_rows(milestones, ancestor_rule=True):
+        counts[owner]["Closed" if closed else task_status or "Open"] += 1
+    return {milestone_id: dict(by_status) for milestone_id, by_status in counts.items()}
+
+
+def _milestone_work_rows(milestones, *, ancestor_rule: bool):
+    """`(owner milestone id, status, reads as closed)` for each task of each milestone, by the
+    rules `milestone_work_counts` describes. One query (none for no milestones)."""
     by_id = {m.milestone_id: m for m in milestones}
-    counts = {milestone_id: [0, 0] for milestone_id in by_id}
     if not by_id:
-        return {}
+        return
     by_backing = defaultdict(list)
     for m in by_id.values():
         if m.task_id is not None:
@@ -122,18 +145,17 @@ def milestone_work_counts(milestones, *, ancestor_rule: bool = False) -> dict[in
         if reads in UNCOUNTED_STATUSES:
             continue  # deleted or rejected: not progress either way
         owners = set()
-        if milestone_id in counts:
+        if milestone_id in by_id:
             owners.add(milestone_id)
         if parent_task_id is not None and not is_milestone:
             owners.update(by_backing.get(parent_task_id, ()))
         for owner in owners:
             if task_id == by_id[owner].task_id:
                 continue  # the milestone's own backing row is not its work
-            counts[owner][0] += 1
-            if (
+            yield (
+                owner,
+                task_status,
                 reads == "Closed"
                 # a milestone without a backing row yet has no ancestor to read
-                or (ancestor_rule and by_id[owner].status == "Closed")
-            ):
-                counts[owner][1] += 1
-    return {milestone_id: (total, closed) for milestone_id, (total, closed) in counts.items()}
+                or (ancestor_rule and by_id[owner].status == "Closed"),
+            )

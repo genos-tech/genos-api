@@ -18,6 +18,7 @@ these helpers risks drifting the two representations apart.
 from datetime import date, datetime
 
 from origin.models.common.user_models import CustomUser
+from origin.models.task.automation_models import AutomationTrigger
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 
@@ -134,13 +135,17 @@ def sync_backing_task(milestone: MilestoneMaster) -> None:
     backing.save()
 
 
-def sync_milestone_assignees(milestone: MilestoneMaster, assignee_ids) -> list[str]:
+def sync_milestone_assignees(
+    milestone: MilestoneMaster, assignee_ids, *, capture: bool = True
+) -> list[str]:
     """Reconcile the multi-assignee join table to exactly `assignee_ids`.
 
     Returns the ids of the people it ADDED (as strings), so a caller that is changing an
     existing milestone can tell them (`task_assignment_notice.notify_milestone_assigned`,
     MIP-1464). The creating caller ignores it: the milestone's card already `@`-mentions
-    everyone on it, and telling them here as well would ping them twice."""
+    everyone on it, and telling them here as well would ping them twice.
+
+    `capture=False` (creation) says this is no change an automation rule reacts to."""
     # `CustomUser.id` is a UUID, so keep ids as strings here. We
     # normalize to `str(...)` so comparisons with `user_id` (which
     # comes back from the ORM as a `UUID`) match consistently.
@@ -174,7 +179,20 @@ def sync_milestone_assignees(milestone: MilestoneMaster, assignee_ids) -> list[s
         from origin.services.task_card_post import schedule_refresh  # noqa: PLC0415
 
         schedule_refresh(milestone_id=milestone.milestone_id)
+        if capture:
+            offer_assignee_change(milestone, added)
     return added
+
+
+def offer_assignee_change(milestone: MilestoneMaster, added: list[str]) -> None:
+    """Tell the automation rules (MIP-2521) that a milestone's people changed."""
+    from origin.services import automation_engine  # noqa: PLC0415 - cycle
+
+    automation_engine.offer_milestone(
+        milestone,
+        AutomationTrigger.ASSIGNEE_CHANGED,
+        {"assignees_added": sorted(str(u) for u in added)},
+    )
 
 
 def create_milestone(
@@ -228,8 +246,12 @@ def create_milestone(
     )
     ensure_backing_task(milestone)
     if assignee_ids:
-        sync_milestone_assignees(milestone, assignee_ids)
+        sync_milestone_assignees(milestone, assignee_ids, capture=False)
         # The backing task was created above with the reporter as its
         # assignee; now the milestone has assignees, mirror the first (MIP-916).
         sync_backing_task(milestone)
+    from origin.services import automation_engine  # noqa: PLC0415 - cycle
+
+    # Looked at when the writer finishes, so the tasks filed with it are in it by then.
+    automation_engine.offer_milestone(milestone, AutomationTrigger.CREATED)
     return milestone

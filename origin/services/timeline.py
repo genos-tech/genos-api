@@ -142,6 +142,7 @@ CHIP_NOTE_SCAN = 1000
 SYSTEM_NOTICES = {
     "task_closed": "the task made from this thread was closed",
     "task_created": "a task was made from this thread",
+    "task_moved_by_rule": "a project rule moved a task to another project",
 }
 
 _NOT_FOUND = {

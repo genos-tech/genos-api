@@ -10,7 +10,6 @@ files and search chunks after the commit.
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 from unittest import mock
 
@@ -51,6 +50,7 @@ from origin.models.task.task_models import (
 from origin.models.task.task_recent_models import TaskRecent
 from origin.services import force_delete as svc
 from origin.services import unified_writer
+from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR, ROLE_OWNER
 
@@ -77,7 +77,7 @@ class Base(BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
-        shutil.rmtree(_MEDIA, ignore_errors=True)
+        remove_media_root(_MEDIA)
 
     def setUp(self):
         super().setUp()
