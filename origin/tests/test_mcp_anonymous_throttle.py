@@ -27,6 +27,7 @@ from origin.views.public import anonymous_throttle
 from origin.views.public.anonymous_throttle import McpAnonymousThrottle, bucket_for
 from origin.views.public.permissions import PublicApiThrottle
 
+from .security_clock import MidMinute
 from .test_mcp_endpoint import McpBase
 
 BAD_KEY = "ApiKey gnos_not_a_real_key_0123456789"
@@ -44,12 +45,18 @@ def _factory_request(remote, xff=None):
     return RequestFactory().get("/", **extra)
 
 
-class Base(McpBase):
+class Base(MidMinute, McpBase):
+    # Both limiters count in fixed windows: a real clock crossing a minute between the three
+    # allowed calls and the fourth lets the fourth through (MIP-2542). `throttles` is pinned too,
+    # for the authenticated limit and the denial counter.
+    clock_modules = (anonymous_throttle, throttles)
+
     def setUp(self):
         super().setUp()
         cache.clear()
         self.addCleanup(cache.clear)
         # A cache error elsewhere opens a 5 s breaker that would make every later throttle allow.
+        throttles._down_until = 0.0
         self.addCleanup(setattr, throttles, "_down_until", 0.0)
         patcher = mock.patch.object(McpAnonymousThrottle, "rate", "3/min")
         patcher.start()
