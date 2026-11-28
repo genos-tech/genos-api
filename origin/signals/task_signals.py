@@ -670,6 +670,13 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
                     into=rows,
                 )
     _insert_collected(rows)
+    moved = columns.intersection(_MEMBERSHIP_FIELDS)
+    if moved:
+        _refresh_milestone_progress(
+            (before[row["pk"]], row)
+            for row in TaskMaster.objects.filter(pk__in=ids).values("pk", *_MEMBERSHIP_FIELDS)
+            if row["pk"] in before and not before[row["pk"]]["is_init_task"]
+        )
     # A queryset update fires no signal, so a cascade that wrote a field the chat card shows
     # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483). So does
     # one that moved tasks to another custom status (a delete with a replacement, MIP-2493).
@@ -925,6 +932,9 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
 
     if card_changed:
         _schedule_card_refresh(task_id=instance.task_id)
+    _refresh_milestone_progress(
+        [(original, {f: getattr(instance, f) for f in (*_MEMBERSHIP_FIELDS, "is_deleted")})]
+    )
 
     _offer_automation(instance, original, status_label_change, update_fields)
 
@@ -1031,6 +1041,35 @@ def _tag_names(tags) -> set:
     return {str(t["tagName"]) for t in tags if isinstance(t, dict) and t.get("tagName")}
 
 
+# The columns that say which milestone's progress a task counts in, and whether it counts.
+_MEMBERSHIP_FIELDS = ("milestone_id", "parent_task_id", "status")
+
+
+def _refresh_milestone_progress(changes) -> None:
+    """For each `(before, after)` row of a changed task: when it moved into or out of a milestone,
+    or was deleted or brought back, refresh that milestone's card (MIP-2570). Rows are dicts of
+    `_MEMBERSHIP_FIELDS` (and `is_deleted` where the write can change it); a column a row does
+    not carry did not change. No query here: a bulk cascade passes many rows."""
+    milestone_ids: set = set()
+    parent_task_ids: set = set()
+    for before, after in changes:
+
+        def changed(field) -> bool:
+            return field in before and field in after and before[field] != after[field]
+
+        # Other status changes rewrite the task's own card, which the open chat already hears.
+        gone = changed("is_deleted") or (
+            changed("status") and "Deleted" in (before["status"], after["status"])
+        )
+        for field, ids in (("milestone_id", milestone_ids), ("parent_task_id", parent_task_ids)):
+            if gone or changed(field):
+                ids.update(row[field] for row in (before, after) if field in row)
+    if milestone_ids or parent_task_ids:
+        from origin.services.task_card_post import schedule_membership_refresh  # noqa: PLC0415
+
+        schedule_membership_refresh(milestone_ids=milestone_ids, parent_task_ids=parent_task_ids)
+
+
 def _schedule_card_refresh(*, task_id=None, milestone_id=None) -> None:
     """Bring the chat card up to date once the write commits (MIP-1460); see
     `task_card_post.schedule_refresh`."""
@@ -1050,6 +1089,18 @@ def _schedule_task_webhook(instance, *, created: bool, status_changed_to=None) -
         _webhook_logger.warning(
             "task webhook scheduling failed for task=%s", instance.pk, exc_info=True
         )
+
+
+@receiver(post_delete, sender=TaskMaster)
+def task_delete_refreshes_milestone(sender, instance: TaskMaster, **kwargs):
+    """A hard delete takes the task out of its milestone's progress (MIP-2570)."""
+    if instance.is_init_task:
+        return
+    from origin.services.task_card_post import schedule_membership_refresh  # noqa: PLC0415
+
+    schedule_membership_refresh(
+        milestone_ids=[instance.milestone_id], parent_task_ids=[instance.parent_task_id]
+    )
 
 
 # ---------------------------------------------------------------------------
