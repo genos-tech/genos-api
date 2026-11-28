@@ -146,7 +146,7 @@ def task_reader_pairs(
     recipients and tasks.
 
     The ONE place this rule is written for the mention card, the activity feed's gate, the
-    comment-mention row (MIP-1598) and the Pace chart's id list (MIP-2552);
+    comment-mention row (MIP-1598) and the Pace chart's and burndown's id lists (MIP-2552, MIP-2584);
     `tests/test_mention_followups.py` pins it equal to
     `can_access_task` over every kind of person, so a change to the rule there shows up here."""
     from origin.models.project.prj_models import ProjectMaster, ProjectMembers
