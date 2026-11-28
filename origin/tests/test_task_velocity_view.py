@@ -358,3 +358,23 @@ class TaskVelocityAccessBatchTests(BaseAPITestCase):
         self._touch(*tasks)
         few = [tasks[0].task_id, tasks[40].task_id]
         self.assertEqual(self._queries([t.task_id for t in tasks]), self._queries(few))
+
+
+class TaskBurndownAccessBatchTests(TaskVelocityAccessBatchTests):
+    """The burndown narrows its ids the same way (MIP-2584): the two tests above, on its URL."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("milestone_burndown")
+
+    def _counted(self, ids):
+        res = self.client.get(
+            self.url,
+            {
+                "task_ids": ",".join(str(i) for i in ids),
+                "start": self.DAY.isoformat(),
+                "end": self.DAY.isoformat(),
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        return res.data["total"]

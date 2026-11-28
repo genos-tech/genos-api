@@ -827,7 +827,7 @@ REGISTRY = {
     "origin.views.task.sprint_views.SprintConfigView": checked("is_project_member"),
     "origin.views.task.sprint_views.SprintView": checked("is_project_member"),
     # views.task.task_activity_views
-    "origin.views.task.task_activity_views.MilestoneBurndownView": checked("can_access_task"),
+    "origin.views.task.task_activity_views.MilestoneBurndownView": checked("task_reader_pairs"),
     "origin.views.task.task_activity_views.TaskActivityListView": checked("can_access_task"),
     "origin.views.task.task_activity_views.TaskBodyRestoreView": checked("can_access_task"),
     "origin.views.task.task_activity_views.TaskVelocityView": checked("task_reader_pairs"),
