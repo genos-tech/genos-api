@@ -88,10 +88,11 @@ class CountsTests(MoreTools):
         off, on_ = self.on_off("get_team_task_summary")
         self.assertEqual(off["status_breakdown"]["Closed"] + 4, on_["status_breakdown"]["Closed"])
         self.assertEqual(off["status_breakdown"]["Deleted"] + 2, on_["status_breakdown"]["Deleted"])
-        self.assertEqual(off["total_tasks"], on_["total_tasks"])
+        # the two that read as Deleted are in no total (MIP-2581)
+        self.assertEqual(off["total_tasks"] - 2, on_["total_tasks"])
         self.assertEqual(off["overdue_count"] - 1, on_["overdue_count"])
         (p_off,), (p_on,) = off["per_project"], on_["per_project"]
-        self.assertEqual(p_off["total"], p_on["total"])
+        self.assertEqual(p_off["total"] - 2, p_on["total"])
         self.assertEqual(p_off["overdue"] - 1, p_on["overdue"])
         self.assertLess(p_on["open"], p_off["open"])
 
