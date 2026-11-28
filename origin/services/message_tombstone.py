@@ -8,6 +8,7 @@ incremental sync all hang on it), so what a delete removes is everything that SA
   * `metadata` except the id keys a tombstone is still found by (`KEPT_METADATA_KEYS`): the
     client posts `metadata` as it likes, so a key we do not know is dropped, not trusted;
   * the `MessageMention` rows (who was named is part of what was said);
+  * its `MessagePin` row, so it leaves the chat's pinned messages (MIP-2487);
   * the original file names of the `MessageAttachment` rows. The rows and the stored files stay:
     removing files is a purge with its own decision (MIP-1785);
   * the cached summary of the message's thread (`ThreadSummary`, an LLM digest of the replies),
@@ -31,7 +32,12 @@ from typing import Any
 from django.db.models import Q
 from django.utils import timezone
 
-from origin.models.chat.unified_models import Message, MessageAttachment, MessageMention
+from origin.models.chat.unified_models import (
+    Message,
+    MessageAttachment,
+    MessageMention,
+    MessagePin,
+)
 from origin.models.common.erasure_models import ErasureObjectType
 from origin.services import erasure_log, message_via, thread_summary_cleanup
 
@@ -81,6 +87,8 @@ def tombstone_message(message: Message, *, now: datetime | None = None) -> bool:
     message.metadata = tombstone_metadata(message.metadata)
     message.save(update_fields=["deleted_at", "body", "body_text", "metadata", "ts_updated_at"])
     MessageMention.objects.filter(message=message).delete()
+    # A deleted message is not pinned any more (MIP-2487).
+    MessagePin.objects.filter(message=message).delete()
     MessageAttachment.objects.filter(message=message).exclude(original_name="").update(
         original_name=""
     )

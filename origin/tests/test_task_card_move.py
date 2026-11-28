@@ -16,6 +16,7 @@ from origin.models.chat.unified_models import (
     Flag,
     Message,
     MessageMovedAway,
+    MessagePin,
     ReadCursor,
 )
 from origin.models.common.team_models import TeamMembers
@@ -565,3 +566,16 @@ class SubTaskAndAppMoveTests(MoveBase):
         self.assertFalse(Message.objects.filter(channel=self.channel).exists())
         text = self._card_of(backing).body
         self.assertTrue(text[0]["content"][0]["text"].startswith("🚩"))
+
+
+class MovedCardPinTests(MoveBase):
+    """A pin belongs to the chat it was made in (MIP-2487)."""
+
+    def test_moving_the_task_drops_the_cards_pin(self):
+        task = self._create(assignee_id=str(self.user.id))
+        card = self._card_of(task)
+        MessagePin.objects.create(channel=card.channel, message=card, pinned_by=self.user)
+
+        self._move(task)
+
+        self.assertFalse(MessagePin.objects.exists())

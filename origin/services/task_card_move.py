@@ -41,6 +41,7 @@ from origin.models.chat.unified_models import (
     Flag,
     Message,
     MessageMention,
+    MessagePin,
     MessageReminder,
     ReadCursor,
 )
@@ -222,6 +223,8 @@ def _write(plan, members) -> None:
         _step_back_read_cursors(source, messages)
         thread_summary_cleanup.forget_threads(channel_id=source.pk, thread_ids=card_ids)
         moved_messages.record_moved_away(source.pk, messages)
+        # A pin belongs to the chat it was made in (MIP-2487).
+        MessagePin.objects.filter(message_id__in=[m.pk for m in messages]).delete()
         _purge_thread_chunks(source.pk, card_ids)
 
     Message.objects.bulk_update(
