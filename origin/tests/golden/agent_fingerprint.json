@@ -2,7 +2,7 @@
   "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py record_agent_goldens` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
   "states": {
     "flags_off": {
-      "all": "fe90ca7022f2a194dfda77853181e74e111289413c093e1927adf853fde8cc1e",
+      "all": "3c78224eb100f472fa025a5dd53aa6e05c3bd418b4112f29745d892984eebe9a",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27488,
@@ -70,7 +70,7 @@
         },
         "result.b.get_project_summary": {
           "bytes": 299,
-          "sha256": "99d36b5164de53a86a2531f1ad3baf6862551300f333d3272b4d2b652d76dbcf"
+          "sha256": "43a02aeae01c0f7ea4cd6863e47bfdea16f57b1ec6d63a3f11facef30513a8ad"
         },
         "result.b.get_sprint_summary": {
           "bytes": 626,
@@ -187,7 +187,7 @@
       }
     },
     "production": {
-      "all": "5bf4075b6749ce91be03637671a7d7d597a002708c9f49d2a1fa622bd0402509",
+      "all": "80b4d3b71ceb441b95b74e1e336d0465630b0a0dd00c966fe60a01f10d44f070",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 28028,
@@ -255,7 +255,7 @@
         },
         "result.b.get_project_summary": {
           "bytes": 299,
-          "sha256": "3922dfdc3548e9cc8559460ceaff2b94e485da148feadd628684a2b793e56932"
+          "sha256": "fff3b8e3c15bd89da05df001b21357a970b5e2f68987a9424eb5dd5500c61030"
         },
         "result.b.get_sprint_summary": {
           "bytes": 626,

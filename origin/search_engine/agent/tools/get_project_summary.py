@@ -69,11 +69,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         is_init_task=False,
     )
 
-    total = qs.count()
-
-    # MIP-1478: with the flag, each task is read by its effective status (see `ancestor_rule`). One
-    # that reads as Deleted stays in the total and is in no bucket, as a task whose own status is
-    # Deleted already is. Off: `rule is None`, the code path is what it was.
+    # MIP-1478: with the flag, each task is read by its effective status (see `ancestor_rule`). Off:
+    # `rule is None`, the code path is what it was.
     rule = (
         ancestor_rule.rule_for_projects({project_id}, ctx.team_id)
         if ancestor_rule.enabled()
@@ -82,6 +79,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     sf = "status"
     if rule is not None:
         qs, sf = ancestor_rule.with_effective_status(qs, rule), "eff_status"
+
+    # Deleted means gone (MIP-2558, as for milestones): neither in a bucket nor in the total.
+    total = qs.exclude(**{sf: "Deleted"}).count()
 
     status_breakdown = {s: qs.filter(**{sf: s}).count() for s in _STATUS_LABELS}
     # Rejected (MIP-2494) has its own row and is no part of the total.
