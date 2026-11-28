@@ -262,7 +262,7 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                     (
                         _B,
                         "Tasks have a status (Open, WIP, Pending, Blocked, "
-                        "Closed), a priority, an assignee, optional "
+                        "Closed, Rejected: will not be done), a priority, an assignee, optional "
                         "collaborators, a due date, tags, and a rich "
                         "description with comments underneath.",
                     ),
@@ -2107,7 +2107,7 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                     "script asking on a timer. A team owner or editor adds an "
                     "https address in Settings → Developer and picks the "
                     "events it should receive:",
-                    (_B, "task.created, task.updated, task.completed"),
+                    (_B, "task.created, task.updated, task.completed, task.rejected"),
                     (_B, "task.comment_created"),
                     (
                         _B,
@@ -2320,7 +2320,7 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                 [
                     (
                         _B,
-                        "タスクには、ステータス（「未処理」、「進行中」、「保留中」、「ブロック中」、「完了」）、優先度、担当者、任意の共同作業者、期限、タグ、およびその下にコメントが記載された詳細な説明があります。",
+                        "タスクには、ステータス（「未処理」、「進行中」、「保留中」、「ブロック中」、「完了」、「Rejected」（対応しない））、優先度、担当者、任意の共同作業者、期限、タグ、およびその下にコメントが記載された詳細な説明があります。",
                     ),
                     (
                         _B,
@@ -3571,7 +3571,7 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                 "Webhook",
                 [
                     "Webhookとは、スクリプトがタイマーで定期的に問い合わせるのではなく、Genosがサーバーに通知を行う仕組みです。チームオーナーまたはエディターは、「設定」→「開発者」でHTTPSアドレスを追加し、受信するイベントを選択します：",
-                    (_B, "task.created、task.updated、task.completed"),
+                    (_B, "task.created、task.updated、task.completed、task.rejected"),
                     (_B, "task.comment_created"),
                     (
                         _B,

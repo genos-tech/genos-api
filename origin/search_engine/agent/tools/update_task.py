@@ -45,6 +45,7 @@ from origin.search_engine.agent.parity import (
     parity_on,
     task_move_on,
 )
+from origin.search_engine.agent.tools import custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -102,7 +103,7 @@ from origin.views.utils.scope_guards import is_team_member
 # other mirrored field shares its name across the two models.
 _MILESTONE_FIELD_ALIASES = {"content": "description"}
 
-_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"}
 # Canonical enums live in `frontend/.../taskMeta.ts`. Keep in sync —
 # a value outside the set still saves but renders without chip colour.
 _VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
@@ -196,6 +197,24 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "Nothing was changed. Use `delete_milestone` to delete it."
         )
 
+    # MIP-2494 (flag `AGENT_CUSTOM_STATUS`): a status named the project's way also sets `status`.
+    # A move in the same call leaves the name behind, so it is not applied then.
+    named = custom_status.requested(args)
+    moves = args.get("project_id") not in (None, "") and str(args["project_id"]) != str(
+        task.project_id
+    )
+    if named is not None and moves:
+        choice = custom_status.Choice(
+            suggestion={
+                "kind": custom_status.ARG,
+                "message": "`custom_status` was not applied: set it after the project move.",
+                "candidates": [],
+            }
+        )
+    else:
+        choice = custom_status.choose(task.project, named, requested_status=args.get("status"))
+    left_out = [choice.suggestion] if choice.suggestion else []
+
     display_id_before = task.display_id
     # Undo (`agent/undo.py`): the values this call is about to replace, taken
     # before the first one changes. A call that touches what undo cannot put
@@ -274,6 +293,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             changed.append("content")
 
     # --- status ---
+    if choice.status and args.get("status") in (None, ""):
+        args = {**args, "status": choice.status}
     if "status" in args and args["status"] is not None:
         new_status = args["status"]
         if new_status not in _VALID_STATUSES:
@@ -289,6 +310,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             task.status = new_status
             update_fields.append("status")
             changed.append("status")
+
+    # --- custom_status (after `status` is final) ---
+    if custom_status.apply_to(task, choice):
+        update_fields.append("custom_status")
+        changed.append("custom_status")
 
     # --- priority ---
     if "priority" in args and args["priority"] is not None:
@@ -537,6 +563,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "task_id": task_id,
             "changed_fields": [],
             **({"body_hash": body_hash(task.content)} if (edit_modes or base_hash) else {}),
+            **({"suggestions": left_out} if left_out else {}),
             "__summary__": f"No changes applied to task {task.display_id}.",
         }
 
@@ -664,6 +691,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "task_id": task_id,
             "changed_fields": [],
             **hash_field,
+            **({"suggestions": left_out} if left_out else {}),
             "__summary__": f"No changes applied to task {task.display_id}.",
         }
     result = {
@@ -681,8 +709,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             + (f" (was {display_id_before})" if task.display_id != display_id_before else "")
         ),
     }
-    if suggestions:
-        result["suggestions"] = suggestions
+    custom_status.add_to_tasks([result])
+    if suggestions or left_out:
+        result["suggestions"] = [*suggestions, *left_out]
     if move_report and (said := move_report_said(move_report)):
         # Task notes whose author is not on the destination lost their Owner role (a move back
         # writes it again), and who filed a moved task without being on the destination keeps
@@ -820,8 +849,8 @@ UPDATE_TASK = Tool(
             },
             "status": {
                 "type": "STRING",
-                "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
-                "description": "New status. Omit to leave unchanged.",
+                "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"],
+                "description": "New status. Rejected: will not be done. Omit to leave unchanged.",
             },
             "reason": {
                 "type": "STRING",

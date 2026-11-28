@@ -51,11 +51,12 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.services import realtime_push, unified_writer
 from origin.services.task_comment_ids import next_task_comment_id
+from origin.services.task_status_values import FINISHED_STATUSES
 
 logger = logging.getLogger("origin.pr_merge_comment")
 
 #: Statuses that are no longer open work, for a sub-task.
-_DONE = ("Closed", "Deleted")
+_DONE = FINISHED_STATUSES
 #: Open sub-tasks and other open PRs named in the comment; the rest is "and N more".
 MAX_LISTED = 5
 _TITLE_CHARS = 120
@@ -184,6 +185,10 @@ def build_markdown(
             paras.append("Reopen it, or finish those first.")
         else:
             paras.append("The task is Closed. No other linked PR or sub-task is open.")
+    elif status == "Rejected":
+        paras.append("The task is Rejected, so the merge did not close it.")
+        if open_prs:
+            paras.append(open_prs)
     elif other_prs:
         paras.append(f"The task stays open and waits for the other linked PRs. {open_prs}")
         if open_subtasks:

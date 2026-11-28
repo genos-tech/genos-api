@@ -40,8 +40,9 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext
+from origin.services.task_status_values import FINISHED_STATUSES
 
-_INACTIVE_STATUSES = ["Closed", "Deleted"]
+_INACTIVE_STATUSES = list(FINISHED_STATUSES)
 
 
 def _serialize_my_task(t: TaskMaster) -> dict[str, Any]:

@@ -27,7 +27,8 @@ from collections import defaultdict
 from django.db.models import Q
 
 from origin.models.task.task_models import TaskMaster
-from origin.services.task_ancestry import ancestor_verdicts
+from origin.services.task_ancestry import ancestor_verdicts, effective
+from origin.services.task_status_values import UNCOUNTED_STATUSES
 
 
 def milestone_tasks_q(milestone, *, own_row: bool = True, deleted: bool = True) -> Q:
@@ -60,15 +61,6 @@ def milestone_work_q(milestone) -> Q:
     return milestone_tasks_q(milestone, own_row=False, deleted=False)
 
 
-def _ancestor_verdicts(rows) -> dict[int, str]:
-    """`{task_id: "Closed" | "Deleted"}` for the rows under a Closed or Deleted ancestor.
-
-    The rule is `task_ancestry.ancestor_verdicts` (MIP-1413), the one walker the server has;
-    the progress bar only needs the verdict, not which ancestor gave it.
-    """
-    return {task_id: v.status for task_id, v in ancestor_verdicts(rows).items()}
-
-
 def milestone_work_counts(milestones, *, ancestor_rule: bool = False) -> dict[int, tuple[int, int]]:
     """`{milestone_id: (total, closed)}` for many milestones, in ONE query.
 
@@ -87,7 +79,7 @@ def milestone_work_counts(milestones, *, ancestor_rule: bool = False) -> dict[in
       * counted once per milestone, even when it matches both ways;
       * never the milestone's own backing row;
       * never a soft-deleted row, a create-form scaffold row, or a task whose
-        status is "Deleted".
+        status is "Deleted" or "Rejected" (MIP-2494: not done, and not remaining).
 
     A milestone without a backing row yet (legacy) counts through its FK only.
     Callers that need the full set of a single milestone still use
@@ -143,15 +135,15 @@ def _milestone_work_rows(milestones, *, ancestor_rule: bool):
         project_ids = {m.project_id for m in by_id.values() if m.project_id is not None}
         rows = rows.filter(matches | Q(project_id__in=project_ids))
     else:
-        rows = rows.filter(matches).exclude(status="Deleted")
+        rows = rows.filter(matches).exclude(status__in=UNCOUNTED_STATUSES)
     rows = list(
         rows.values_list("task_id", "milestone_id", "parent_task_id", "is_milestone", "status")
     )
-    verdicts = _ancestor_verdicts(rows) if ancestor_rule else {}
+    verdicts = ancestor_verdicts(rows) if ancestor_rule else {}
     for task_id, milestone_id, parent_task_id, is_milestone, task_status in rows:
-        verdict = verdicts.get(task_id)
-        if task_status == "Deleted" or verdict == "Deleted":
-            continue  # gone, not finished (only reachable with `ancestor_rule`)
+        reads = effective(task_status, verdicts.get(task_id)).status
+        if reads in UNCOUNTED_STATUSES:
+            continue  # deleted or rejected: not progress either way
         owners = set()
         if milestone_id in by_id:
             owners.add(milestone_id)
@@ -163,8 +155,7 @@ def _milestone_work_rows(milestones, *, ancestor_rule: bool):
             yield (
                 owner,
                 task_status,
-                task_status == "Closed"
-                or verdict == "Closed"
+                reads == "Closed"
                 # a milestone without a backing row yet has no ancestor to read
                 or (ancestor_rule and by_id[owner].status == "Closed"),
             )

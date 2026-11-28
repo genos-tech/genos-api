@@ -40,6 +40,7 @@ from origin.services.sprint_status import (
     derived_status_rank,
     status_q,
 )
+from origin.services.task_status_values import UNCOUNTED_STATUSES
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
@@ -49,7 +50,7 @@ _VALID_STATUSES = {
     SPRINT_STATUS_COMPLETED,
     SPRINT_STATUS_ARCHIVED,
 }
-_CLOSED_STATUSES = ["Closed", "Deleted"]
+_CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -121,7 +122,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     sprints: list[dict[str, Any]] = []
     for sp in sprints_raw:
-        # "Deleted" is gone, not finished (MIP-777): neither in the total nor closed.
+        # Deleted (MIP-777) and Rejected (MIP-2494) are neither in the total nor closed.
         agg = (
             TaskMaster.objects.filter(
                 team_id=ctx.team_id,
@@ -130,7 +131,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 is_deleted=False,
                 is_init_task=False,
             )
-            .exclude(status="Deleted")
+            .exclude(status__in=UNCOUNTED_STATUSES)
             .aggregate(
                 tasks_total=Count("task_id", distinct=True),
                 tasks_closed=Count("task_id", distinct=True, filter=Q(status="Closed")),

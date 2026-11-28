@@ -55,6 +55,7 @@ from typing import Any
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.member_importance_models import MARK_NOT_IMPORTANT, MARK_ON_IT
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.services.task_status_values import FINISHED_STATUSES
 
 # The `why` of a report row (MIP-1211): why it is listed. A card may draw it; none is required.
 WHY_VALUES = (
@@ -75,7 +76,7 @@ ON_IT_DAYS = 7
 DUE_SOON_DAYS = 2
 MEMORY_DAYS = 30
 MAX_SEEN = 100
-_DONE = ("Closed", "Deleted")
+_DONE = FINISHED_STATUSES
 
 
 def _part(value: Any) -> str:

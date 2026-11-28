@@ -47,7 +47,7 @@ ITEM_KINDS = (
     "project",
     "more",
 )
-TASK_STATUSES = ("Open", "WIP", "Blocked", "Pending", "Closed")
+TASK_STATUSES = ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")
 TASK_PRIORITIES = ("Minimal", "Low", "Normal", "High", "Critical")
 # One emoji per section or headline key, chosen HERE and stamped on the stored report by the
 # delivery step: a job never supplies an emoji, so nothing a person typed can become one.

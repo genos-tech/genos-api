@@ -33,9 +33,9 @@ from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext
 from origin.services.user_time import today_for_user_id
 
-_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
+_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
-_CLOSED_STATUSES = ["Closed", "Deleted"]
+_CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 _PER_PROJECT_LIMIT = 10
 
 
@@ -66,7 +66,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     today = today_for_user_id(ctx.user_id)
     annotations: dict[str, Any] = {
-        "total_tasks": Count("task_id", distinct=True),
+        # Rejected (MIP-2494) has its own row and is no part of a total.
+        "total_tasks": Count("task_id", distinct=True, filter=~Q(**{sf: "Rejected"})),
         "overdue_count": Count(
             "task_id",
             distinct=True,
@@ -92,7 +93,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     per_project_rows = (
         base_qs.values("project_id")
         .annotate(
-            total=Count("task_id", distinct=True),
+            total=Count("task_id", distinct=True, filter=~Q(**{sf: "Rejected"})),
             open_n=Count("task_id", distinct=True, filter=Q(**{sf: "Open"})),
             overdue=Count(
                 "task_id",
@@ -139,10 +140,10 @@ GET_TEAM_TASK_SUMMARY = Tool(
     description=(
         "Workspace-wide task rollup across every project the user is a "
         "member of. Use for 'how many tasks are Open / WIP / Closed / "
-        "Deleted across my projects?' or 'what's the state of the workspace?' "
+        "Rejected / Deleted across my projects?' or 'what's the state of the workspace?' "
         "— questions that don't name a specific project. Returns "
         "total_tasks, status_breakdown (Open / WIP / Pending / Closed / "
-        "Deleted), priority_breakdown (Minimal / Low / Normal / High / "
+        "Rejected / Deleted; Rejected is not in a total), priority_breakdown (Minimal / Low / Normal / High / "
         "Critical), overdue_count, and per_project (top 10 projects by "
         "total task count). Use `get_project_summary(project_id)` when "
         "the user names a specific project — this tool is the multi-"

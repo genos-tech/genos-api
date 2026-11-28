@@ -27,6 +27,7 @@ from django.db.models import Count, Q
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.services.task_status_values import FINISHED_STATUSES
 
 _VALID_METRICS = {"task_count", "open_task_count", "note_count"}
 _MAX_LIMIT = 50
@@ -58,7 +59,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "limit": limit,
             "projects": [],
             "__summary__": (
-                "No accessible projects — you are not a member of any project " "in this team."
+                "No accessible projects — you are not a member of any project in this team."
             ),
         }
 
@@ -86,7 +87,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     project_tasks_master__is_deleted=False,
                     project_tasks_master__is_init_task=False,
                 )
-                & ~Q(project_tasks_master__status__in=["Closed", "Deleted"]),
+                & ~Q(project_tasks_master__status__in=FINISHED_STATUSES),
             )
         )
     else:  # note_count
@@ -124,7 +125,7 @@ GET_PROJECT_ACTIVITY_RANKING = Tool(
     description=(
         "Rank accessible projects by one of three metrics: "
         "`task_count` (total non-deleted tasks), `open_task_count` "
-        "(non-Closed tasks), or `note_count` (task notes; "
+        "(tasks not Closed or Rejected), or `note_count` (task notes; "
         "TaskNoteMaster only — personal and chat notes excluded). "
         "Use for 'which project has the most task notes?', 'rank my "
         "projects by activity', or 'which project has the most open "
@@ -146,8 +147,7 @@ GET_PROJECT_ACTIVITY_RANKING = Tool(
             "limit": {
                 "type": "INTEGER",
                 "description": (
-                    f"Max number of projects to return (1–{_MAX_LIMIT}). "
-                    f"Default {_DEFAULT_LIMIT}."
+                    f"Max number of projects to return (1–{_MAX_LIMIT}). Default {_DEFAULT_LIMIT}."
                 ),
             },
         },

@@ -21,7 +21,7 @@ from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.parity import followups_on, parity_on
-from origin.search_engine.agent.tools import ancestor_rule
+from origin.search_engine.agent.tools import ancestor_rule, custom_status
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -287,7 +287,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Flag off: no key at all, the result is what it always was.
     attachments = attachment_fields(task, ctx) if parity_on() else {}
 
-    return {
+    result = {
         "task_id": task_id,
         "display_id": task.display_id,
         "title": task.title or "",
@@ -316,6 +316,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             f"Loaded task {task.display_id}" + (f" + {len(comments)} comments" if comments else "")
         ),
     }
+    custom_status.add_to_tasks([result])
+    return result
 
 
 FETCH_TASK = Tool(

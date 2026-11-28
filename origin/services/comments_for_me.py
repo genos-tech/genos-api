@@ -43,6 +43,7 @@ from origin.search_engine.agent.tools.base import ToolContext, ToolError, wrap_w
 from origin.search_engine.text_extraction import extract_text
 from origin.services import app_links
 from origin.services.item_lines import readable_task_q
+from origin.services.task_status_values import FINISHED_STATUSES
 
 DEFAULT_DAYS = 30
 MAX_DAYS = 90
@@ -60,7 +61,7 @@ ANSWER_CHARS = 18_000
 _AI_APP_KINDS = ("api_key", "oauth")
 # The status that surfaces as `SURFACE_TASK_BODY` activity rows (an @mention in a description).
 _SURFACE_TASK_BODY = 5
-_NOT_OPEN = ("Closed", "Deleted")
+_NOT_OPEN = FINISHED_STATUSES
 
 
 def _int_arg(value: Any, name: str, default: int, low: int, high: int) -> int:

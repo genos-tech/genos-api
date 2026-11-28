@@ -25,6 +25,7 @@ from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.text_extraction import extract_text
 from origin.services.activity_minimal_card import task_reader_pairs
 from origin.services.milestone_rollup import milestone_status_counts
+from origin.services.task_status_values import FINISHED_STATUSES
 
 # One request's cards. The client splits a longer list.
 MAX_CARDS = 50
@@ -33,7 +34,7 @@ MAX_TAGS = 5
 MAX_ASSIGNEES = 5
 MAX_BLOCKERS = 2
 # A dependency stops blocking when its blocker is finished or gone.
-_DONE_STATUSES = ("Closed", "Deleted")
+_DONE_STATUSES = FINISHED_STATUSES
 
 
 def task_cards(viewer_id, task_ids) -> list[dict]:

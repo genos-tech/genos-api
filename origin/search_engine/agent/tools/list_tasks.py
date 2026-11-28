@@ -39,16 +39,17 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
-from origin.search_engine.agent.tools import ancestor_rule
+from origin.search_engine.agent.tools import ancestor_rule, custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.project_gone import in_deleted_project, live_tasks_q
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.services.milestone_rollup import milestone_tasks_q
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 50
-_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"}
+_VALID_STATUSES = {"Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"}
 # Mirror of the canonical frontend enum in `taskMeta.ts` (Minimal/Low/
 # Normal/High/Critical). Invalid values are rejected with a clear error
 # so the model corrects course rather than silently returning [].
@@ -315,7 +316,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if args.get("overdue_only"):
         today = today_for_user_id(ctx.user_id)
-        qs = qs.exclude(status__in=["Closed", "Deleted"]).filter(
+        qs = qs.exclude(status__in=FINISHED_STATUSES).filter(
             due_date__isnull=False, due_date__lt=today
         )
         if ancestor_rule.enabled():  # MIP-1413: under a Closed ancestor it is not overdue
@@ -378,6 +379,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         fields = ancestor_rule.row_fields([t["task_id"] for t in tasks], ctx)
         tasks = [{**t, **fields.get(t["task_id"], {})} for t in tasks]
 
+    custom_status.add_to_tasks(tasks)  # MIP-2494 (flag `AGENT_CUSTOM_STATUS`)
     result: dict[str, Any] = {"tasks": tasks, "has_more": has_more}
     summary = f"Found {len(tasks)} task(s)"
     if has_more:
@@ -430,7 +432,7 @@ LIST_TASKS = Tool(
                 "type": "ARRAY",
                 "items": {
                     "type": "STRING",
-                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
+                    "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted"],
                 },
                 "description": (
                     "Filter by one or more statuses. Omit to get live work: "
@@ -462,7 +464,7 @@ LIST_TASKS = Tool(
                 "type": "BOOLEAN",
                 "description": (
                     "If true, only return tasks whose due_date is in the past "
-                    "and status is not Closed or Deleted."
+                    "and status is not Closed, Rejected or Deleted."
                 ),
             },
             "tag": {

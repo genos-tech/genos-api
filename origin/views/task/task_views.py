@@ -103,7 +103,7 @@ from origin.services.task_status_scope import (
     parse_statuses,
     scope_rows,
 )
-from origin.services.task_status_values import status_value_error
+from origin.services.task_status_values import FINISHED_STATUSES, status_value_error
 from origin.services.thread_link import (
     THREAD_NOT_FOUND,
     find_thread_link_conflict,
@@ -1430,13 +1430,13 @@ class TaskMetaView(AuthenticatedAPIView):
 
         finished_task_ids = set(
             TaskMaster.objects.filter(project__in=project_ids, is_init_task=False)
-            .filter(Q(status__in=["Deleted", "Closed"]))
+            .filter(status__in=FINISHED_STATUSES)
             .values_list("task_id", flat=True)
         )
 
         personal_notes = []
         for raw_personal_note in raw_personal_notes:
-            # If the root task is closed or deleted, skip the task
+            # If the root task is finished (closed, rejected or deleted), skip the task
             if raw_personal_note["rootTaskId"] in finished_task_ids:
                 continue
 
@@ -1728,7 +1728,8 @@ class ChildTaskView(AuthenticatedAPIView):
         ("Blocked", 2),
         ("Pending", 3),
         ("Closed", 4),
-        ("Deleted", 5),
+        ("Rejected", 5),
+        ("Deleted", 6),
     )
 
     def get(self, request):

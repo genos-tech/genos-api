@@ -38,14 +38,12 @@ BUILTIN_STATUSES = (
     ("Blocked", "Blocked"),
     ("Pending", "Pending"),
     ("Closed", "Closed"),
+    ("Rejected", "Rejected"),
 )
-CATEGORIES = ("Open", "WIP", "Blocked", "Pending", "Closed")
-# "Rejected" has no row yet: it becomes a system value in MIP-2494.
+CATEGORIES = ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")
 CAN_TURN_OFF = frozenset({"In Review", "WIP", "Pending", "Rejected"})
 # Names that would read as a system value. A built-in row may take its own back.
-RESERVED_NAMES = frozenset(
-    name.casefold() for name, _ in (*BUILTIN_STATUSES, ("Rejected", ""), ("Deleted", ""))
-)
+RESERVED_NAMES = frozenset(name.casefold() for name, _ in (*BUILTIN_STATUSES, ("Deleted", "")))
 MAX_NAME_LEN = 24
 MAX_STATUSES = 30
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z0-9-]{0,23}")

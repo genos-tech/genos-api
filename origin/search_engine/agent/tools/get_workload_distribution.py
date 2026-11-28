@@ -28,6 +28,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import today_for_user_id
 
 
@@ -72,10 +73,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # MIP-1478: a task under a Closed or Deleted ancestor reads as Closed: not workload.
         rule = ancestor_rule.rule_for_projects(scoped_project_ids, ctx.team_id)
         open_qs = ancestor_rule.with_effective_status(open_qs, rule).exclude(
-            eff_status__in=["Closed", "Deleted"]
+            eff_status__in=FINISHED_STATUSES
         )
     else:
-        open_qs = open_qs.exclude(status__in=["Closed", "Deleted"])
+        open_qs = open_qs.exclude(status__in=FINISHED_STATUSES)
     qs = (
         open_qs.values("assignee_id", "assignee__username")
         .annotate(
@@ -88,7 +89,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     When(
                         Q(due_date__isnull=False)
                         & Q(due_date__lt=today)
-                        & ~Q(status__in=["Closed", "Deleted"]),
+                        & ~Q(status__in=FINISHED_STATUSES),
                         then=1,
                     )
                 )
@@ -147,7 +148,7 @@ GET_WORKLOAD_DISTRIBUTION = Tool(
     description=(
         "Snapshot of current per-assignee workload: counts of Open, WIP, "
         "Blocked, and Pending tasks per user, plus an `overdue_count` "
-        "cross-cut (tasks past due_date that are not Closed). Use for 'who "
+        "cross-cut (tasks past due_date that are not Closed or Rejected). Use for 'who "
         "has the most open work?', 'is anyone overloaded?', or "
         "load-balancing questions. Note: `overdue_count` is a subset of "
         "open+wip+blocked+pending, NOT a separate bucket. Unassigned tasks are excluded. Closed "

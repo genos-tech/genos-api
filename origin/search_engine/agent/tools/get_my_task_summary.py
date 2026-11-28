@@ -32,7 +32,7 @@ from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
-_CLOSED_STATUSES = ["Closed", "Deleted"]
+_CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 _PER_PROJECT_LIMIT = 10
 
 
@@ -59,6 +59,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         is_deleted=False,
         is_init_task=False,
     ).exclude(status="Deleted")
+    # Rejected (MIP-2494) is left out of every number below and reported in its own row.
+    every_task = base_qs
     # MIP-1413: with the flag, read each task by its effective status (see `ancestor_rule`).
     rule = (
         ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
@@ -91,6 +93,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
     agg = base_qs.aggregate(**annotations)
 
     status_breakdown = {label: agg.get(f"_status_{label}", 0) or 0 for label in _STATUS_LABELS}
+    status_breakdown["Rejected"] = ancestor_rule.count_reading(every_task, rule, "Rejected")
     priority_breakdown = {
         label: agg.get(f"_priority_{label}", 0) or 0 for label in _PRIORITY_LABELS
     }
@@ -157,7 +160,7 @@ GET_MY_TASK_SUMMARY = Tool(
         "of WIP tasks do I have?', 'how many open tasks do I have?', "
         "'what's my workload?', or any 'me/my/I' question about task "
         "counts. Returns total, status_breakdown (Open / WIP / Pending / "
-        "Closed), priority_breakdown (Minimal / Low / Normal / High / "
+        "Closed, plus Rejected, which is not part of total or completion), priority_breakdown (Minimal / Low / Normal / High / "
         "Critical), overdue_count, due_this_week_count (rolling 7 days), "
         "completion_pct, and per_project (top 10 projects by my total "
         "task count). Numbers match the dashboard's 'My Tasks' KPI strip "

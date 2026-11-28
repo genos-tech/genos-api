@@ -35,7 +35,7 @@ from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
-_CLOSED_STATUSES = ["Closed", "Deleted"]
+_CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -106,6 +106,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     agg = counted_qs.exclude(status="Deleted").aggregate(**annotations)
 
     status_breakdown = {label: agg.get(f"_status_{label}", 0) or 0 for label in _STATUS_LABELS}
+    status_breakdown["Rejected"] = ancestor_rule.count_reading(base_qs, rule, "Rejected")
     status_breakdown["Deleted"] = (
         ancestor_rule.with_effective_status(base_qs, rule).filter(eff_status="Deleted").count()
         if rule is not None
@@ -186,7 +187,7 @@ GET_SPRINT_SUMMARY = Tool(
     name="get_sprint_summary",
     description=(
         "Per-sprint task rollup: total_tasks, status_breakdown (Open / "
-        "WIP / Pending / Closed / Deleted), priority_breakdown (Minimal "
+        "WIP / Pending / Closed / Rejected / Deleted; Rejected is not part of the total), priority_breakdown (Minimal "
         "/ Low / Normal / High / Critical), overdue_count, "
         "`days_remaining` (signed: negative when the sprint has already "
         "ended), and a list of milestones in the sprint with their own "

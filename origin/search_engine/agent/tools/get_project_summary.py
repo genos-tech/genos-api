@@ -22,9 +22,10 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.services.hidden_scope import project_hidden_from
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import today_for_user_id
 
-_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
+_STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -83,10 +84,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         qs, sf = ancestor_rule.with_effective_status(qs, rule), "eff_status"
 
     status_breakdown = {s: qs.filter(**{sf: s}).count() for s in _STATUS_LABELS}
+    # Rejected (MIP-2494) has its own row and is no part of the total.
+    total -= status_breakdown["Rejected"]
 
     today = today_for_user_id(ctx.user_id)
     overdue_count = (
-        qs.exclude(**{f"{sf}__in": ["Closed", "Deleted"]})
+        qs.exclude(**{f"{sf}__in": FINISHED_STATUSES})
         .filter(due_date__isnull=False, due_date__lt=today)
         .count()
     )
@@ -111,7 +114,7 @@ GET_PROJECT_SUMMARY = Tool(
     name="get_project_summary",
     description=(
         "Return task-count statistics for one project: total tasks, a "
-        "breakdown by status (Open / WIP / Pending / Closed), and the "
+        "breakdown by status (Open / WIP / Pending / Closed, plus Rejected, which is not in the total), and the "
         "number of overdue tasks. Use for 'how is project X going?', "
         "'how many open tasks remain?', or sprint overview questions. "
         "Resolve the project name to a numeric id with `list_projects` "

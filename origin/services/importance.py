@@ -63,6 +63,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, wrap_workspace_content
 from origin.services import item_activity, item_lines
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import zone_for_user_id
 
 log = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ MAX_MARKS = 500
 MARKED_SHOWN = 50
 # Candidate tasks scored per call.
 POOL = 300
-_DONE = ("Closed", "Deleted")
+_DONE = FINISHED_STATUSES
 _LOW = ("Low", "Minimal")
 _HIGH = ("Critical", "High")
 _PRIORITY_HINT = {"Critical": 4, "High": 3, "Normal": 1}

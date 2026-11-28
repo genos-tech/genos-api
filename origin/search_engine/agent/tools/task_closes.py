@@ -30,14 +30,14 @@ from __future__ import annotations
 from django.db.models import Q
 
 from origin.models.task.task_activity_models import TaskActivityActionType
-from origin.services.task_blocking import CLOSED_STATUSES
 
 # DELETED is a separate action_type with its own emitter (the
 # `is_deleted` flag flip), so a soft-delete is NOT a close and is not
 # folded in here. Only a status transition INTO a closed status counts.
 CLOSE_Q = Q(
     action_type=TaskActivityActionType.STATUS.value,
-    new_value__in=list(CLOSED_STATUSES),
+    # Not `FINISHED_STATUSES`: a rejected task (MIP-2494) was not completed, so it is no close.
+    new_value__in=["Closed", "Deleted"],
 )
 
 CREATED_Q = Q(action_type=TaskActivityActionType.CREATED.value)

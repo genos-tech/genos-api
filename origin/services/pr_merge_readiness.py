@@ -55,13 +55,14 @@ from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.services import realtime_push, unified_writer
 from origin.services.pr_merge_comment import _paragraph, _plain, _pr_label
 from origin.services.task_comment_ids import next_task_comment_id
+from origin.services.task_status_values import FINISHED_STATUSES
 
 logger = logging.getLogger("origin.pr_merge_readiness")
 
 MARKER_PREFIX = "genos-pr-nudge:"
 _MARKER_RE = re.compile(r'"genos-pr-nudge:(ready|stale):')
 _CACHE_TTL = 6 * 3600
-_CLOSED_TASK = ("Closed", "Deleted")
+_CLOSED_TASK = FINISHED_STATUSES
 
 #: A `get(path)` answers a requests-like response (`.ok`, `.json()`), or raises.
 Getter = Callable[[str], Any]

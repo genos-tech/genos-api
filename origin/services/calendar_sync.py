@@ -87,6 +87,9 @@ def _event_title(task) -> str:
             break
     if _is_done(task):
         return f"{DONE_STATUS_PREFIX}{base}"
+    # Rejected (MIP-2494): neither done nor due, so the title carries no marker.
+    if (task.status or "").strip().lower() == "rejected":
+        return base
     return f"{DUE_TITLE_PREFIX}{base}"
 
 
