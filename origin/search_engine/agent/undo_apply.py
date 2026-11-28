@@ -49,6 +49,7 @@ from origin.middleware.current_user import via_override
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.note.version_note_models import NoteVersionMaster
+from origin.models.project.prj_models import ProjectStatus
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import (
@@ -231,15 +232,33 @@ def undo_task_update(undoing: Undoing, image: dict[str, Any]) -> Outcome:
     update_fields: list[str] = []
     # In the column order the answer promises (a JSON column does not keep the
     # order the pre-image was written in), and only the columns undo knows.
+    custom = image.get("custom_status")
+    # A label picked since is the person's: putting the old status back would clear it.
+    label_changed = custom is not None and task.custom_status_id != custom["after"]
     for column in (c for c in undo.TASK_COLUMNS if c in image["fields"]):
         pair = image["fields"][column]
         now = undo.jsonable(getattr(task, column))
-        if undo.column_key(column, now) != undo.column_key(column, pair["after"]):
+        if undo.column_key(column, now) != undo.column_key(column, pair["after"]) or (
+            column == "status" and label_changed
+        ):
             skipped.append({"field": column, "reason": CHANGED_SINCE})
             continue
         setattr(task, column, _column_value(column, pair["before"]))
         update_fields.append(column)
         restored.append(column)
+    # The old label goes back with the status it belongs to, or alone when only the label
+    # changed (MIP-2519). The status may have been deleted or turned off since: then it is
+    # left out, and the status is still put back.
+    if (
+        custom is not None
+        and not label_changed
+        and not any(s["field"] == "status" for s in skipped)
+    ):
+        if _may_restore_label(task, custom["before"]):
+            task.custom_status_id = custom["before"]
+            update_fields.append("custom_status")
+            if "status" not in restored:
+                restored.append("status")
     if update_fields:
         task.save(update_fields=[*update_fields, "ts_updated_at"])
 
@@ -267,6 +286,19 @@ def undo_task_update(undoing: Undoing, image: dict[str, Any]) -> Outcome:
         skipped=skipped,
         summary=f"Put back {', '.join(restored)} of task {task.display_id}.",
     )
+
+
+def _may_restore_label(task: TaskMaster, status_id: int | None) -> bool:
+    """Whether the earlier custom status still fits the task: one of its project's, of the
+    category the task now has, and not turned off. None (no label before) always does."""
+    if status_id is None:
+        return True
+    return ProjectStatus.objects.filter(
+        status_id=status_id,
+        project_id=task.project_id,
+        category=task.status,
+        archived_at__isnull=True,
+    ).exists()
 
 
 _GONE = object()
