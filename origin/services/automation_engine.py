@@ -16,7 +16,11 @@ rate limit stops people and rules bouncing a task between projects.
 
 **What does not fire:** queryset cascades (sub-tasks riding a move, milestone and sprint moves,
 import undo: they send no `post_save`), the automatic Open/Blocked flip, imports, an agent write's
-undo, milestones and unfinished drafts.
+undo, turning a task into a milestone, and unfinished drafts.
+
+**Milestones** (MIP-2521) have their own rules (`applies_to`). Their changes are captured from
+`MilestoneMaster` (`offer_milestone`), their runs hang off the backing task, and what differs
+when acting is in `automation_milestones`.
 """
 
 from __future__ import annotations
@@ -39,8 +43,10 @@ from origin.models.task.automation_models import (
     AutomationRunState,
     AutomationTrigger,
 )
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
+from origin.services import automation_milestones as milestones
 from origin.services import automation_rules as rules
 from origin.services.activity_suppression import activity_suppressed
 from origin.services.task_assignment_notice import notify_task_assigned
@@ -93,9 +99,7 @@ def offer(task: TaskMaster, kind: str, payload: dict | None = None) -> None:
             return
         # A savepoint, so a failure here cannot poison the writer's transaction.
         with transaction.atomic():
-            if not AutomationRule.objects.filter(
-                project_id=task.project_id, enabled=True, trigger_type=kind
-            ).exists():
+            if not _has_rules(task.project_id, rules.APPLIES_TO_TASK, kind):
                 return
             AutomationRun.objects.create(
                 task_id=task.task_id,
@@ -103,13 +107,54 @@ def offer(task: TaskMaster, kind: str, payload: dict | None = None) -> None:
                 trigger_type=kind,
                 payload=payload or {},
             )
-        queued = _queued.get()
-        if queued is None:
-            queued = {}
-            _queued.set(queued)
-        queued[task.task_id] = True
+        _remember(task.task_id)
     except Exception:  # noqa: BLE001 - an observer must not fail the task write
         log.warning("automation capture failed task=%s", task.pk, exc_info=True)
+
+
+def offer_milestone(milestone, kind: str, payload: dict | None = None) -> None:
+    """A change of `milestone` (a `MilestoneMaster`) a rule may react to. Best effort."""
+    try:
+        if _suppressed.get() or activity_suppressed():
+            return
+        if milestone.is_deleted or milestone.task_id is None or milestone.project_id is None:
+            return
+        if (get_current_source() or {}).get("undo_of"):
+            return
+        with transaction.atomic():
+            if not _has_rules(milestone.project_id, rules.APPLIES_TO_MILESTONE, kind):
+                return
+            AutomationRun.objects.create(
+                task_id=milestone.task_id,
+                source_project_id=milestone.project_id,
+                trigger_type=kind,
+                payload={**(payload or {}), "milestone_id": milestone.milestone_id},
+            )
+        _remember(milestone.task_id, is_milestone=True)
+    except Exception:  # noqa: BLE001 - an observer must not fail the milestone write
+        log.warning("automation capture failed milestone=%s", milestone.pk, exc_info=True)
+
+
+def has_milestone_rules(project_id) -> bool:
+    """Is there anything a milestone change of this project could set off? Asked before the
+    milestone signals read the previous row."""
+    return AutomationRule.objects.filter(
+        project_id=project_id, enabled=True, applies_to=rules.APPLIES_TO_MILESTONE
+    ).exists()
+
+
+def _has_rules(project_id, applies_to: str, kind: str) -> bool:
+    return AutomationRule.objects.filter(
+        project_id=project_id, enabled=True, applies_to=applies_to, trigger_type=kind
+    ).exists()
+
+
+def _remember(task_id, *, is_milestone: bool = False) -> None:
+    queued = _queued.get()
+    if queued is None:
+        queued = {}
+        _queued.set(queued)
+    queued[task_id] = is_milestone
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +170,12 @@ def flush() -> dict:
         return {}
     _queued.set(None)
     outcomes = {}
-    for task_id in list(queued)[:INLINE_LIMIT]:
+    milestone_budget = milestones.INLINE_LIMIT
+    for task_id, is_milestone in list(queued.items())[:INLINE_LIMIT]:
+        if is_milestone:
+            if milestone_budget <= 0:
+                continue  # stays pending: the sweep takes it
+            milestone_budget -= 1
         try:
             if (outcome := process_task(task_id)) is not None:
                 outcomes[task_id] = outcome
@@ -194,8 +244,9 @@ class Outcome:
 
 
 def process_task(task_id) -> Outcome | None:
-    """Apply the first matching rule to a task's pending changes. None when no rule matched or
-    there was nothing to do (including: another worker holds the runs)."""
+    """Apply the first matching rule to a task's pending changes (or, for a milestone's backing
+    task, to the milestone's). None when no rule matched or there was nothing to do (including:
+    another worker holds the runs)."""
     with transaction.atomic():
         runs = list(
             AutomationRun.objects.select_for_update(skip_locked=True)
@@ -205,17 +256,20 @@ def process_task(task_id) -> Outcome | None:
         if not runs:
             return None
         pending_ids = [r.pk for r in runs]
-        task = (
-            TaskMaster.objects.select_for_update(of=("self",))
-            .select_related("project")
-            .filter(task_id=task_id)
-            .first()
-        )
-        rule, run = _first_match(task, runs)
+        milestone = None
+        tasks = TaskMaster.objects.select_related("project").filter(task_id=task_id)
+        if tasks.filter(is_milestone=True).exists():
+            # The milestone row is the one locked (as a move by hand does), not the backing task.
+            milestone = milestones.lock(task_id)
+            task = tasks.first()
+            rule, run = _first_milestone_match(milestone, runs)
+        else:
+            task = tasks.select_for_update(of=("self",)).first()
+            rule, run = _first_match(task, runs)
         if rule is None:
             AutomationRun.objects.filter(pk__in=pending_ids).delete()
             return None
-        outcome = _act(rule, task)
+        outcome = _act(rule, task, milestone)
         if outcome.quiet:
             AutomationRun.objects.filter(pk__in=pending_ids).delete()
             return outcome
@@ -235,13 +289,27 @@ def _first_match(task, runs):
     conditions hold on the task as it is now."""
     if task is None or task.is_deleted or task.is_init_task or task.is_milestone:
         return None, None
-    project = task.project
-    if (
-        project is None
-        or project.is_deleted
-        or project.archived_at is not None
-        or task.status == "Deleted"
-    ):
+    if task.status == "Deleted":
+        return None, None
+    # A milestone's changes are not the task's (a backing row turned into a task keeps them).
+    runs = [r for r in runs if "milestone_id" not in r.payload]
+    return _match(task.project, rules.APPLIES_TO_TASK, runs, lambda: task)
+
+
+def _first_milestone_match(milestone, runs):
+    if milestone is None or milestone.status == "Deleted":
+        return None, None
+    runs = [r for r in runs if r.payload.get("milestone_id") == milestone.milestone_id]
+    return _match(
+        milestone.project,
+        rules.APPLIES_TO_MILESTONE,
+        runs,
+        lambda: milestones.subject_of(milestone),
+    )
+
+
+def _match(project, applies_to: str, runs: list, subject_of):
+    if project is None or project.is_deleted or project.archived_at is not None:
         return None, None
     fresh = timezone.now() - STALE_AFTER
     # A change made in a project the task has since left is not this project's business.
@@ -250,19 +318,22 @@ def _first_match(task, runs):
     ]
     if not runs:
         return None, None
-    refs = None
+    subject, refs = subject_of(), None
     for rule in (
-        AutomationRule.objects.filter(project_id=project.project_id, enabled=True)
+        AutomationRule.objects.filter(
+            project_id=project.project_id, enabled=True, applies_to=applies_to
+        )
         .select_related("destination_project", "set_custom_status", "set_assignee", "owner")
         .order_by("position", "id")
     ):
         run = next(
-            (r for r in runs if rules.trigger_matches(rule, r.trigger_type, r.payload, task)), None
+            (r for r in runs if rules.trigger_matches(rule, r.trigger_type, r.payload, subject)),
+            None,
         )
         if run is None:
             continue
         refs = refs or rules.ProjectRefs(project.project_id)
-        if rules.conditions_hold(rule, task, refs):
+        if rules.conditions_hold(rule, subject, refs):
             return rule, run
     return None, None
 
@@ -306,37 +377,58 @@ def task_problem(rule: AutomationRule, task: TaskMaster) -> tuple[str, str]:
             return refused, "move_not_allowed"
         if task_move_assignee_problem(task, destination, assignee=rule.set_assignee_id):
             return refused, "assignee_not_on_destination"
+    return _rate_check(task.task_id, RATE_LIMIT)
+
+
+def milestone_problem(rule: AutomationRule, milestone) -> tuple[str, str]:
+    """`task_problem` for a milestone rule."""
+    if rule.moves_task and (problem := milestones.move_problem(rule, milestone)):
+        return AutomationRunState.REFUSED, problem
+    return _rate_check(milestone.task_id, milestones.RATE_LIMIT)
+
+
+def _rate_check(task_id, limit: int) -> tuple[str, str]:
     recent = AutomationRun.objects.filter(
-        task_id=task.task_id,
+        task_id=task_id,
         state=AutomationRunState.APPLIED,
         ts_done_at__gte=timezone.now() - RATE_WINDOW,
     ).count()
-    if recent >= RATE_LIMIT:
-        return refused, "rate_limited"
+    if recent >= limit:
+        return AutomationRunState.REFUSED, "rate_limited"
     return AutomationRunState.APPLIED, ""
 
 
-def check(rule: AutomationRule, task: TaskMaster) -> tuple[str, str]:
-    """`(state, reason)` the rule would end in on `task` now, writing nothing."""
-    if problem := rule_problem(rule, task.project):
+def check(rule: AutomationRule, task: TaskMaster, milestone=None) -> tuple[str, str]:
+    """`(state, reason)` the rule would end in on `task` (or `milestone`) now, writing nothing."""
+    project = milestone.project if milestone is not None else task.project
+    if problem := rule_problem(rule, project):
         return AutomationRunState.REFUSED, problem
+    if milestone is not None:
+        return milestone_problem(rule, milestone)
     return task_problem(rule, task)
 
 
-def _act(rule: AutomationRule, task: TaskMaster) -> Outcome:
-    source_id = task.project_id
+def _act(rule: AutomationRule, task: TaskMaster, milestone=None) -> Outcome:
+    """`task` is what the history is written on: the milestone's backing row for a milestone."""
+    source_id = milestone.project_id if milestone is not None else task.project_id
     destination_id = rule.destination_project_id if rule.moves_task else None
-    state, reason = check(rule, task)
+    state, reason = check(rule, task, milestone)
     if state == AutomationRunState.APPLIED:
         try:
             with transaction.atomic():  # a savepoint: a failed action leaves nothing behind
-                reason = _apply(rule, task)
+                reason = (
+                    _apply(rule, task)
+                    if milestone is None
+                    else _apply_milestone(rule, milestone, task)
+                )
             if reason == "no_change":
                 return Outcome(AutomationRunState.SKIPPED, reason, rule.id)
         except Exception:  # noqa: BLE001
             log.exception("automation rule=%s failed on task=%s", rule.id, task.task_id)
             state, reason = AutomationRunState.REFUSED, "error"
             task.refresh_from_db()
+            if milestone is not None:
+                milestone.refresh_from_db()
     if state != AutomationRunState.APPLIED:
         if reason in rules.OWNER_PROBLEMS or (rule.moves_task and rule.destination_project is None):
             AutomationRule.objects.filter(pk=rule.pk).update(
@@ -356,7 +448,12 @@ def _act(rule: AutomationRule, task: TaskMaster) -> Outcome:
         rule,
         task,
         TaskActivityActionType.AUTOMATION_APPLIED,
-        {"fromProjectId": source_id, "toProjectId": destination_id, "trigger": rule.trigger_type},
+        {
+            "fromProjectId": source_id,
+            "toProjectId": destination_id,
+            "trigger": rule.trigger_type,
+            **({"milestoneId": milestone.milestone_id} if milestone is not None else {}),
+        },
     )
     return Outcome(state, "", rule.id, destination_id)
 
@@ -450,6 +547,13 @@ def _apply(rule: AutomationRule, task: TaskMaster) -> str:
     return ""
 
 
+def _apply_milestone(rule: AutomationRule, milestone, backing: TaskMaster) -> str:
+    with suppress_automation(), acting_as(rule.owner, {"kind": "rule", "rule_id": rule.id}):
+        reason = milestones.apply(rule, milestone)
+    backing.refresh_from_db()
+    return reason
+
+
 # ---------------------------------------------------------------------------
 # Dry run
 # ---------------------------------------------------------------------------
@@ -459,8 +563,10 @@ DRY_RUN_ITEMS = 50
 
 
 def dry_run(rule: AutomationRule, project: ProjectMaster) -> dict:
-    """Which of the project's current tasks `rule` would act on: those in the state its trigger
-    names that meet its conditions. Writes nothing; `rule` may be unsaved."""
+    """Which of the project's current tasks (or milestones) `rule` would act on: those in the
+    state its trigger names that meet its conditions. Writes nothing; `rule` may be unsaved."""
+    if rule.applies_to == rules.APPLIES_TO_MILESTONE:
+        return _milestone_dry_run(rule, project)
     refs = rules.ProjectRefs(project.project_id)
     tasks = (
         TaskMaster.objects.select_related("project")
@@ -497,6 +603,43 @@ def dry_run(rule: AutomationRule, project: ProjectMaster) -> dict:
     return {"matched": len(matched), "items": items, "truncated": truncated}
 
 
+def _milestone_dry_run(rule: AutomationRule, project: ProjectMaster) -> dict:
+    refs = rules.ProjectRefs(project.project_id)
+    rows = list(
+        MilestoneMaster.objects.select_related("project", "task", "task__project")
+        .prefetch_related("milestone_assignees")
+        .defer("description", "task__content")
+        .filter(project=project, is_deleted=False, task__isnull=False)
+        .exclude(status="Deleted")
+        .order_by("-ts_updated_at", "-milestone_id")[: DRY_RUN_SCAN + 1]
+    )
+    truncated = len(rows) > DRY_RUN_SCAN
+    matched = []
+    for row in rows[:DRY_RUN_SCAN]:
+        subject = milestones.subject_of(row, [a.user_id for a in row.milestone_assignees.all()])
+        if rules.trigger_state_holds(rule, subject) and rules.conditions_hold(rule, subject, refs):
+            matched.append(row)
+    blocked = rule_problem(rule, project) if matched else None
+    items = []
+    for row in matched[:DRY_RUN_ITEMS]:
+        if blocked:
+            state, reason = AutomationRunState.REFUSED, blocked
+        else:
+            state, reason = milestone_problem(rule, row)
+        items.append(
+            {
+                "milestoneId": row.milestone_id,
+                "taskId": row.task_id,
+                "displayId": row.task.display_id,
+                "title": row.title,
+                "status": row.status,
+                "outcome": "would_apply" if state == AutomationRunState.APPLIED else str(state),
+                "reason": reason,
+            }
+        )
+    return {"matched": len(matched), "items": items, "truncated": truncated}
+
+
 __all__ = [
     "AutomationTrigger",
     "Outcome",
@@ -504,7 +647,9 @@ __all__ = [
     "check",
     "dry_run",
     "flush",
+    "has_milestone_rules",
     "offer",
+    "offer_milestone",
     "process_task",
     "suppress_automation",
     "sweep",

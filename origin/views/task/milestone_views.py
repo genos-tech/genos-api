@@ -11,7 +11,7 @@ from origin.models.task.milestone_models import (
     MilestoneMaster,
 )
 from origin.models.task.sprint_models import Sprint
-from origin.services import mention_extractor
+from origin.services import automation_engine, mention_extractor
 from origin.services.archive import archived_project_response
 from origin.services.custom_fields import sanitize_custom_field_values
 from origin.services.milestone_manage import (
@@ -30,6 +30,7 @@ from origin.services.milestone_rollup import milestone_work_counts
 from origin.services.milestone_service import (
     create_milestone,
     ensure_backing_task,
+    offer_assignee_change,
     parse_iso_date,
     sync_backing_task,
 )
@@ -756,6 +757,28 @@ class MilestoneView(AuthenticatedAPIView):
                 backing.save(update_fields=["mentioned_user_ids", "ts_updated_at"])
 
         response_data = {"milestone": _serialize_milestone(milestone)}
+        # Automation rules run now, after every write of this save, so the answer shows the
+        # milestone as it is (MIP-2521); as the task PUT does.
+        before_rules = milestone.project_id
+        ruled = automation_engine.flush().get(milestone.task_id)
+        if ruled is not None:
+            response_data["automation"] = {"ruleId": ruled.rule_id, "outcome": ruled.state}
+            if ruled.destination_project_id:
+                response_data["movedFromProjectId"] = (
+                    source_project_id if project_move is not None else before_rules
+                )
+            after = (
+                MilestoneMaster.objects.prefetch_related(
+                    "milestone_assignees__user", "task__collaborators"
+                )
+                .select_related("task", "reporter")
+                .filter(milestone_id=milestone.milestone_id, is_deleted=False)
+                .first()
+            )
+            # A rule may move it somewhere the person saving cannot read: they keep what they
+            # saw, and `movedFromProjectId` says to re-pull.
+            if after is not None and is_project_member(after.project_id, request.user.id):
+                response_data["milestone"] = _serialize_milestone(after)
         if project_move is not None:
             # How many task notes lost their author's Owner role because the author is not on the
             # destination (MIP-1583). It is not silent, and a move back writes the roles again.
@@ -835,6 +858,8 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             # Mirror the picked assignee onto the backing task so the
             # project task table reflects the change without a reload.
             _sync_backing_task(milestone)
+            if created:
+                offer_assignee_change(milestone, [str(user.id)])
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         if created:
             # Someone just added to an existing milestone is told (MIP-1464).
@@ -865,10 +890,14 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
         with transaction.atomic():
             if lock_live_milestone(milestone, project_id=milestone.project_id) is None:
                 return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
-            MilestoneAssignees.objects.filter(milestone=milestone, user_id=user_id).delete()
+            removed, _ = MilestoneAssignees.objects.filter(
+                milestone=milestone, user_id=user_id
+            ).delete()
             # Backing task assignee may need to fall back to the reporter
             # when the removed user was the previously synced assignee.
             _sync_backing_task(milestone)
+            if removed:
+                offer_assignee_change(milestone, [])
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         milestone = (
             MilestoneMaster.objects.prefetch_related(

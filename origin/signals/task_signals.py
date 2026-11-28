@@ -916,6 +916,65 @@ def _offer_automation(instance, original, status_label_change, update_fields) ->
         )
 
 
+@receiver(pre_save, sender=MilestoneMaster)
+def milestone_stash_for_automation(sender, instance: MilestoneMaster, **kwargs):
+    """The stored values a milestone automation rule compares with (MIP-2521). Read only when
+    the project has a milestone rule."""
+    instance._automation_original = None
+    if instance.pk is None:
+        return
+    try:
+        # A savepoint, so a failure here cannot poison the writer's transaction.
+        with transaction.atomic():
+            if not automation_engine.has_milestone_rules(instance.project_id):
+                return
+            instance._automation_original = (
+                MilestoneMaster.objects.filter(pk=instance.pk)
+                .values("status", "custom_status_id", "tags", "project_id", "is_deleted")
+                .first()
+            )
+    except Exception:  # noqa: BLE001 - an observer must not fail the milestone write
+        _webhook_logger.warning(
+            "milestone automation snapshot failed milestone=%s", instance.pk, exc_info=True
+        )
+
+
+@receiver(post_save, sender=MilestoneMaster)
+def milestone_offer_automation(sender, instance: MilestoneMaster, created: bool, **kwargs):
+    """The changes of this save a milestone rule may react to (MIP-2521). Creation is offered
+    by `create_milestone`, assignees by `sync_milestone_assignees`."""
+    original = getattr(instance, "_automation_original", None)
+    if created or original is None or original["is_deleted"] or instance.is_deleted:
+        return
+    # The automatic Open/Blocked flip is nobody's change.
+    if getattr(instance, "_derived_blocked_sync", False):
+        return
+    update_fields = kwargs.get("update_fields")
+
+    def wrote(*columns) -> bool:
+        return update_fields is None or bool(set(columns) & set(update_fields))
+
+    if wrote("status", "custom_status", "custom_status_id") and (
+        original["status"] != instance.status
+        # A move drops the old project's label: that is not a status change.
+        or (
+            original["project_id"] == instance.project_id
+            and original["custom_status_id"] != instance.custom_status_id
+        )
+    ):
+        automation_engine.offer_milestone(
+            instance,
+            AutomationTrigger.STATUS_CHANGED,
+            {"status_to": instance.status, "custom_status_to": instance.custom_status_id},
+        )
+    if wrote("tags"):
+        added = _tag_names(instance.tags) - _tag_names(original["tags"])
+        if added:
+            automation_engine.offer_milestone(
+                instance, AutomationTrigger.TAG_ADDED, {"tags_added": sorted(added)}
+            )
+
+
 def _tag_names(tags) -> set:
     if not isinstance(tags, list):
         return set()
