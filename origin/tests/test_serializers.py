@@ -597,6 +597,7 @@ class MessageSerializerTests(BaseAPITestCase):
             "parentId",
             "threadRootId",
             "isThreadReply",
+            "alsoInChannel",
             "replyCount",
             "reactions",
             "mentions",

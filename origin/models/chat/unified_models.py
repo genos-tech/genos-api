@@ -236,6 +236,16 @@ class ChannelMember(models.Model):
         ]
 
 
+def main_timeline_q(prefix=""):
+    """What a chat's main timeline shows: every top-level message, and a thread reply that was
+    also sent to the chat (MIP-2486). `prefix` is the lookup path to the Message, e.g.
+    `"message__"`. Use this wherever the question is "what is in the chat", not "what is a
+    thread root or a card"."""
+    return models.Q(**{f"{prefix}is_thread_reply": False}) | models.Q(
+        **{f"{prefix}also_in_channel": True}
+    )
+
+
 class Message(models.Model):
     """One message in a channel. Replaces DMMessages/GMMessages/PMMessages/
     MDMMessages AND their thread-message siblings (threading is just a
@@ -308,6 +318,11 @@ class Message(models.Model):
         related_name="thread_descendants",
     )
     is_thread_reply = models.BooleanField(default=False)
+    # "Also send to <chat>" (MIP-2486): a thread reply that also shows in the main chat. One
+    # row, not a copy, so edit, delete and reactions are the same in both places. Set at send
+    # time only. A column and not `metadata`, which a delete strips: the deleted row must still
+    # reach the main chat's sync. Read it through `main_timeline_q`.
+    also_in_channel = models.BooleanField(default=False)
 
     # Per-kind extra fields go here. PM stores
     # {"taskId": ..., "displayId": "PRJ-12", "taskStatus": "open", "taskCommentCount": 7}.

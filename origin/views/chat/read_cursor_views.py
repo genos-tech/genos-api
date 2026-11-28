@@ -14,6 +14,7 @@ truth wins). This matches the legacy behaviour and prevents a stale
 client from rewinding the user's read state.
 """
 
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -22,6 +23,7 @@ from origin.models.chat.unified_models import (
     ActivityType,
     Message,
     ReadCursor,
+    main_timeline_q,
 )
 from origin.serializers.chat.unified_serializers import ReadCursorSerializer
 from origin.views.chat.message_views import _verify_member_or_404
@@ -65,7 +67,8 @@ def _clear_activities_up_to(*, user, channel, target, thread_root_id):
         message just read. `seq` (not ts) is the comparator, matching the
         cursor's own forward-only ordering.
       - thread scope — a MAIN-timeline cursor (thread_root_id is None)
-        clears only main-timeline activities (`message__thread_root__isnull`);
+        clears only main-timeline activities (no thread root, or a reply also
+        sent to the chat);
         a THREAD cursor clears only that thread's activities
         (`message__thread_root_id=thread_root_id`). Without this a thread
         read would wrongly clear main-timeline activities that happen to
@@ -85,7 +88,8 @@ def _clear_activities_up_to(*, user, channel, target, thread_root_id):
         message__seq__lte=target.seq,
     )
     if thread_root_id is None:
-        qs = qs.filter(message__thread_root__isnull=True)
+        # A reply also sent to the chat (MIP-2486) was read in the main timeline too.
+        qs = qs.filter(Q(message__thread_root__isnull=True) | Q(message__also_in_channel=True))
     else:
         qs = qs.filter(message__thread_root_id=thread_root_id)
 
@@ -96,11 +100,11 @@ def _clear_activities_up_to(*, user, channel, target, thread_root_id):
 
 
 def mark_main_timeline_read(*, user, channel) -> None:
-    """Move `user`'s main-timeline cursor to the channel's newest top-level message and clear the
+    """Move `user`'s main-timeline cursor to the channel's newest main-timeline message and clear the
     activities that covers (MIP-1991: hiding a chat reads it). Forward-only, like the endpoint; a
     chat with no message makes no cursor row."""
     latest = (
-        Message.objects.filter(channel=channel, is_thread_reply=False)
+        Message.objects.filter(main_timeline_q(), channel=channel)
         .order_by("-seq")
         .only("id", "seq")
         .first()

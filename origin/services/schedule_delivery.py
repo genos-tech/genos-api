@@ -88,7 +88,7 @@ from urllib.parse import urlsplit
 from django.conf import settings
 from django.db import transaction
 
-from origin.models.chat.unified_models import Channel, Message, ReadCursor
+from origin.models.chat.unified_models import Channel, Message, ReadCursor, main_timeline_q
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
 from origin.services import (
@@ -532,11 +532,11 @@ def post_as_owner(schedule: MemberSchedule, *, run_at: datetime | None = None) -
 
 
 def _read_to_the_end(user_id: Any, channel: Channel) -> bool:
-    """Whether the member has read the chat's newest top-level message (true for an empty chat):
+    """Whether the member has read the chat's newest main-timeline message (true for an empty chat):
     only then may their read mark move past a message posted for them, or unread messages would be
     marked read unseen."""
     newest = (
-        Message.objects.filter(channel=channel, is_thread_reply=False, deleted_at__isnull=True)
+        Message.objects.filter(main_timeline_q(), channel=channel, deleted_at__isnull=True)
         .order_by("-seq")
         .values_list("seq", flat=True)
         .first()

@@ -35,7 +35,7 @@ from typing import Any
 from django.db.models import Count, Exists, F, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce
 
-from origin.models.chat.unified_models import ChannelKind, ChannelMember, Message
+from origin.models.chat.unified_models import ChannelKind, ChannelMember, Message, main_timeline_q
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
@@ -117,9 +117,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         qs = qs.filter(_name_filter(query, ctx.user_id))
 
     last_message_at = (
-        Message.objects.filter(
-            channel=OuterRef("pk"), is_thread_reply=False, deleted_at__isnull=True
-        )
+        Message.objects.filter(main_timeline_q(), channel=OuterRef("pk"), deleted_at__isnull=True)
         .order_by("-seq")
         .values("ts_sent_at")[:1]
     )
