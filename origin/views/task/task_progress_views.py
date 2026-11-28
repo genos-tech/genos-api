@@ -9,6 +9,11 @@ Each entry is the activity row EXACTLY as `GET /api/v2/task/activity/` serialise
 draw it) plus `sourceTask`, the task the change happened to, and `depth`, how far
 below the one asked about (0 is its own change, 1 a direct child's...).
 
+The names a row carries are cut as in the activity feed (`history_labels`, MIP-2536). The rows
+come from several tasks, some of which the caller may not be able to open, so only the asked
+task's project (the caller is on it) and the caller's own memberships pass: a sub-task's current
+project does not pass by itself.
+
 Access is PROJECT MEMBERSHIP, not `can_access_task`: the answer names tasks other
 than the one asked about, and an assignee who is not a member can read their own task
 but has no business reading what happened to its siblings.
@@ -23,6 +28,7 @@ from rest_framework.response import Response
 
 from origin.models.task.task_models import TaskMaster
 from origin.models.task.task_progress_models import TaskProgressFact
+from origin.services.history_labels import HistoryLabels
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.task.task_activity_views import _serialize_activity
 from origin.views.utils.scope_guards import is_project_member
@@ -103,6 +109,15 @@ class TaskProgressListView(AuthenticatedAPIView):
         )
         more = len(rows) > limit
         rows = rows[:limit]
+
+        # In memory only, before anything is serialised (MIP-2536).
+        labels = HistoryLabels(
+            [fact.activity for fact in rows],
+            viewer_id=request.user.id,
+            task_project_id=task["project_id"],
+        )
+        for fact in rows:
+            labels.cut(fact.activity)
 
         entries = []
         for fact in rows:

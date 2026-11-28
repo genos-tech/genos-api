@@ -24,6 +24,12 @@ A project's own custom fields and statuses (MIP-2532) are named only to a reader
   when it drops the old project's status is stamped with the new one. A deleted status is no
   longer held anywhere, so the reader has to be on the row's project and on every project the
   task has left.
+
+Every reader of a row's names or custom field values goes through this: the task's activity feed,
+`get_task_history`, the progress feed under a task (`/api/v2/task/progress/`, whose rows come from
+several tasks: only the asked task's project passes by itself) and the agent work report.
+The briefing's wording (`briefing.activity_event`, which the timeline, item lines and scheduled
+reports reuse) prints ids and no such name, so it has nothing to cut.
 """
 
 from __future__ import annotations
@@ -74,8 +80,26 @@ def _ids(rows: list, field: str) -> set[int]:
     }
 
 
+def member_project_ids(viewer_id: Any, project_ids: set) -> set[int]:
+    """Of `project_ids`, the ones `viewer_id` is on or owns."""
+    if not project_ids or viewer_id is None:
+        return set()
+    return set(
+        ProjectMembers.objects.filter(
+            attendee_id=viewer_id, project_id__in=project_ids
+        ).values_list("project_id", flat=True)
+    ) | set(
+        ProjectMaster.objects.filter(owner_id=viewer_id, project_id__in=project_ids).values_list(
+            "project_id", flat=True
+        )
+    )
+
+
 class HistoryLabels:
-    """The rule above for one reader and one task's rows, resolved in a few queries up front."""
+    """The rule above for one reader and a page of rows, resolved in a few queries up front.
+
+    `task_project_id` is the current project of the task the reader was let in by (it passes). The
+    rows may come from other tasks too (the progress feed): their projects pass by membership."""
 
     def __init__(self, rows: Iterable, *, viewer_id: Any, task_project_id: int | None):
         rows = list(rows)
@@ -105,35 +129,24 @@ class HistoryLabels:
             else {}
         )
         # A deleted status: where the task has been is all that is left to go by.
-        left: set[int | None] = set()
+        left: dict[int, set[int | None]] = {}
         if status_ids - statuses.keys():
-            left = {
-                _as_int(old)
-                for old in TaskActivity.objects.filter(
-                    task_id__in={r.task_id for r in rows},
-                    action_type=TaskActivityActionType.PROJECT,
-                    old_value__isnull=False,
-                ).values_list("old_value", flat=True)
-            }
+            for task_id, old in TaskActivity.objects.filter(
+                task_id__in={r.task_id for r in rows},
+                action_type=TaskActivityActionType.PROJECT,
+                old_value__isnull=False,
+            ).values_list("task_id", "old_value"):
+                left.setdefault(task_id, set()).add(_as_int(old))
         holders = {pid for by_id in held.values() for pid in by_id.values() if pid is not None}
-        holders |= set(statuses.values()) | {pid for pid in left if pid is not None}
+        holders |= set(statuses.values())
+        holders |= {pid for pids in left.values() for pid in pids if pid is not None}
         holders |= {
             r.project_id
             for r in rows
             if r.project_id is not None
             and (r.action_type == TaskActivityActionType.CUSTOM_FIELD or _status_change(r))
         }
-        on: set[int] = set()
-        if holders and viewer_id is not None:
-            on = set(
-                ProjectMembers.objects.filter(
-                    attendee_id=viewer_id, project_id__in=holders
-                ).values_list("project_id", flat=True)
-            ) | set(
-                ProjectMaster.objects.filter(
-                    owner_id=viewer_id, project_id__in=holders
-                ).values_list("project_id", flat=True)
-            )
+        on = member_project_ids(viewer_id, holders)
         named: set[int] = set()
         if project_ids:
             named = set(
@@ -162,7 +175,7 @@ class HistoryLabels:
         pk = _as_int(status_id)
         if pk in self._statuses:
             return self._statuses[pk] in self._on
-        return row.project_id in self._on and self._left <= self._on
+        return row.project_id in self._on and self._left.get(row.task_id, set()) <= self._on
 
     def _cut_status(self, row, change: dict) -> dict:
         cut = {

@@ -63,6 +63,7 @@ class MilestoneRuleBase(AutomationTestBase):
         self.assertEqual(
             [r.metadata["reason"] for r in rows], [automation_rules.public_reason(reason)]
         )
+        self.assertEqual([r.metadata["milestoneId"] for r in rows], [milestone.milestone_id])
         self.assertEqual(AutomationRun.objects.get(task=backing).reason, reason)
 
 
