@@ -5,13 +5,16 @@ Driven through the app's milestone PATCH, so capture from `MilestoneMaster` and 
 flush are exercised.
 """
 
+import json
 from unittest import mock
 
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
+from origin.models.common.user_models import GithubWebhookRegistration
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.automation_models import AutomationRule, AutomationRun
@@ -23,6 +26,7 @@ from origin.services.milestone_service import create_milestone
 from origin.services.project_statuses import create_status
 from origin.services.task_milestone_conversion import convert_task_to_milestone
 from origin.tests.test_automation_rules import APPLIED, REFUSED, AutomationTestBase
+from origin.tests.test_github_webhook import WEBHOOK_SECRET, _pr_payload, _sign
 
 
 class MilestoneRuleBase(AutomationTestBase):
@@ -258,6 +262,30 @@ class MilestoneRuleMoveTests(MilestoneRuleBase):
 
 
 class MilestoneRuleTriggerTests(MilestoneRuleBase):
+    @override_settings(GITHUB_WEBHOOK_SECRET=WEBHOOK_SECRET)
+    def test_a_merged_pr_close_sets_off_a_milestone_rule(self):
+        self.user.auto_close_on_pr_merge = True
+        self.user.is_email_verified = True
+        self.user.save()
+        GithubWebhookRegistration.objects.create(
+            owner="owner", repo="repo", hook_id=1, registered_by=self.user
+        )
+        self.mrule(trigger_value={"status": "Closed"}, set_status="")
+        row = self.milestone()
+        branch = f"x/{self.backing(row).display_id}-y"
+        body = json.dumps(_pr_payload(action="closed", merged=True, head_ref=branch)).encode()
+        self.unauthenticate()
+        response = self.client.post(
+            "/api/v2/github/webhook/",
+            data=body,
+            content_type="application/json",
+            HTTP_X_HUB_SIGNATURE_256=_sign(body),
+            HTTP_X_GITHUB_EVENT="pull_request",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        row = self.fresh(row)
+        self.assertEqual((row.project_id, row.status), (self.x.project_id, "Closed"))
+
     def in_place(self, trigger_type, trigger_value=None, **extra):
         return self.mrule(
             trigger_type=trigger_type,

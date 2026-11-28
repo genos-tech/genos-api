@@ -21,8 +21,11 @@ from rest_framework.test import APIClient
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import GithubWebhookRegistration
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectStatus
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.services.milestone_manage import update_milestone
+from origin.services.milestone_service import create_milestone
 from origin.services.project_statuses import ensure_project_statuses
 
 User = get_user_model()
@@ -384,6 +387,65 @@ class TestGithubWebhook(TestCase):
         self.assertEqual(response.data["updated"], 0)
         orphan.refresh_from_db()
         self.assertEqual(orphan.status, "Open")
+
+    # ── A branch that names a milestone (MIP-2538) ────────────────
+
+    def _create_milestone(self, status_value: str = "Open"):
+        milestone = create_milestone(
+            self.project, reporter_id=self.user.id, title="Ship it", status=status_value
+        )
+        return milestone, TaskMaster.objects.get(task_id=milestone.task_id)
+
+    def _merge(self, backing):
+        return self._post_webhook(
+            _pr_payload(action="closed", merged=True, head_ref=f"fix/{backing.display_id}-x")
+        )
+
+    def test_merged_pr_closes_the_milestone_its_branch_names(self):
+        ensure_project_statuses(self.project)
+        review = ProjectStatus.objects.get(project=self.project, builtin_key="In Review")
+        milestone, backing = self._create_milestone(review.category)
+        update_milestone(milestone, fields={"custom_status": review})
+
+        response = self._merge(backing)
+
+        self.assertEqual(response.data["updated"], 1)
+        milestone.refresh_from_db()
+        backing.refresh_from_db()
+        self.assertEqual((milestone.status, milestone.custom_status_id), ("Closed", None))
+        self.assertEqual((backing.status, backing.custom_status_id), ("Closed", None))
+        row = TaskActivity.objects.get(
+            task=backing, action_type=TaskActivityActionType.STATUS, new_value="Closed"
+        )
+        self.assertTrue(row.metadata["closedByPrMerge"])
+        # The next milestone edit keeps it closed.
+        update_milestone(milestone, fields={"title": "Shipped"})
+        backing.refresh_from_db()
+        self.assertEqual(backing.status, "Closed")
+
+    def test_merged_pr_leaves_a_finished_milestone_alone(self):
+        milestone, backing = self._create_milestone("Rejected")
+        # A backing row that drifted: the milestone's own status is the one that counts.
+        TaskMaster.objects.filter(pk=backing.pk).update(status="Open")
+
+        response = self._merge(backing)
+
+        self.assertEqual(response.data["updated"], 0)
+        self.assertEqual(MilestoneMaster.objects.get(pk=milestone.pk).status, "Rejected")
+        # The merge comment reads the milestone's status, not the drifted row's.
+        comment = TaskComments.objects.get(task=backing, sender__isnull=True)
+        self.assertIn("Rejected", json.dumps(comment.comment_body))
+        self.assertNotIn("close it or say what is left", json.dumps(comment.comment_body))
+
+    def test_merged_pr_closes_an_open_milestone_whose_backing_row_reads_closed(self):
+        # What the old close left behind: the row Closed, the milestone still open.
+        milestone, backing = self._create_milestone("WIP")
+        TaskMaster.objects.filter(pk=backing.pk).update(status="Closed")
+
+        response = self._merge(backing)
+
+        self.assertEqual(response.data["updated"], 1)
+        self.assertEqual(MilestoneMaster.objects.get(pk=milestone.pk).status, "Closed")
 
     # ── PR opened → "PR linked" activity (branch carries display id) ──
 

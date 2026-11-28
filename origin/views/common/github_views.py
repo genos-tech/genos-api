@@ -28,6 +28,7 @@ from urllib.parse import quote
 import requests
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Q
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -42,6 +43,7 @@ from origin.models.common.user_models import (
     GithubUnregisteredDelivery,
     GithubWebhookRegistration,
 )
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
@@ -62,6 +64,7 @@ from origin.services.github_webhooks import (
     record_unregistered_delivery,
     register_repo_webhook,
 )
+from origin.services.milestone_manage import lock_live_milestone, update_milestone
 from origin.services.oauth.tokens import get_valid_access_token
 from origin.services.pr_merge_comment import post_merge_comments
 from origin.services.pr_needs_you import notify_review_requested_tasks
@@ -783,9 +786,11 @@ def _close_tasks_for_merged_pr(
     # install that happens to share a project code.
     part_of_ids = set(part_of_ids)
     linked_ids = (linked_ids | set(closes_ids)) - part_of_ids
+    # A milestone's status is on `MilestoneMaster` and its backing row can have drifted (this
+    # function closed that row alone before MIP-2538), so the row is not what says it is done.
     candidates = _branch_candidate_tasks(
         head_ref, team_ids, "project", "assignee", also_task_ids=linked_ids
-    ).exclude(status__in=DONE_STATUSES)
+    ).exclude(Q(status__in=DONE_STATUSES) & Q(is_milestone=False))
     updated = 0
     for task in candidates:
         if task.task_id in part_of_ids:
@@ -808,14 +813,42 @@ def _close_tasks_for_merged_pr(
                 still_open,
             )
             continue
-        task.status = DONE_STATUS
         # Tag the upcoming status-change audit row as a PR-merge close so
         # the activity feed can attribute it to the merged PR instead of
         # a null actor. Read back in `task_record_changes`.
-        task._pr_merge_close = {"prUrl": pr_url or None}
+        pr_close = {"prUrl": pr_url or None}
+        if task.is_milestone:
+            closed = _close_milestone_for_merged_pr(task, pr_close)
+            if closed is not None:
+                updated += closed
+                continue
+            if task.status in DONE_STATUSES:
+                continue
+        task.status = DONE_STATUS
+        task._pr_merge_close = pr_close
         task.save(update_fields=["status", "ts_updated_at"])
         updated += 1
     return updated
+
+
+def _close_milestone_for_merged_pr(backing, pr_close: dict) -> bool | None:
+    """Close the milestone `backing` stands for, as a milestone edit does (MIP-2538): the status
+    lives on `MilestoneMaster`, so saving the backing row alone would leave the milestone open and
+    the next edit would undo it. The rules, the history and the chat card follow that save.
+
+    True when it closed, False when the milestone is already done, None when no milestone row
+    stands behind the task (it then closes like any task)."""
+    milestone = MilestoneMaster.objects.filter(task_id=backing.task_id).first()
+    if milestone is None:
+        return None
+    with transaction.atomic():
+        if lock_live_milestone(milestone) is None:
+            return False
+        if milestone.status in DONE_STATUSES:
+            return False
+        milestone.task._pr_merge_close = pr_close
+        update_milestone(milestone, fields={"status": DONE_STATUS})
+    return True
 
 
 # ---------------------------------------------------------------------------
