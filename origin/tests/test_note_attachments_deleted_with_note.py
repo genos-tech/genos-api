@@ -9,7 +9,6 @@ reaches them, each with a SURVIVOR (another note's file) so "deleted everything"
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 from unittest import mock
 
@@ -33,6 +32,7 @@ from origin.services import note_delete
 from origin.services.account_deletion import delete_account
 from origin.services.demo_seeder import create_demo_environment, delete_demo_team_data
 from origin.services.project_delete import delete_project
+from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
@@ -71,7 +71,7 @@ class NoteAttachmentsBase(Files, BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
-        shutil.rmtree(_MEDIA_ROOT, ignore_errors=True)
+        remove_media_root(_MEDIA_ROOT)
 
     def personal(self, title="p", owner=None, folder=None):
         return PersonalNoteMaster.objects.create(

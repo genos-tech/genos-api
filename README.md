@@ -109,6 +109,11 @@ pipenv run coverage report
 ruff check .                      # import sort + pyflakes/pycodestyle (see ruff.toml)
 ```
 
+`manage.py test --parallel N` works (it needs `tblib`, in `requirements-dev.txt`). Each worker
+gets its own copy of the test database, so a RAM-backed Postgres needs room for N+1 of them
+(`dt.sh`'s tmpfs one is 2 GB, shared by every run: a `DiskFull` error there means it is full). CI
+splits the suite into 3 shards instead (`scripts/ci_test_shard.py`).
+
 `manage.py test` runs on `apis.settings_test` (what CI uses) unless `DJANGO_SETTINGS_MODULE` is set or
 you pass `--settings=...`, and prints one line to stderr saying so. Production settings differ (agent
 flags on, the schedule plan gate shut for Free users), so tests run on them fail in ways CI never
