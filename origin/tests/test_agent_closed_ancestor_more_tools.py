@@ -45,24 +45,24 @@ class MoreTools(Tree):
 class CountsTests(MoreTools):
     def test_project_summary_reads_the_effective_status(self):
         off, on_ = self.on_off("get_project_summary", project_id=self.project.project_id)
-        # C1 (WIP), G1, M2, MC1 (Open) read as Closed; DC (WIP) and M3 (Open) read as Deleted: still in
-        # the total, in no bucket (a task whose own status is Deleted is the same)
+        # C1 (WIP), G1, M2, MC1 (Open) read as Closed; DC (WIP) and M3 (Open) read as Deleted: neither in
+        # the total nor in a bucket, as a task whose own status is Deleted (MIP-2558)
         self.assertEqual(off["status_breakdown"]["Closed"] + 4, on_["status_breakdown"]["Closed"])
         self.assertEqual(off["status_breakdown"]["WIP"] - 2, on_["status_breakdown"]["WIP"])
         self.assertEqual(off["status_breakdown"]["Open"] - 4, on_["status_breakdown"]["Open"])
-        self.assertEqual(off["total_tasks"], on_["total_tasks"])
+        self.assertEqual(off["total_tasks"] - 2, on_["total_tasks"])
         # the overdue one under the Closed parent (G1) is no longer overdue; the plain ones stay
         self.assertEqual(off["overdue_count"] - 1, on_["overdue_count"])
         self.assertEqual(
             {
                 k: v
                 for k, v in on_.items()
-                if k not in ("status_breakdown", "overdue_count", "__summary__")
+                if k not in ("status_breakdown", "overdue_count", "total_tasks", "__summary__")
             },
             {
                 k: v
                 for k, v in off.items()
-                if k not in ("status_breakdown", "overdue_count", "__summary__")
+                if k not in ("status_breakdown", "overdue_count", "total_tasks", "__summary__")
             },
         )
 
