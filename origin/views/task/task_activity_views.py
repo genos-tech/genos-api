@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.services import description_edit_runs
+from origin.services.history_labels import HistoryLabels
 from origin.services.task_body_restore import RestoreRefused, restore_task_body
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.public.mcp.via_privacy import via_for_viewer
@@ -64,6 +65,16 @@ def _metadata_for_viewer(row: TaskActivity, viewer_id) -> dict:
     if "via" not in metadata:
         return metadata
     return {**metadata, "via": via_for_viewer(metadata["via"], row.actor_id, viewer_id)}
+
+
+def _cut_hidden_labels(rows: list[TaskActivity], task_id: int, viewer_id) -> None:
+    """Take out of the rows' metadata (in memory, never saved) the project, milestone,
+    sprint and parent names this reader may not see (MIP-2523)."""
+    project_id = TaskMaster.objects.filter(pk=task_id).values_list("project_id", flat=True).first()
+    labels = HistoryLabels(rows, viewer_id=viewer_id, task_project_id=project_id)
+    for row in rows:
+        if row.metadata:
+            row.metadata = labels.metadata(row, row.metadata)
 
 
 def _serialize_activity(row: TaskActivity, viewer_id) -> dict:
@@ -208,6 +219,7 @@ class TaskActivityListView(AuthenticatedAPIView):
         )
         collapsed = _collapse_description_edits(raw_rows)
         page = collapsed[offset : offset + limit]
+        _cut_hidden_labels(page, task_id, request.user.id)
 
         return Response(
             [_serialize_activity(r, request.user.id) for r in page], status=status.HTTP_200_OK

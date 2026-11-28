@@ -379,6 +379,8 @@ def _custom_status_change(old_id: Optional[int], new_id: Optional[int]) -> Optio
         "newLabel": new.get("name"),
         "oldColor": old.get("color"),
         "newColor": new.get("color"),
+        # The system status they count as, for the feed's icon (MIP-2493).
+        "category": new.get("category") or old.get("category"),
     }
 
 
@@ -643,8 +645,12 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
                     task=task, **{**change, "metadata": {**change["metadata"], "cascade": cascade}}
                 )
     # A queryset update fires no signal, so a cascade that wrote a field the chat card shows
-    # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483).
-    if shown := _CARD_FIELDS.intersection(tracked):
+    # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483). So does
+    # one that moved tasks to another custom status (a delete with a replacement, MIP-2493).
+    shown = _CARD_FIELDS.intersection(tracked)
+    if "custom_status_id" in columns:
+        shown = shown | {"custom_status_id"}
+    if shown:
         for pk in _changed_with_a_card(ids, before, shown):
             _schedule_card_refresh(task_id=pk)
     return count
@@ -848,6 +854,10 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             from origin.services.task_close_notice import post_close_notice
 
             post_close_notice(instance, row.pk)
+
+    # The card names the project's status (MIP-2493), which can change on its own.
+    if status_label_change is not None:
+        card_changed = True
 
     for change in _custom_field_changes(
         instance, original.get("custom_field_values"), instance.custom_field_values

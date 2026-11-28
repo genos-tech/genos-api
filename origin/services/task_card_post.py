@@ -50,6 +50,7 @@ from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMas
 from origin.models.task.task_models import TaskMaster
 from origin.services import inbox_via, realtime_push, task_card
 from origin.services.activity_suppression import activity_suppressed
+from origin.services.project_statuses import status_label
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +113,7 @@ def _task_card_parts(task, language: str | None = None) -> tuple[list, str, dict
         labels=task_card.card_labels(language),
         title=task.title,
         status=task.status or "Open",
+        status_label=status_label(task, task.status or "Open"),
         priority=task.priority,
         assignee=task.assignee,
         reporter=task.reporter,
@@ -144,6 +146,7 @@ def _milestone_card_parts(milestone, language: str | None = None) -> tuple[list,
         labels=task_card.card_labels(language),
         title=milestone.title,
         status=status,
+        status_label=status_label(milestone, status or "Open"),
         priority=milestone.priority,
         sprint_name=milestone.sprint.name if milestone.sprint_id else None,
         reporter=milestone.reporter,

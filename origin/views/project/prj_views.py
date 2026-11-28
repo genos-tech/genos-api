@@ -2185,16 +2185,16 @@ class _ProjectStatusBase(AuthenticatedAPIView):
 
 
 class ProjectStatusListView(_ProjectStatusBase):
-    """`projects/<id>/statuses/`: list (writing the built-in rows the first time), add one,
-    reorder."""
+    """`projects/<id>/statuses/`: list, add one, reorder.
+
+    Reading writes nothing (MIP-2493): a project nobody set up lists no statuses, so opening a
+    task never changes how its project looks. Adding or reordering writes the built-in rows
+    first; the app's "set up" is a reorder with an empty `order`."""
 
     def get(self, request, project_id: int):
         project, err = self._project(request, project_id, write=False)
         if err:
             return err
-        # An archived project is read-only: one that was never opened keeps an empty list.
-        if project.archived_at is None:
-            ensure_project_statuses(project)
         return self._list(request, project)
 
     def post(self, request, project_id: int):
