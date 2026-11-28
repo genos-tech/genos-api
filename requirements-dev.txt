@@ -11,4 +11,7 @@ pytest>=8,<10
 pytest-cov>=5
 pytest-timeout>=2
 coverage>=7
+# Lets `manage.py test --parallel` hand a failure back from a worker; without it the first
+# failing test aborts the run with "cannot pickle 'traceback' object" (MIP-2447).
+tblib>=3
 ruff==0.17.1

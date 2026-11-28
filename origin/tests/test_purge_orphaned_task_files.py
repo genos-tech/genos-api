@@ -29,6 +29,7 @@ from origin.models.task.task_models import (
     TaskMaster,
 )
 from origin.services import orphaned_task_files as svc
+from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 
 _MEDIA_ROOT = tempfile.mkdtemp(prefix="test-orphaned-task-files-")
@@ -46,7 +47,7 @@ class OrphanedTaskFiles(BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
-        shutil.rmtree(_MEDIA_ROOT, ignore_errors=True)
+        remove_media_root(_MEDIA_ROOT)
 
     def setUp(self):
         super().setUp()
