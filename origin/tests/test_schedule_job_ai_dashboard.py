@@ -18,6 +18,7 @@ from origin.models.common.schedule_models import PAUSE_NOTE, MemberSchedule
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.services import dashboard_page, html_notes, schedules
 from origin.services.collab_push import PushOutcome
+from origin.services.milestone_service import create_milestone
 from origin.services.schedule_jobs import JOBS
 from origin.tests.test_schedule_jobs import JobBase
 
@@ -86,6 +87,18 @@ class TestTheJob(JobBase):
         self.assertTrue(any(p["closed"] for p in dash["series"]))
         self.assertIn("Done one", str(dash["lists"]))
         self.assertNotIn("narrative", dash)
+
+    def test_a_deleted_task_of_a_milestone_is_not_a_segment_of_the_status_bar(self):
+        # MIP-2527: one such label made the page draw generic bars instead.
+        milestone = create_milestone(self.project, reporter_id=self.user.id, title="M")
+        for status in ("Open", "Closed", "Deleted", "Rejected"):
+            self.make_task(f"{status} one", status=status, milestone=milestone)
+        report = self.run_job(
+            "ai_dashboard", kind="milestone", milestone_id=milestone.milestone_id
+        )
+        labels = {c["label"] for c in report["dashboard"]["breakdown"]}
+        self.assertEqual(labels, {"Open", "Closed"})
+        self.assertLessEqual(labels, set(dashboard_page.STATUSES))
 
     def test_my_progress_reads_the_members_own_closes(self):
         done = self.make_task("Mine done", status="Closed")
