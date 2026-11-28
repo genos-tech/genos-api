@@ -605,20 +605,22 @@ def definition_of(rule: AutomationRule) -> dict:
 
 def serialize_rule(rule: AutomationRule, *, viewer_projects: set[int]) -> dict:
     """`viewer_projects`: the project ids the reader is on. A destination they are not on is not
-    named (a hidden project's name must not leak), nor are the values that belong to it."""
+    named (a hidden project's name must not leak), nor are the values that belong to it.
+
+    `destination.gone` (MIP-2544) tells a deleted project apart from a hidden one: the rule needs
+    a new destination, whoever reads it. Neither is named."""
     destination = rule.destination_project
     visible = destination is None or destination.project_id in viewer_projects
     shown = None
     if rule.moves_task:
-        shown = (
-            {
-                "projectId": destination.project_id,
-                "name": destination.project_name,
-                "visible": True,
-            }
-            if destination is not None and visible
-            else {"projectId": None, "name": None, "visible": False}
-        )
+        gone = destination is None or destination.is_deleted
+        named = visible and not gone
+        shown = {
+            "projectId": destination.project_id if named else None,
+            "name": destination.project_name if named else None,
+            "visible": named,
+            "gone": gone,
+        }
     return {
         "ruleId": rule.id,
         "name": rule.name,

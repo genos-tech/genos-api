@@ -871,6 +871,24 @@ class RulesApiTests(AutomationTestBase):
         self.assertEqual(self.client.get(self.url()).status_code, 401)
         self.assertTrue(AutomationRule.objects.get().enabled)
 
+    def test_a_deleted_destination_is_said_to_be_gone_and_never_named(self):
+        # MIP-2544: to a reader on it and to one who never was, and when the row itself is gone.
+        rule_id = self.create().data["ruleId"]
+        editor = self.person("ed")
+        self.join(self.a, editor, "editor")
+        gone = {"projectId": None, "name": None, "visible": False, "gone": True}
+
+        def destinations():
+            for reader in (self.user, editor):
+                self.authenticate(reader)
+                yield self.client.get(self.detail(rule_id)).data["destination"]
+
+        self.x.is_deleted = True
+        self.x.save(update_fields=["is_deleted"])
+        self.assertEqual(list(destinations()), [gone, gone])
+        AutomationRule.objects.update(destination_project=None)
+        self.assertEqual(list(destinations()), [gone, gone])
+
     def test_a_rule_of_another_project_is_not_reached_through_this_one(self):
         rule_id = self.create().data["ruleId"]
         response = self.client.get(self.url("automation_rule_detail", self.x, rule_id))
@@ -886,7 +904,8 @@ class RulesApiTests(AutomationTestBase):
         self.assert_code(refused, "destination_not_found")
         shown = self.client.get(self.detail(rule_id))
         self.assertEqual(
-            shown.data["destination"], {"projectId": None, "name": None, "visible": False}
+            shown.data["destination"],
+            {"projectId": None, "name": None, "visible": False, "gone": False},
         )
         self.assertIsNone(shown.data["addTag"])
         self.assertNotIn("Xray", json.dumps(self.client.get(self.url()).data))
