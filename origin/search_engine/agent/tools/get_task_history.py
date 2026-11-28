@@ -48,6 +48,7 @@ from origin.search_engine.agent.tools.task_enums import (
     VALID_PRIORITIES,
     VALID_STATUSES,
 )
+from origin.services.history_labels import HistoryLabels
 from origin.views.public.mcp.via_privacy import via_for_viewer
 
 _DEFAULT_LIMIT = 30
@@ -314,6 +315,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if user_ids
         else {}
     )
+    # A name of a project, milestone, sprint or parent this reader may not see is not handed
+    # to the model either (MIP-2523); in memory only.
+    labels = HistoryLabels(rows, viewer_id=ctx.user_id, task_project_id=task.project_id)
+    for r in rows:
+        if r.metadata:
+            r.metadata = labels.metadata(r, r.metadata)
     history = [_entry(r, usernames, ctx.user_id) for r in rows]
 
     return {

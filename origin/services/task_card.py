@@ -268,6 +268,7 @@ def task_card_body(
     is_milestone: bool = False,
     labels: dict[str, str] | None = None,
     effort: str | None = None,
+    status_label: str | None = None,
 ) -> list:
     """Build the PM task-card header body.
 
@@ -280,11 +281,16 @@ def task_card_body(
     are not part of the bilingual demo, and their behaviour must not change.
     The *values* beside the labels stay as they are: `status` and `priority`
     are DB enum strings, so a chip reading `Open` is correct in either language.
+    `status_label` is what the project calls this status (MIP-2493): the chip says it,
+    and keeps the colour of `status`, its category.
     """
     labels = labels if labels is not None else CARD_LABELS
     return [
         _heading("🚩" if is_milestone else "🧾", title),
-        _row(card_label(labels["status"]), card_chip(status, STATUS_COLOR.get(status))),
+        _row(
+            card_label(labels["status"]),
+            card_chip(status_label or status, STATUS_COLOR.get(status)),
+        ),
         _row(
             card_label(labels["priority"]),
             card_chip(priority, PRIORITY_COLOR.get(priority)) if priority else neutral_chip(),
@@ -314,6 +320,7 @@ def milestone_card_body(
     due_date,
     team_id,
     labels: dict[str, str] | None = None,
+    status_label: str | None = None,
 ) -> list:
     """Build the PM milestone-card header body (`milestoneMessageTemplate`).
 
@@ -335,7 +342,10 @@ def milestone_card_body(
     return [
         _heading("🚩", title),
         _row(card_label(labels["sprint"]), card_chip(sprint_name or "—", "blue")),
-        _row(card_label(labels["status"]), card_chip(status, STATUS_COLOR.get(status))),
+        _row(
+            card_label(labels["status"]),
+            card_chip(status_label or status, STATUS_COLOR.get(status)),
+        ),
         _row(
             card_label(labels["priority"]),
             card_chip(priority, PRIORITY_COLOR.get(priority)) if priority else neutral_chip(),
