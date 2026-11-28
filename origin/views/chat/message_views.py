@@ -186,6 +186,15 @@ def _valid_mention_user_ids(channel, body):
     return _split_mentions_by_membership(channel, body)[0]
 
 
+def _mentioned_user_ids(channel, body) -> set:
+    """Everyone `body` mentions, group mentions expanded, whether or not they are in `channel`."""
+    mentioned = extract_mentioned_user_ids(body)
+    group_ids = extract_mention_group_ids(body)
+    if group_ids:
+        mentioned = mentioned | resolve_group_members(group_ids, team_id=channel.team_id)
+    return mentioned
+
+
 def _split_mentions_by_membership(channel, body):
     """`(members, non_members)` for the users mentioned in `body`.
 
@@ -195,10 +204,7 @@ def _split_mentions_by_membership(channel, body):
     recipient is never told. Surfacing the dropped ids is the only way
     that case is observable at all.
     """
-    mentioned = extract_mentioned_user_ids(body)
-    group_ids = extract_mention_group_ids(body)
-    if group_ids:
-        mentioned = mentioned | resolve_group_members(group_ids, team_id=channel.team_id)
+    mentioned = _mentioned_user_ids(channel, body)
     if not mentioned:
         return set(), set()
     valid = {
@@ -1008,19 +1014,42 @@ def rewrite_card_message(
         cleaned = message_via.without_via(given)
         if isinstance(metadata, dict) or cleaned is not given:
             metadata = cleaned
+    _write_card_messages([(message, body, body_text, metadata)], sync_mentions=sync_mentions)
+
+
+def rewrite_card_messages(rewrites) -> None:
+    """`rewrite_card_message(..., server_built=True)` for many cards at once, in a fixed number of
+    queries (MIP-2561). `rewrites` is a list of `(message, body, body_text, metadata)`, each
+    message loaded with its `channel`, each `metadata` built by the server from the stored row."""
+    _write_card_messages(list(rewrites), sync_mentions=True)
+
+
+def _write_card_messages(rewrites, *, sync_mentions) -> None:
+    if not rewrites:
+        return
     with transaction.atomic():
-        old_body, old_body_text = message.body, message.body_text
-        message.body = body
-        message.body_text = body_text
-        message.edited_at = timezone.now()
-        update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
-        if isinstance(metadata, dict):
-            message.metadata = metadata
-            update_fields.append("metadata")
-        message.save(update_fields=update_fields)
-        thread_summary_cleanup.forget_edited_message(
-            message, old_body=old_body, old_body_text=old_body_text
-        )
+        now = timezone.now()
+        edited: dict = {}  # channel id -> threads whose text changed
+        messages = []
+        update_fields = {"body", "body_text", "edited_at", "ts_updated_at"}
+        for message, body, body_text, metadata in rewrites:
+            if message.body != body or message.body_text != body_text:
+                edited.setdefault(message.channel_id, []).append(
+                    message.thread_root_id or message.pk
+                )
+            message.body = body
+            message.body_text = body_text
+            message.edited_at = now
+            # `bulk_update` skips `auto_now`.
+            message.ts_updated_at = now
+            if isinstance(metadata, dict):
+                message.metadata = metadata
+                update_fields.add("metadata")
+            messages.append(message)
+        # A row given no metadata is written back with its own, which is what it holds.
+        Message.objects.bulk_update(messages, sorted(update_fields))
+        for channel_id, thread_ids in edited.items():
+            thread_summary_cleanup.forget_threads(channel_id=channel_id, thread_ids=thread_ids)
 
         # Re-sync MessageMention rows from the new card body (the card
         # @-mentions the assignee + reporter). Mirrors
@@ -1031,16 +1060,31 @@ def rewrite_card_message(
         # reassignment's by `task_assignment_notice` (MIP-1461).
         if not sync_mentions:
             return
-        new_mentioned_ids = _valid_mention_user_ids(message.channel, body)
-        MessageMention.objects.filter(message=message).delete()
-        if new_mentioned_ids:
-            MessageMention.objects.bulk_create(
-                [
-                    MessageMention(message=message, mentioned_user_id=uid)
-                    for uid in new_mentioned_ids
-                ],
-                ignore_conflicts=True,
-            )
+        mentioned = [
+            (message, _mentioned_user_ids(message.channel, message.body)) for message in messages
+        ]
+        wanted: dict = {}  # channel id -> (channel, everyone its cards mention)
+        for message, user_ids in mentioned:
+            wanted.setdefault(message.channel_id, (message.channel, set()))[1].update(user_ids)
+        # Only people in the chat get a row, as in `_valid_mention_user_ids`.
+        members = {
+            channel_id: {
+                str(uid)
+                for uid in chat_member_rows(channel)
+                .filter(user_id__in=user_ids)
+                .values_list("user_id", flat=True)
+            }
+            for channel_id, (channel, user_ids) in wanted.items()
+            if user_ids
+        }
+        MessageMention.objects.filter(message__in=messages).delete()
+        rows = [
+            MessageMention(message=message, mentioned_user_id=uid)
+            for message, user_ids in mentioned
+            for uid in {str(u) for u in user_ids} & members.get(message.channel_id, set())
+        ]
+        if rows:
+            MessageMention.objects.bulk_create(rows, ignore_conflicts=True)
 
 
 class TaskCardMessageView(AuthenticatedAPIView):
