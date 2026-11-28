@@ -4,11 +4,11 @@ What matters, in the order tested:
 
   * The switch: with `GENOS_SKILLS` off the three tools are neither listed (full endpoint or the
     `skills` one) nor callable; on, they are listed, and they are on no other domain and not on core.
-  * ACL as the REST API and `/name`: the same skills in the same order (mine, team, installed,
-    official), a teammate reads the PUBLISHED text and never the owner's draft, a private, unpublished
-    or other team's skill is the same "not found" as a missing one, a public skill needs an install to
-    run (but may be read by id, as over REST), and an outside author's skill keeps its declared
-    ceiling but may only lead to a new task, note or to-do (the stranger rule of MIP-2044).
+  * ACL as the REST API and `/name`: the same skills in the same order (mine, installed team,
+    installed public), a teammate reads the INSTALLED text and never the owner's draft, a private,
+    unpublished or other team's skill is the same "not found" as a missing one, a skill that is not
+    installed (a teammate's or a public one) is refused with where to install it (MIP-2589), and an
+    outside author's skill keeps its declared ceiling but may only lead to a new task, note or to-do (the stranger rule of MIP-2044).
   * The text is untrusted: `get_skill` fences it (the client gets the untrusted-content notice),
     hidden characters are removed, and a run's instructions keep it between `skill_text` markers
     under rules it cannot change.
@@ -149,6 +149,7 @@ class ListTests(McpSkillBase):
         public = self.public_skill(slug="installed-one")
         official = self.public_skill(slug="official-one", install=False)
         Skill.objects.filter(pk=official.pk).update(is_official=True)
+        service.install(self.user, official.id)
 
         rows = self.listed()
         self.assertEqual(
@@ -157,7 +158,7 @@ class ListTests(McpSkillBase):
                 ("mine-one", "mine", "you"),
                 ("team-one", "team", "teammate"),
                 ("installed-one", "installed", "outside"),
-                ("official-one", "official", "official"),
+                ("official-one", "installed", "official"),
             ],
         )
         self.assertEqual(
@@ -310,17 +311,37 @@ class GetTests(McpSkillBase):
         self.assertIn("list_my_skills", answers.pop())
         self.assertIn("No skill named", self.refused("get_skill", skill="nothing"))
 
-    def test_a_public_skill_is_readable_by_id_without_the_install_as_over_rest(self):
+    def test_a_skill_not_installed_is_refused_with_where_to_install_it(self):
         public = self.public_skill(install=False, body_markdown="PUBLIC STEPS")
-        _, data = self.ok("get_skill", skill=str(public.id))
-        self.assertIn("PUBLIC STEPS", data["text"])
-        self.assertEqual(data["author"], "outside")
-        self.assertNotIn("installed_version_no", data)
-        # ... but a typed name does not find it (no squatting).
-        self.assertIn("No skill named", self.refused("get_skill", skill="report"))
+        for ref in (str(public.id), "report"):
+            for name in ("get_skill", "run_skill"):
+                with self.subTest(name=name, ref=ref):
+                    text = self.refused(name, skill=ref)
+                    self.assertIn("from the Genos Hub first", text)
+                    self.assertIn("/workspace?settings=spotlight&skills=hub", text)
+                    self.assertNotIn("PUBLIC STEPS", text)
+        service.install(self.user, public.id)
+        self.ok("get_skill", skill="report")
+
+    def test_a_hidden_skill_the_team_owner_sees_is_not_found_not_offered_to_install(self):
+        theirs = self.skill(self.user2, "team", install=False)
+        Skill.objects.filter(pk=theirs.pk).update(status="hidden_by_team")
+        missing = "00000000-0000-4000-8000-000000000000"
+        self.assertEqual(
+            self.refused("get_skill", skill=str(theirs.id)),
+            self.refused("get_skill", skill=missing),
+        )
+
+    def test_a_teammates_skill_not_installed_is_refused_with_team_skills(self):
+        theirs = self.skill(self.user2, "team", install=False, body_markdown="TEAM STEPS")
+        for ref in (str(theirs.id), "report"):
+            text = self.refused("run_skill", skill=ref)
+            self.assertIn("from Team skills first", text)
+            self.assertIn("/workspace?settings=spotlight&skills=team", text)
+        self.assertEqual(self.listed(), [])
 
     def test_the_public_kill_switch_hides_it(self):
-        public = self.public_skill(install=False)
+        public = self.public_skill()
         self.ok("get_skill", skill=str(public.id))
         with override_settings(GENOS_SKILLS_PUBLIC=False):
             self.refused("get_skill", skill=str(public.id))
@@ -478,7 +499,7 @@ class RunTests(McpSkillBase):
     def test_a_public_skill_needs_the_install_even_by_id(self):
         public = self.public_skill(install=False)
         self.assertIn("Install", self.refused("run_skill", skill=str(public.id)))
-        self.assertIn("No skill named", self.refused("run_skill", skill="report"))
+        self.assertIn("Install", self.refused("run_skill", skill="report"))
         service.install(self.user, public.id)
         self.ok("run_skill", skill="report")
 

@@ -307,6 +307,10 @@ class StatusRulesTests(SpecificBase):
 class RunTests(SpecificBase):
     def test_a_grantee_runs_it_by_id_and_by_name_as_a_teammates_skill(self):
         skill = self.specific([self.person(self.third)], slug="mine-to-share")
+        with self.assertRaises(run.InstallRequired) as caught:  # shared is not installed
+            self.resolve({"name": "mine-to-share"}, user=self.third)
+        self.assertEqual(caught.exception.extra["where"], "team")
+        service.install(self.third, skill.id)
         by_id = self.resolve({"id": str(skill.id)}, user=self.third)
         by_name = self.resolve({"name": "mine-to-share"}, user=self.third)
         for got in (by_id, by_name):
@@ -321,6 +325,7 @@ class RunTests(SpecificBase):
 
     def test_a_revoked_grant_stops_the_next_run(self):
         skill = self.specific([self.person(self.third), self.person(self.fourth)], slug="revoke")
+        service.install(self.fourth, skill.id)
         self.assertEqual(self.resolve({"name": "revoke"}, user=self.fourth).skill_id, str(skill.id))
         service.update(self.owner, skill.id, service.Fields(shares=[self.person(self.third)]))
         with self.assertRaises(service.SkillNotFound):
@@ -329,6 +334,7 @@ class RunTests(SpecificBase):
     def test_a_group_member_who_leaves_stops_running_it(self):
         skill = self.specific([{"kind": "groupChat", "id": str(self.chat.pk)}], slug="chat-run")
         ChannelMember.objects.create(channel=self.chat, user=self.third, role="member")
+        service.install(self.third, skill.id)
         self.assertEqual(
             self.resolve({"name": "chat-run"}, user=self.third).skill_id, str(skill.id)
         )
@@ -337,8 +343,11 @@ class RunTests(SpecificBase):
             self.resolve({"name": "chat-run"}, user=self.third)
 
     def test_a_team_and_a_specific_skill_with_one_name_are_both_offered_not_guessed(self):
-        self.skill(self.user, "team", slug="clash")
-        self.specific([self.person(self.third)], slug="clash")
+        mine = self.skill(self.user, "team", slug="clash")
+        shared = self.specific([self.person(self.third)], slug="clash")
+        service.install(self.third, mine.id)
+        service.install(self.third, shared.id)
+        service.install(self.fourth, mine.id)
         with self.assertRaises(run.SkillAmbiguous):
             self.resolve({"name": "clash"}, user=self.third)
         # A teammate who is not named sees only the team skill.
@@ -348,6 +357,10 @@ class RunTests(SpecificBase):
 
     def test_the_picker_lists_it_for_the_grantee_only(self):
         skill = self.specific([self.person(self.third)], slug="picked")
+        self.assertNotIn(
+            str(skill.id), [r["id"] for r in run.runnable(self.third, self.team.team_id)]
+        )
+        service.install(self.third, skill.id)
         rows = run.runnable(self.third, self.team.team_id)
         row = next(r for r in rows if r["id"] == str(skill.id))
         self.assertEqual(
@@ -361,6 +374,8 @@ class RunTests(SpecificBase):
     def test_the_callers_tool_ceiling_still_applies(self):
         read = self.specific([self.person(self.third)], slug="read-only", tool_level="read")
         act = self.specific([self.person(self.third)], slug="may-act", tool_level="act")
+        service.install(self.third, read.id)
+        service.install(self.third, act.id)
         from origin.search_engine.agent.tool_tiers import SINGLE_WRITE_TOOLS
 
         self.assertTrue(
@@ -605,6 +620,7 @@ class McpTests(SpecificBase, McpSkillBase):
     def test_list_get_and_run_honour_the_grant(self):
         skill = self.specific([self.person(self.third)], slug="mcp-shared")
         sid = str(skill.id)
+        service.install(self.third, skill.id)
         # The member named: listed as a teammate's skill, readable, runnable.
         self.other_key(self.third)
         rows = {r["id"]: r for r in self.listed()}

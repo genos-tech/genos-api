@@ -1353,7 +1353,7 @@ def erase_for_user(user: CustomUser) -> None:
             star_count=F("star_count") - 1
         )
     SkillStar.objects.filter(user=user).delete()
-    for install in SkillInstall.objects.filter(user=user):
+    for install in SkillInstall.objects.filter(user=user, counted=True):
         Skill.objects.filter(pk=install.skill_id, install_count__gt=0).update(
             install_count=F("install_count") - 1
         )
@@ -1888,7 +1888,8 @@ TABS = ("mine", "team", "installed", "starred")
 
 def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
     """A tab of the skills page. `mine`: the member's own in this team. `team`: teammates'
-    published team skills in this team. `installed`: the public skills the member installed.
+    published team skills in this team. `installed`: the skills the member installed (public ones,
+    and this team's, MIP-2589).
     `starred`: everything they starred that they can still read."""
     require_enabled()
     if tab not in TABS:
@@ -1903,8 +1904,11 @@ def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
     )
     base = Skill.objects.select_related("owner", "owner__skill_profile")
     if tab == "installed":
+        installed = base.filter(visible_to(user.pk), installs__user=user)
+        if team_id is not None:  # another team's skill does not run here
+            installed = installed.filter(Q(visibility=VISIBILITY_PUBLIC) | Q(team_id=team_id))
         return (
-            base.filter(visible_to(user.pk), installs__user=user)
+            installed.exclude(owner=user)
             .annotate(shown_at=published_at)
             .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
         )
@@ -1996,14 +2000,20 @@ def copy(user: CustomUser, skill_id: Any, team_id: Any) -> Skill:
 
 
 def install(user: CustomUser, skill_id: Any) -> SkillInstall:
-    """Pin the published version of a PUBLIC skill into the member's list. The owner's own skill
-    and a team skill are already theirs to run, so they refuse."""
+    """Pin the published version of a skill into the member's list: a public one (the Genos Hub) or
+    one shared with them in a team (Team skills, MIP-2589). Only an installed skill, or their own,
+    runs. A team install stays usable only while the person can still read the skill (`can_read`,
+    asked at every run), so leaving the team ends it."""
     require_enabled()
     skill = get_readable(user.pk, skill_id)
-    if skill.visibility != VISIBILITY_PUBLIC:
-        raise SkillError("Only public skills are installed. Copy a team skill to keep your own.")
     if is_owner(skill, user.pk):
         raise SkillError("This is your own skill.")
+    if skill.visibility == VISIBILITY_PRIVATE:
+        raise SkillError("A private skill is not shared, so it cannot be installed.")
+    if not _published(skill):
+        raise SkillError("This skill cannot be installed right now: it has no shared version.")
+    if skill.visibility != VISIBILITY_PUBLIC and not is_team_member(skill.team_id, user.pk):
+        raise SkillNotFound
     with transaction.atomic():
         row, created = SkillInstall.objects.get_or_create(
             user=user, skill=skill, defaults={"version_no": skill.published_version_no}
@@ -2016,8 +2026,11 @@ def install(user: CustomUser, skill_id: Any) -> SkillInstall:
 def uninstall(user: CustomUser, skill_id: Any) -> None:
     require_enabled()
     with transaction.atomic():
-        deleted, _ = SkillInstall.objects.filter(user=user, skill_id=skill_id).delete()
-        if deleted:
+        row = SkillInstall.objects.select_for_update().filter(user=user, skill_id=skill_id).first()
+        if row is None:
+            return
+        row.delete()
+        if row.counted:
             Skill.objects.filter(pk=skill_id, install_count__gt=0).update(
                 install_count=F("install_count") - 1
             )
@@ -2131,7 +2144,11 @@ def update_diff(user: CustomUser, skill_id: Any) -> dict[str, Any]:
         .order_by("version_no")
         .only("version_no", "changelog")
     ]
-    outside = not is_owner(skill, user.pk) and not skill.is_official
+    outside = (
+        skill.visibility == VISIBILITY_PUBLIC
+        and not skill.is_official
+        and not is_owner(skill, user.pk)
+    )
     out["needsConfirmation"] = needed_confirmations(
         user.pk, skill, outside=outside, version_no=newest
     )[0]

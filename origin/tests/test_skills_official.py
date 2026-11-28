@@ -293,7 +293,9 @@ class ReleaseUpdateTests(SyncBase):
         sync_command("--apply")
         skill = official_skills().get(slug=TRIAGE)
         SkillStar.objects.create(user=self.user, skill=skill)
-        SkillInstall.objects.create(user=self.user, skill=skill, version_no=1)
+        SkillInstall.objects.update_or_create(
+            user=self.user, skill=skill, defaults={"version_no": 1}
+        )  # `triage` is a default, so the first sync may already have made the row
         Skill.objects.filter(pk=skill.pk).update(star_count=3, install_count=2, run_count_30d=5)
         old_note = skill.note_id
 
@@ -309,7 +311,8 @@ class ReleaseUpdateTests(SyncBase):
             (skill.star_count, skill.install_count, skill.run_count_30d, skill.note_id),
             (3, 2, 5, old_note),
         )
-        self.assertEqual(SkillInstall.objects.get(skill=skill).version_no, 1)  # pinned: they accept
+        mine = SkillInstall.objects.get(user=self.user, skill=skill)
+        self.assertEqual(mine.version_no, 1)  # pinned: they accept
         new = skill.versions.get(version_no=2)
         self.assertEqual(new.changelog, "Genos skills v9.9.9")
         self.assertIn("v9.9.9", new.body_markdown)

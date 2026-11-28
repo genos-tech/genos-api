@@ -12,16 +12,17 @@ WHICH SKILL. The client sends `skill: {"id": ...}` (a picker chip: exact) or `sk
     1. my skills          owner = the caller, in the team the ask is made from
     2. team skills        a teammate's PUBLISHED team skill in that team (two with one name: 409
                           with the candidates, the caller picks one)
-    3. installed skills   public skills the caller installed, then the official ones
+    3. installed public skills
 
-A public skill the caller has not installed never runs from a name (no squatting), and not from an
-id either: it must be installed (or official). The whole feature is the `GENOS_SKILLS` switch: off,
-the ask view does not read `skill` at all.
+WHAT MAY RUN (MIP-2589). Only the caller's own skills and the ones they INSTALLED: a team skill
+(from Team skills) and a public one (from the Genos Hub, official skills included) both need an
+install. A few general official skills are installed for everybody (`defaults.py`). A skill that is
+readable but not installed answers `InstallRequired`, which says where to install it. The whole
+feature is the `GENOS_SKILLS` switch: off, the ask view does not read `skill` at all.
 
 WHICH TEXT. The owner's own run reads their DRAFT (the live note), so they can test what they are
-writing. Everybody else gets the PUBLISHED version (a teammate's team skill) or the version they
-pinned (an installed one): text a reader runs never moves under them, and an owner's unpublished
-edit never reaches a teammate.
+writing. Everybody else gets the version they installed (pinned, until they take an update): text a
+reader runs never moves under them, and an owner's unpublished edit never reaches a teammate.
 
 WHAT IT MAY DO. The skill's `tool_level` is a CEILING that only ever shrinks what the caller has:
 the tools it hides are added to the caller's own `disabled_tools`, so a `read` skill hides every
@@ -70,12 +71,17 @@ from origin.services.skills import guard, service
 
 logger = logging.getLogger(__name__)
 
-# The groups of the picker, in resolution order. `official` is the last, after `installed`.
+# The groups of the picker, in resolution order. Everything but `mine` is an install: `team` is an
+# installed team skill (or one shared with the caller), `installed` an installed public one.
 GROUP_MINE = "mine"
 GROUP_TEAM = "team"
 GROUP_INSTALLED = "installed"
-GROUP_OFFICIAL = "official"
-GROUPS = (GROUP_MINE, GROUP_TEAM, GROUP_INSTALLED, GROUP_OFFICIAL)
+GROUPS = (GROUP_MINE, GROUP_TEAM, GROUP_INSTALLED)
+
+# Where a skill that is not installed yet is installed from.
+WHERE_TEAM = "team"
+WHERE_HUB = "hub"
+_WHERE_WORDS = {WHERE_TEAM: "Team skills", WHERE_HUB: "the Genos Hub"}
 
 # Who wrote the skill, from the caller's side. Worded in the block.
 AUTHOR_YOU = "you"
@@ -119,6 +125,28 @@ class SkillAmbiguous(service.SkillError):
         )
 
 
+class InstallRequired(service.SkillForbidden):
+    """The skill exists and the caller may see it, but has not installed it (MIP-2589). A
+    suggestion with the place to install it from, never a bare "no"."""
+
+    code = "install_required"
+
+    def __init__(self, slug: str, where: str, skill_id: str = "") -> None:
+        self.slug = _safe_slug(slug)
+        self.where = where
+        super().__init__(
+            f"Install `/{self.slug}` from {_WHERE_WORDS[where]} first, then run it.",
+            where=where,
+            slug=self.slug,
+            **({"skillId": skill_id} if skill_id else {}),
+        )
+
+
+def install_page_path(where: str) -> str:
+    """The app's address of the list the skill is installed from (Settings > Genos > Skills)."""
+    return f"/workspace?settings=spotlight&skills={where}"
+
+
 @dataclass(frozen=True)
 class ResolvedSkill:
     """What a run needs, decided once at the ask and never again from the client's word."""
@@ -151,6 +179,17 @@ def parse_ref(raw: Any) -> tuple[str, str]:
     if isinstance(name, str) and name.strip():
         return "name", name.strip().lstrip("/").lower()
     raise service.SkillError("`skill` needs an `id` or a `name`.")
+
+
+def is_optional_name(raw: Any) -> bool:
+    """`{"name": ..., "optional": true}`: the app could not tell from its own list whether the typed
+    `/word` is a skill, so a name that matches nothing is not a refusal (MIP-2589)."""
+    return (
+        isinstance(raw, dict)
+        and raw.get("optional") is True
+        and not raw.get("id")
+        and isinstance(raw.get("name"), str)
+    )
 
 
 def typed_slug(query: str) -> str | None:
@@ -203,6 +242,10 @@ def _retry_version(raw: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
+def _where(skill: Skill) -> str:
+    return WHERE_HUB if skill.visibility == VISIBILITY_PUBLIC else WHERE_TEAM
+
+
 def _is_official(skill: Skill) -> bool:
     return bool(skill.is_official)
 
@@ -228,15 +271,16 @@ def _by_id(user: Any, team_id: str, skill_id: str) -> tuple[Skill, SkillInstall 
             raise service.SkillNotFound
         # `can_read` lets the team owner (and a co-editor) SEE a hidden team skill, to show it again;
         # that is not a licence to run it. Hidden or taken down is not runnable: the same 404.
-        if skill.status != STATUS_ACTIVE:
+        if skill.status != STATUS_ACTIVE or not service.is_team_member(team_id, user.pk):
             raise service.SkillNotFound
-        return skill, None
-    if skill.visibility == VISIBILITY_PUBLIC:
-        install = _install_of(user, skill)
-        if install is None and not _is_official(skill):
-            raise service.SkillForbidden("Install this skill before you run it.")
-        return skill, install
-    raise service.SkillNotFound
+    elif skill.visibility != VISIBILITY_PUBLIC:
+        raise service.SkillNotFound
+    install = _install_of(user, skill)
+    if install is None:
+        if skill.published_version_no <= 0:
+            raise service.SkillNotFound
+        raise InstallRequired(skill.slug, _where(skill), str(skill.id))
+    return skill, install
 
 
 def _by_name(user: Any, team_id: str, slug: str) -> tuple[Skill, SkillInstall | None]:
@@ -244,53 +288,71 @@ def _by_name(user: Any, team_id: str, slug: str) -> tuple[Skill, SkillInstall | 
     mine = Skill.objects.filter(owner=user, team_id=team_id, slug=slug).first()
     if mine is not None:
         return mine, None
-    # 2. team: only for a member of the team (not a guest), published and active: a team skill, or
-    # one shared with this person (`shared_readers`, the one rule `can_read` and the lists use)
-    if service.is_team_member(team_id, user.pk):
-        teammates = list(
-            Skill.objects.select_related("owner")
-            .filter(
-                service.shared_readers(user.pk),
-                team_id=team_id,
-                slug=slug,
-                published_version_no__gt=0,
-                status=STATUS_ACTIVE,
-            )
-            .exclude(owner=user)
-            .order_by("created_at")[:6]
-        )
-        if len(teammates) == 1:
-            return teammates[0], None
-        if teammates:
-            raise SkillAmbiguous(
-                slug,
-                [
-                    {"id": str(s.id), "title": s.title, "ownerName": s.owner.username}
-                    for s in teammates
-                ],
-            )
-    # 3. installed, then official. `can_read` applies the public switch and the status.
+    member = service.is_team_member(team_id, user.pk)
     installs = list(
         SkillInstall.objects.select_related("skill__owner")
         .filter(user=user, skill__slug=slug)
-        .order_by("created_at")[:5]
+        .exclude(skill__owner=user)
+        .order_by("created_at")[:20]
     )
+    # 2. installed team skills: of this team, still active and still shared with the caller (asked
+    # live by `can_read`, so someone who left the team or a share no longer runs it)
+    team = [
+        i
+        for i in installs
+        if member
+        and i.skill.visibility in (VISIBILITY_TEAM, VISIBILITY_SPECIFIC)
+        and str(i.skill.team_id) == team_id
+        and i.skill.status == STATUS_ACTIVE
+        and service.can_read(i.skill, user.pk)
+    ]
+    if len(team) == 1:
+        return team[0].skill, team[0]
+    if team:
+        raise SkillAmbiguous(
+            slug,
+            [
+                {
+                    "id": str(i.skill.id),
+                    "title": i.skill.title,
+                    "ownerName": i.skill.owner.username,
+                }
+                for i in team
+            ],
+        )
+    # 3. installed public skills. `can_read` applies the public switch and the status.
     for install in installs:
-        if service.can_read(install.skill, user.pk) and not service.is_owner(
+        if install.skill.visibility == VISIBILITY_PUBLIC and service.can_read(
             install.skill, user.pk
         ):
             return install.skill, install
-    if service.public_enabled():
-        official = Skill.objects.filter(
-            is_official=True,
-            visibility=VISIBILITY_PUBLIC,
-            slug=slug,
-            published_version_no__gt=0,
-            status=STATUS_ACTIVE,
-        ).first()
-        if official is not None:
-            return official, None
+    # Not installed. Say where it can be installed from, if there is somewhere.
+    _suggest_install(user, team_id, slug, member)
     raise service.SkillNotFound(f"No skill named `{slug}`.")
+
+
+def _suggest_install(user: Any, team_id: str, slug: str, member: bool) -> None:
+    """Raise `InstallRequired` when the caller could install a skill of this name: a teammate's
+    first (Team skills), else a public one (the Genos Hub)."""
+    published = {"slug": slug, "published_version_no__gt": 0, "status": STATUS_ACTIVE}
+    if member:
+        shared = list(
+            Skill.objects.filter(service.shared_readers(user.pk), team_id=team_id, **published)
+            .exclude(owner=user)
+            .order_by("created_at")
+            .values_list("id", flat=True)[:2]
+        )
+        if shared:
+            raise InstallRequired(slug, WHERE_TEAM, str(shared[0]) if len(shared) == 1 else "")
+    if service.public_enabled():
+        public = (
+            Skill.objects.filter(visibility=VISIBILITY_PUBLIC, **published)
+            .exclude(owner=user)
+            .values_list("id", flat=True)
+            .first()
+        )
+        if public is not None:
+            raise InstallRequired(slug, WHERE_HUB, str(public))
 
 
 def _author_of(user: Any, skill: Skill) -> str:
@@ -680,49 +742,39 @@ def rebuild_block(kept: dict[str, Any], user: Any, team_id: Any) -> str | None:
 
 def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
     """What `/` may offer this caller in this team, grouped in resolution order, in a constant number
-    of queries. Metadata only: no text, never a note id. A hidden, taken-down or unpublished skill
-    of someone else is not in it."""
+    of queries: their own skills and the ones they installed (MIP-2589). Metadata only: no text,
+    never a note id. A hidden, taken-down or unpublished skill of someone else is not in it."""
     service.require_enabled()
     team_id = str(team_id)
     if not service.is_team_member(team_id, user.pk):
         raise service.SkillNotFound("Team not found.")
-    base = Skill.objects.select_related("owner")
-    visible = service.visible_to(user.pk)
-    mine = list(base.filter(owner=user, team_id=team_id).order_by("slug")[:PICKER_GROUP_CAP])
-    team = list(
-        base.filter(
-            service.shared_readers(user.pk),
-            team_id=team_id,
-            published_version_no__gt=0,
-            status=STATUS_ACTIVE,
-        )
-        .exclude(owner=user)
-        .order_by("slug", "created_at")[:PICKER_GROUP_CAP]
+    mine = list(
+        Skill.objects.select_related("owner")
+        .filter(owner=user, team_id=team_id)
+        .order_by("slug")[:PICKER_GROUP_CAP]
+    )
+    # Installs only (MIP-2589). Public ones from anywhere; team ones of THIS team, which
+    # `visible_to` limits to the people they are still shared with. A skill the team owner hid is
+    # not offered, even to the team owner.
+    installable = Q(visibility=VISIBILITY_PUBLIC) | Q(
+        visibility__in=(VISIBILITY_TEAM, VISIBILITY_SPECIFIC), team_id=team_id
     )
     installs = list(
         SkillInstall.objects.select_related("skill__owner")
         .filter(user=user)
-        .filter(skill__in=Skill.objects.filter(visible))
-        .order_by("skill__slug")[:PICKER_GROUP_CAP]
-    )
-    installed_ids = {i.skill_id for i in installs}
-    official: list[Skill] = []
-    if service.public_enabled():
-        official = list(
-            base.filter(
-                is_official=True,
-                visibility=VISIBILITY_PUBLIC,
-                published_version_no__gt=0,
-                status=STATUS_ACTIVE,
-            )
-            .exclude(pk__in=installed_ids)
-            .exclude(owner=user)
-            .order_by("slug")[:PICKER_GROUP_CAP]
+        .filter(
+            skill__in=Skill.objects.filter(
+                service.visible_to(user.pk), installable, status=STATUS_ACTIVE
+            ).exclude(owner=user)
         )
+        .order_by("skill__slug", "created_at")[: PICKER_GROUP_CAP * 2]
+    )
+    team = [i for i in installs if i.skill.visibility != VISIBILITY_PUBLIC]
+    public = [i for i in installs if i.skill.visibility == VISIBILITY_PUBLIC]
+    team, public = team[:PICKER_GROUP_CAP], public[:PICKER_GROUP_CAP]
     # The metadata a reader sees is the version's, never the owner's draft: one query for all.
-    wanted: dict[Any, int] = {s.pk: s.published_version_no for s in [*team, *official]}
-    wanted.update({i.skill_id: i.version_no for i in installs})
-    # Only the version each row shows (the published or the pinned one), not every version it has.
+    wanted = {i.skill_id: i.version_no for i in [*team, *public]}
+    # Only the version each row shows (the pinned one), not every version it has.
     versions: dict[tuple[Any, int], SkillVersion] = {}
     if wanted:
         pairs = Q()
@@ -738,7 +790,7 @@ def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
     from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports service
 
     colours = skill_tags.color_map(
-        [*mine, *team, *(i.skill for i in installs), *official],
+        [*mine, *(i.skill for i in [*team, *public])],
         user.pk,
         {s.note_id for s in mine},
     )
@@ -747,7 +799,7 @@ def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
         if group == GROUP_MINE:
             src: Any = skill
         else:
-            src = versions.get((skill.pk, pinned or skill.published_version_no))
+            src = versions.get((skill.pk, pinned))
             if src is None:
                 return None
         return {
@@ -782,8 +834,7 @@ def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
 
     rows = [
         *(row(GROUP_MINE, s) for s in mine),
-        *(row(GROUP_TEAM, s) for s in team),
-        *(row(GROUP_INSTALLED, i.skill, pinned=i.version_no) for i in installs),
-        *(row(GROUP_OFFICIAL, s) for s in official),
+        *(row(GROUP_TEAM, i.skill, pinned=i.version_no) for i in team),
+        *(row(GROUP_INSTALLED, i.skill, pinned=i.version_no) for i in public),
     ]
     return [r for r in rows if r is not None]

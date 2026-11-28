@@ -290,11 +290,12 @@ class SkillListView(_Base):
             return _error("`team_id` is required.")
         if tab == "runnable":
             # The `/` picker (MIP-2042): what this caller may run in this team, grouped in the order
-            # a typed name resolves. Metadata only, never the text.
+            # a typed name resolves. Metadata only, never the text. `publicEnabled`: whether there
+            # is a Genos Hub to point at for more (MIP-2589).
             entries, problem = self._run(lambda: run.runnable(user, team))
             if problem:
                 return problem
-            return Response({"skills": entries})
+            return Response({"skills": entries, "publicEnabled": service.public_enabled()})
         rows, problem = self._run(lambda: list(service.list_for(user, team, tab)))
         if problem:
             return problem
@@ -339,7 +340,7 @@ class SkillListView(_Base):
             )
             for s in rows
         ]
-        if tab == "installed" and rows:
+        if tab in ("installed", "team") and rows:
             _add_installed_state(rows, out_rows, user.pk)
         return Response(
             {

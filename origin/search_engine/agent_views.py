@@ -1335,10 +1335,20 @@ class AgentAskView(AuthenticatedAPIView):
                 # the HOST team, but the person's skills belong to the team they are asking from.
                 skill_to_run = skill_run.resolve(request.user, claimed_team, data["skill"])
             except skill_service.SkillError as exc:
-                return Response(
-                    {"error": str(exc), **({"code": exc.code} if exc.code else {}), **exc.extra},
-                    status=exc.status,
-                )
+                # A typed `/word` that names no skill at all ("/tmp is full, why?") is an ordinary
+                # question. One that names a skill to install first is still refused (MIP-2589).
+                if not (
+                    isinstance(exc, skill_service.SkillNotFound)
+                    and skill_run.is_optional_name(data["skill"])
+                ):
+                    return Response(
+                        {
+                            "error": str(exc),
+                            **({"code": exc.code} if exc.code else {}),
+                            **exc.extra,
+                        },
+                        status=exc.status,
+                    )
 
         # The task or milestone the ask is about (MIP-1057), read by the asker's own access BEFORE
         # anything is spent or written: a refused ask opens no cost rollup, mints no session and leaves

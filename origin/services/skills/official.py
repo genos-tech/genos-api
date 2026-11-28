@@ -23,6 +23,8 @@ database match it, and is what `manage.py sync_official_skills` runs.
 * VISIBILITY. Nothing here changes who can see a public skill: that is `GENOS_SKILLS_PUBLIC`
   (`service.can_read`, `visible_to`, the picker and the by-name lookup all check it). With the switch
   off the sync can run and no member sees an official skill.
+* INSTALLS. A member runs an official skill only once it is installed (MIP-2589). The sync installs
+  the default ones (`defaults.DEFAULT_SKILL_SLUGS`) for everybody when it first creates them.
 * A skill an operator moved to review, hidden or took down (`MODERATED_STATUSES`) is left alone and
   reported: the sync never undoes a moderation decision.
 * A skill that is no longer in the catalog is reported ("orphan") and left as it is.
@@ -50,7 +52,7 @@ from origin.models.skills.skill_models import (
 )
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.services import blind_index
-from origin.services.skills import guard, service, text
+from origin.services.skills import defaults, guard, service, text
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +320,8 @@ def sync(*, apply: bool = False, only: set[str] | None = None) -> Report:
             assert user is not None and team is not None
             try:
                 _write(spec, user, team, existing.get(spec.slug))
+                if action.kind == CREATE:
+                    defaults.install_for_everyone(spec.slug)
             except IntegrityError:
                 # A member published the same name between the check and the write.
                 if existing.get(spec.slug) is not None:

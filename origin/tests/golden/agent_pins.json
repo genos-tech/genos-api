@@ -122,9 +122,9 @@
       "search_knowledge_base/declaration": "a2cfb0b2c22515072f7b557911d9104203101e6d41898d763c455d45e865260c"
     },
     "test_mcp_skills_pins": {
-      "declaration:get_skill": "90c744e63b0993a75bfad9b869fc1c7768b1411fc89b7135d5eed2a23efdabac",
-      "declaration:list_my_skills": "23f1c96beff56b41d0b2a21d2b9ee7e03fc3e90a9779c4f312a2edb0e5ba4190",
-      "declaration:run_skill": "50f4ab34cc7268aeca29c93b33e20292257aba53688385939eb2c9e0d691889d",
+      "declaration:get_skill": "8ba7e6d3cfe9ef2f2e1c236cf0606a4ba2a36c916dc200cc94f5b251d300fbd6",
+      "declaration:list_my_skills": "107d102148570393bcb232e1342a5df1c75cd55a45a86438d20cf50c0e46026e",
+      "declaration:run_skill": "f2fde5167f1456cc5dc03f1cc38fc27e3dcb660d0f3b5449885efb3d4670eeb3",
       "instructions:outside:act": "a62b79a393d4ce38f52c2e7248774a450a20f02094230dc2583c8a60be4c2c3a",
       "instructions:outside:read": "f0cc96c630f93b3a3349e976b9c3541044159d7e28c61ca316be9392e79c26db",
       "instructions:teammate:act": "b79f09005da7f4f78e50eaefd9962d194f0d54ee1e2a6431c1f9f00f65c98c02",

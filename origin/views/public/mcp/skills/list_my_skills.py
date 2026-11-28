@@ -1,6 +1,7 @@
 """`list_my_skills` (MIP-2046): MCP-only, see `skills/__init__.py`.
 
-The Genos skills the member may run in this team, in the order `/name` resolves a typed name. The
+The Genos skills the member may run in this team (their own and installed ones, MIP-2589), in the
+order `/name` resolves a typed name. The
 logic, and every access rule, is in `origin/services/skills/mcp.py`.
 """
 
@@ -42,13 +43,15 @@ def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
     payload: dict[str, Any] = {"skills": rows}
     if not rows:
+        more = (
+            "The member writes skills in the Genos app (Skills), and installs a teammate's from "
+            "Team skills or a public one from the Genos Hub: only those and the ones they wrote "
+            "can be run."
+        )
         payload["note"] = (
-            "No skill matches. Skills are written in the Genos app (Skills); one a teammate "
-            "published to the team, or a public one the member installed, appears here too."
+            f"No skill matches. {more}"
             if out["query"]
-            else "The member has no skills to run yet. They are written in the Genos app "
-            "(Skills); one a teammate published to the team, or a public one the member "
-            "installed, appears here too."
+            else f"The member has no skills to run yet. {more}"
         )
     payload["__summary__"] = f"{len(rows)} skill(s)."
     return payload

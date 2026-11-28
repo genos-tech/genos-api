@@ -1021,6 +1021,7 @@ origin.SkillInstall:
   skill: none
   version_no: none
   auto_update: none
+  counted: none
   created_at: none
 origin.SkillReport:
   id: none

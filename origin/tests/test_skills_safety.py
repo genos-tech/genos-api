@@ -661,7 +661,8 @@ class ApprovalRoundTripTests(base.ResumeBase):
         self.model.generate_step = generate_step
 
     def make(self, owner, visibility, body, **over):
-        return service.create(
+        """A skill of `owner`; a teammate's team skill is installed by `self.user` (MIP-2589)."""
+        skill = service.create(
             owner,
             self.team.team_id,
             service.Fields(
@@ -675,6 +676,9 @@ class ApprovalRoundTripTests(base.ResumeBase):
                 **over,
             ),
         )
+        if visibility == "team" and owner != self.user:
+            service.install(self.user, skill.id)
+        return skill
 
     def outside_skill(self, body):
         outsider = User.objects.create_user(

@@ -19,7 +19,7 @@ from origin.search_engine.agent.tools import base as tool_base
 from origin.services import schedules
 from origin.services.dashboard_page import STATUSES
 from origin.services.schedule_jobs import skill_dashboard
-from origin.services.skills import official, text
+from origin.services.skills import official, service, text
 from origin.tests.test_schedule_dashboard_skill import DashBase
 from origin.tests.test_skills_api import LIST
 from origin.tests.test_skills_official import official_skills, sync_command
@@ -114,6 +114,8 @@ class DashboardFromTheStarterTests(DashBase):
         super().setUp()
         sync_command("--apply")
         self.starter = official_skills().get(slug=SLUG)
+        # Not a default skill: the member installs it from the Genos Hub (MIP-2589).
+        service.install(self.user, self.starter.pk)
 
     def test_a_member_finds_it_among_the_skills_that_make_dashboards(self):
         self.as_user(self.user)

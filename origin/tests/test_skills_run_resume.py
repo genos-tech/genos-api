@@ -103,6 +103,7 @@ class SkillResumeKeepsCeilingTests(SkillResumeBase):
                 visibility="team",
             ),
         )
+        service.install(self.user, theirs.id)
         run_id, token = self.ask(skill={"id": str(theirs.id)})
         service.update(mate, theirs.id, service.Fields(visibility="private"))
         self.decide_to_the_end(run_id, token)
@@ -129,6 +130,7 @@ class SkillResumeKeepsTheVersionTests(SkillResumeBase):
                 visibility="team",
             ),
         )
+        service.install(self.user, theirs.id)
         run_id, token = self.ask(skill={"id": str(theirs.id)})
         service.update(
             mate,

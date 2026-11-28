@@ -71,8 +71,14 @@ class RunBase(SkillBase):
         TeamMembers.objects.create(team=self.team, attendee=self.third)
 
     def skill(self, owner, visibility="private", **over):
+        """A skill of `owner`. A teammate's TEAM skill is installed by `self.user` unless
+        `install=False` (MIP-2589: nothing but the member's own runs without an install)."""
+        install = over.pop("install", True)
         team = self.other_team.team_id if owner == self.outsider else self.team.team_id
-        return service.create(owner, team, fields(visibility=visibility, **over))
+        skill = service.create(owner, team, fields(visibility=visibility, **over))
+        if install and visibility == "team" and owner in (self.user2, self.third):
+            service.install(self.user, skill.id)
+        return skill
 
     def legacy_team_skill(self, owner, slug="report"):
         """A team skill whose name a teammate's team skill already uses. Since MIP-2210 the API and
@@ -89,7 +95,7 @@ class RunBase(SkillBase):
     def public_skill(self, owner=None, **over):
         """A public skill by an outsider, installed by `self.user` unless `install=False`."""
         install = over.pop("install", True)
-        skill = self.skill(owner or self.outsider, "public", **over)
+        skill = self.skill(owner or self.outsider, "public", install=False, **over)
         if install:
             service.install(self.user, skill.id)
         return skill
@@ -120,9 +126,10 @@ class ResolutionOrderTests(RunBase):
         mine = self.skill(self.user)
         self.assertEqual(self.resolve({"name": "/Report"}).skill_id, str(mine.id))
 
-    def test_official_skills_come_after_installed_ones(self):
+    def test_an_installed_official_skill_runs_as_official(self):
         official = self.public_skill(install=False, body_markdown="OFFICIAL")
         Skill.objects.filter(pk=official.pk).update(is_official=True)
+        service.install(self.user, official.id)
         got = self.resolve({"name": "report"})
         self.assertEqual((got.skill_id, got.author), (str(official.id), run.AUTHOR_OFFICIAL))
         # An installed skill of the same name used to beat it. Since MIP-2210 a public name is
@@ -196,10 +203,10 @@ class AccessTests(RunBase):
 
     def test_a_public_skill_needs_an_install_by_name_and_by_id(self):
         public = self.public_skill(install=False)
-        with self.assertRaises(service.SkillNotFound):
-            self.resolve({"name": "report"})
-        with self.assertRaises(service.SkillForbidden):
-            self.resolve({"id": str(public.id)})
+        for ref in ({"name": "report"}, {"id": str(public.id)}):
+            with self.subTest(ref=ref), self.assertRaises(run.InstallRequired) as caught:
+                self.resolve(ref)
+            self.assertEqual(caught.exception.extra["where"], "hub")
         service.install(self.user, public.id)
         self.assertEqual(self.resolve({"id": str(public.id)}).skill_id, str(public.id))
         # ...and an uninstall takes it away again.
@@ -425,6 +432,7 @@ class PickerTests(RunBase):
         )
         self.public_skill(slug="installed-one")
         self.public_skill(slug="not-installed", install=False)
+        self.skill(self.user2, "team", slug="team-not-installed", install=False)
         res = self.entries()
         self.assertEqual(res.status_code, 200, res.content)
         rows = res.json()["skills"]

@@ -70,6 +70,7 @@ class RetryFromHistoryTests(RunBase):
         self.ask({"id": str(skill.id)})
         ref = self.history()[0]["skill"]
         self.publish_v2(skill)
+        service.accept_update(self.user, skill.id)  # the install moves to version 2
         SkillVersion.objects.filter(skill_id=skill.id, version_no=1).delete()
         resp, got = self.ask(ref)
         self.assertEqual(resp.status_code, 200)
