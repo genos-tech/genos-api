@@ -181,6 +181,20 @@ class AnswerTests(RunBase):
         self.assertNotIn("kwargs", got)
         self.assertFalse(AgentRun.objects.exists())
 
+    def test_a_typed_word_that_is_no_skill_is_an_ordinary_question(self):
+        from origin.tests.test_skills_run import AskTests  # noqa: PLC0415
+
+        self.skill(self.user2, "team", install=False)
+        resp, got = AskTests.ask(self, {"name": "tmp", "optional": True}, query="/tmp is full")
+        self.assertEqual(resp.status_code, 200, getattr(resp, "content", b""))
+        self.assertNotIn("SKILL RUN", got["kwargs"].get("system_extra") or "")
+        # ... and a typed name that IS a skill to install is still refused.
+        resp, got = AskTests.ask(self, {"name": "report", "optional": True})
+        self.assertEqual((resp.status_code, resp.json()["code"]), (403, "install_required"))
+        # Without `optional` (an id or a picked name) a missing skill stays a 404.
+        resp, _ = AskTests.ask(self, {"name": "tmp"})
+        self.assertEqual(resp.status_code, 404)
+
 
 @override_settings(GENOS_SKILLS=True, GENOS_SKILLS_PUBLIC=True)
 class KeepWhatWorkedMigrationTests(RunBase):

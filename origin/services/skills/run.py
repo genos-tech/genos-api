@@ -181,6 +181,17 @@ def parse_ref(raw: Any) -> tuple[str, str]:
     raise service.SkillError("`skill` needs an `id` or a `name`.")
 
 
+def is_optional_name(raw: Any) -> bool:
+    """`{"name": ..., "optional": true}`: the app could not tell from its own list whether the typed
+    `/word` is a skill, so a name that matches nothing is not a refusal (MIP-2589)."""
+    return (
+        isinstance(raw, dict)
+        and raw.get("optional") is True
+        and not raw.get("id")
+        and isinstance(raw.get("name"), str)
+    )
+
+
 def typed_slug(query: str) -> str | None:
     """The name a query starts with (`/weekly-report for Q3` -> `weekly-report`), else None. The
     client uses the same rule to decide whether to send `skill.name`."""
