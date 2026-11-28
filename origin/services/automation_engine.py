@@ -43,7 +43,11 @@ from origin.models.task.task_activity_models import TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.services import automation_rules as rules
 from origin.services.activity_suppression import activity_suppressed
-from origin.services.task_assignment_notice import notify_task_assigned
+from origin.services.automation_notice import post_move_notice
+from origin.services.task_assignment_notice import (
+    notify_task_assigned,
+    notify_task_moved_by_rule,
+)
 from origin.services.task_cache import invalidate_for_task
 from origin.services.task_project_move import (
     collect_descendant_task_ids,
@@ -358,6 +362,13 @@ def _act(rule: AutomationRule, task: TaskMaster) -> Outcome:
         TaskActivityActionType.AUTOMATION_APPLIED,
         {"fromProjectId": source_id, "toProjectId": destination_id, "trigger": rule.trigger_type},
     )
+    if destination_id is not None and destination_id != source_id:
+        post_move_notice(
+            task_id=task.task_id,
+            rule_name=rule.name,
+            source_project_id=source_id,
+            destination_project_id=destination_id,
+        )
     return Outcome(state, "", rule.id, destination_id)
 
 
@@ -443,6 +454,8 @@ def _apply(rule: AutomationRule, task: TaskMaster) -> str:
             task.save(update_fields=[*changed, "ts_updated_at"])
         if "assignee" in changed:
             notify_task_assigned(task, actor_id=owner.id, previous_assignee_id=previous_assignee)
+        elif rule.moves_task:
+            notify_task_moved_by_rule(task, actor_id=owner.id)
         if not (rule.moves_task or changed):
             return "no_change"
         task.refresh_from_db()

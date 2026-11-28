@@ -184,7 +184,8 @@ def _full_push_spec(act) -> dict | None:
       - MENTION + surface task/task-note  -> mention_task
       - MENTION + surface personal/chat   -> mention_note
       - MENTION (channel-backed chat msg) -> mention_chat   (incl. comment @mentions, gated as mentions)
-      - MENTION + meta.taskAssign         -> mention_chat   ("assigned you a task", MIP-1461)
+      - MENTION + meta.taskAssign         -> mention_chat   ("assigned you a task", MIP-1461;
+                                             with meta.ruleMove "A rule moved your task")
     """
     actor_name = getattr(act.actor, "username", None) or "Someone"
     channel = act.channel
@@ -288,7 +289,10 @@ def _full_push_spec(act) -> dict | None:
         if (act.meta or {}).get("taskAssign"):
             return {
                 "category": "mention_chat",
-                "title": f"{actor_name} assigned you a task",
+                # A project rule moved the task (MIP-2500): nobody assigned anything.
+                "title": "A rule moved your task"
+                if (act.meta or {}).get("ruleMove")
+                else f"{actor_name} assigned you a task",
                 "body": body,
                 "url": chat_url,
             }
