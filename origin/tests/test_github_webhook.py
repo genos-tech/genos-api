@@ -20,8 +20,8 @@ from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import GithubWebhookRegistration
-from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectStatus
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.services.milestone_manage import update_milestone
