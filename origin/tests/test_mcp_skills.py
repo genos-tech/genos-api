@@ -323,6 +323,15 @@ class GetTests(McpSkillBase):
         service.install(self.user, public.id)
         self.ok("get_skill", skill="report")
 
+    def test_a_hidden_skill_the_team_owner_sees_is_not_found_not_offered_to_install(self):
+        theirs = self.skill(self.user2, "team", install=False)
+        Skill.objects.filter(pk=theirs.pk).update(status="hidden_by_team")
+        missing = "00000000-0000-4000-8000-000000000000"
+        self.assertEqual(
+            self.refused("get_skill", skill=str(theirs.id)),
+            self.refused("get_skill", skill=missing),
+        )
+
     def test_a_teammates_skill_not_installed_is_refused_with_team_skills(self):
         theirs = self.skill(self.user2, "team", install=False, body_markdown="TEAM STEPS")
         for ref in (str(theirs.id), "report"):

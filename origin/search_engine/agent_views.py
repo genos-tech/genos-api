@@ -1342,7 +1342,11 @@ class AgentAskView(AuthenticatedAPIView):
                     and skill_run.is_optional_name(data["skill"])
                 ):
                     return Response(
-                        {"error": str(exc), **({"code": exc.code} if exc.code else {}), **exc.extra},
+                        {
+                            "error": str(exc),
+                            **({"code": exc.code} if exc.code else {}),
+                            **exc.extra,
+                        },
                         status=exc.status,
                     )
 

@@ -33,7 +33,13 @@ import re
 from typing import Any
 
 from origin.models.common.user_models import CustomUser
-from origin.models.skills.skill_models import TOOL_LEVEL_READ, VISIBILITY_PUBLIC, SkillInstall
+from origin.models.skills.skill_models import (
+    STATUS_ACTIVE,
+    TOOL_LEVEL_READ,
+    VISIBILITY_PRIVATE,
+    VISIBILITY_PUBLIC,
+    SkillInstall,
+)
 from origin.services.app_links import app_url
 from origin.services.skills import run, service
 
@@ -171,6 +177,14 @@ def _find(user: CustomUser, team_id: Any, ref: Any) -> tuple[Any, SkillInstall |
         if service.is_owner(skill, user.pk):
             return skill, None
         install = SkillInstall.objects.filter(user=user, skill=skill).first()
+        # Something that cannot be installed is not suggested: a co-editor's private skill, and
+        # a hidden one the team owner can still see, are the same "not found" as a missing one.
+        if (
+            skill.visibility == VISIBILITY_PRIVATE
+            or skill.status != STATUS_ACTIVE
+            or skill.published_version_no <= 0
+        ):
+            raise service.SkillNotFound
         if install is None:
             raise run.InstallRequired(skill.slug, run._where(skill), str(skill.id))
         return skill, install
