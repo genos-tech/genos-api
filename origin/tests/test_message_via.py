@@ -354,32 +354,15 @@ class AClientCannotPlantOne(_Base):
         self.assertEqual(first.data["id"], again.data["id"])
         self.assertNotIn("via", Message.objects.get(pk=first.data["id"]).metadata)
 
-    def test_the_card_patch_cannot_plant_one(self):
-        """The PATCH rebuilds the card from the row (MIP-2483): nothing the client sends is stored."""
-        url = reverse("v3_task_card_message", args=[self.task.task_id])
-        for planted in PLANTS:
-            res = self.client.patch(
-                url,
-                {
-                    "body": BODY,
-                    "body_text": "x",
-                    "metadata": {"taskId": self.task.task_id, "via": planted, "keep": "no"},
-                },
-                format="json",
-            )
-            self.assertEqual(res.status_code, 200, res.content)
-            row = Message.objects.get(pk=self.card.pk)
-            self.assertNotIn("via", row.metadata)
-            self.assertNotIn("keep", row.metadata)
-            self.assertNotIn("via", res.data["metadata"])
-
-    def test_the_card_patch_keeps_the_creations_stamp(self):
+    def test_a_refresh_keeps_the_creations_stamp(self):
         """A card the server rebuilds is still the one made through that app."""
-        stamped = self.card_of(self.make_task(CLAUDE))
-        url = reverse("v3_task_card_message", args=[stamped.task_id])
-        res = self.client.patch(url, {"body": BODY, "body_text": "edited"}, format="json")
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(Message.objects.get(pk=stamped.pk).metadata["via"], REDUCED_CLAUDE)
+        task = self.make_task(CLAUDE)
+        stamped = self.card_of(task)
+        TaskMaster.objects.filter(pk=task.pk).update(title="edited")
+        task_card_post.refresh_task_card(task.pk)
+        row = Message.objects.get(pk=stamped.pk)
+        self.assertIn("edited", row.body_text)
+        self.assertEqual(row.metadata["via"], REDUCED_CLAUDE)
 
     def test_rewrite_card_message_strips_unless_the_server_built_the_metadata(self):
         from origin.views.chat.message_views import rewrite_card_message

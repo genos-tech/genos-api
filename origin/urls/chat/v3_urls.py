@@ -82,7 +82,6 @@ from origin.views.chat.message_views import (
     MessageDetailView,
     MessagesDeltaView,
     OlderMessagesView,
-    TaskCardMessageView,
     ThreadMessagesDeltaView,
 )
 from origin.views.chat.personal_tag_views import (
@@ -209,12 +208,6 @@ urlpatterns = [
         "api/v3/tasks/cards/",
         TaskCardsView.as_view(),
         name="v3_task_cards",
-    ),
-    # Task-card header message (rewrite the PM card body after a task edit)
-    path(
-        "api/v3/tasks/<int:task_id>/card-message/",
-        TaskCardMessageView.as_view(),
-        name="v3_task_card_message",
     ),
     # Attachments
     path(
