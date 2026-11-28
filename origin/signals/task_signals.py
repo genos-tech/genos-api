@@ -384,7 +384,9 @@ def _custom_status_change(old_id: Optional[int], new_id: Optional[int]) -> Optio
     }
 
 
-def _record_custom_status_row(task, change: dict, *, extra: Optional[dict] = None) -> None:
+def _record_custom_status_row(
+    task, change: dict, *, extra: Optional[dict] = None, into: Optional[list] = None
+) -> None:
     """The row for a custom status that changed while `status` did not. Ids as the values, as
     the custom-field and relation rows do; the typed names stay in metadata."""
     _record(
@@ -394,6 +396,7 @@ def _record_custom_status_row(task, change: dict, *, extra: Optional[dict] = Non
         old_value=change["oldId"],
         new_value=change["newId"],
         metadata={**change, **(extra or {})},
+        into=into,
     )
 
 
@@ -443,8 +446,11 @@ def _record(
     new_value: Any = None,
     metadata: Optional[dict] = None,
     actor: Optional[Any] = None,
+    into: Optional[list] = None,
 ) -> Optional[TaskActivity]:
     """Single point for inserting an activity row.
+
+    `into` collects the row, unsaved, for the caller to write with `_insert_collected`.
 
     `actor` overrides the request's user, for a caller that already
     knows who is acting (see `record_activity`).
@@ -467,7 +473,7 @@ def _record(
     # the same person. Absent when unknown (webhooks, commands).
     if "via" not in metadata and (via := get_current_source()) is not None:
         metadata["via"] = with_run_id(via) if isinstance(via, dict) else via
-    activity = TaskActivity.objects.create(
+    activity = TaskActivity(
         team=task.team,
         project=task.project,
         task=task,
@@ -478,10 +484,23 @@ def _record(
         new_value=_to_jsonable(new_value),
         metadata=_to_jsonable(metadata),
     )
+    if into is not None:
+        into.append((activity, task))
+        return activity
+    activity.save(force_insert=True)
     # Progress (MIP-1351): the task and every ancestor above it learn of the
     # change. Best effort; never raises.
     task_progress.offer(activity, task)
     return activity
+
+
+def _insert_collected(rows: list) -> None:
+    """Write what `_record(into=rows)` collected, in one INSERT, in the order collected."""
+    if not rows:
+        return
+    TaskActivity.objects.bulk_create([activity for activity, _task in rows])
+    for activity, task in rows:
+        task_progress.offer(activity, task)
 
 
 def record_activity(
@@ -602,6 +621,7 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
             custom_status__category=F("status"), custom_status__project_id=F("project_id")
         ).update(custom_status=None)
     labels: dict[tuple[str, str], Optional[dict]] = {}
+    rows: list = []
     for task in TaskMaster.objects.filter(pk__in=ids).select_related("team", "project"):
         old_row = before.get(task.pk)
         if old_row is None or old_row["is_init_task"]:
@@ -632,18 +652,24 @@ def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
                 old_value=old,
                 new_value=new,
                 metadata={**(labels[key] or {}), **extra, "cascade": cascade},
+                into=rows,
             )
         if status_label_change is not None and not (
             "status" in tracked and old_row["status"] != task.status
         ):
-            _record_custom_status_row(task, status_label_change, extra={"cascade": cascade})
+            _record_custom_status_row(
+                task, status_label_change, extra={"cascade": cascade}, into=rows
+            )
         if track_custom:
             for change in _custom_field_changes(
                 task, old_row["custom_field_values"], task.custom_field_values
             ):
                 _record(
-                    task=task, **{**change, "metadata": {**change["metadata"], "cascade": cascade}}
+                    task=task,
+                    **{**change, "metadata": {**change["metadata"], "cascade": cascade}},
+                    into=rows,
                 )
+    _insert_collected(rows)
     # A queryset update fires no signal, so a cascade that wrote a field the chat card shows
     # (an import's undo marking tasks Deleted) refreshes those cards here (MIP-2483). So does
     # one that moved tasks to another custom status (a delete with a replacement, MIP-2493).
@@ -694,6 +720,10 @@ def task_capture_original(sender, instance: TaskMaster, **kwargs):
     except TaskMaster.DoesNotExist:
         instance._activity_original = None
         return
+    instance._activity_original = _snapshot_of(previous)
+
+
+def _snapshot_of(previous: TaskMaster) -> dict:
     snapshot = {field: getattr(previous, field) for field in _TRACKED_TASK_FIELDS}
     snapshot["is_deleted"] = previous.is_deleted
     # Not audited, but the change feed needs the PREVIOUS team to tell the old
@@ -706,7 +736,27 @@ def task_capture_original(sender, instance: TaskMaster, **kwargs):
     # (the moment CreateTaskForm's draft becomes a real task) and treat
     # it as a single creation event instead of a diff of every field.
     snapshot["is_init_task"] = previous.is_init_task
-    instance._activity_original = snapshot
+    return snapshot
+
+
+def announce_unchanged_save(task: TaskMaster, *, update_fields) -> None:
+    """Fire `post_save` for a row a bulk write already stored, as `task.save(update_fields=...)`
+    would, when none of the values the receivers compare changed.
+
+    `task` must be read after the write. The two `pre_save` receivers of `TaskMaster` each read
+    the row again; their snapshots are taken from `task` itself here, which is the same row, so
+    the cost does not grow by two queries per task (MIP-2539).
+    """
+    task._activity_original = _snapshot_of(task)
+    task._blocking_prev = {"status": task.status, "is_deleted": task.is_deleted}
+    post_save.send(
+        sender=TaskMaster,
+        instance=task,
+        created=False,
+        raw=False,
+        using=task._state.db,
+        update_fields=frozenset(update_fields),
+    )
 
 
 @receiver(post_save, sender=TaskMaster)

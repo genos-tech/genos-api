@@ -126,6 +126,13 @@ def forget_object_team(kind: str, object_id, note_type: int = _NOTE_PERSONAL) ->
     cache.delete(_cache_key(kind, object_id, note_type))
 
 
+def forget_object_teams(kind: str, object_ids, note_type: int = _NOTE_PERSONAL) -> None:
+    """`forget_object_team` for many objects of one kind, in one cache call."""
+    keys = [_cache_key(kind, object_id, note_type) for object_id in object_ids]
+    if keys:
+        cache.delete_many(keys)
+
+
 def _owning_team(kind: str, object_id, note_type: int) -> str | None:
     """The team a given object belongs to, or None if there is no such object."""
     cache_key = _cache_key(kind, object_id, note_type)

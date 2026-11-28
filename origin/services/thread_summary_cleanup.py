@@ -62,6 +62,22 @@ def forget_thread(*, channel_id, thread_id) -> int:
     )
 
 
+def forget_threads(*, channel_id, thread_ids) -> int:
+    """`forget_thread` for many threads of one chat, in one read."""
+    from origin.search_engine.models import ThreadSummary
+
+    ids = list(thread_ids)
+    if not ids:
+        return 0
+    return len(
+        _delete(
+            ThreadSummary.objects.filter(
+                chat_type__in=_KINDS, chat_id=channel_id, thread_id__in=ids
+            )
+        )
+    )
+
+
 def forget_message_thread(message) -> int:
     """Drop the summary of the thread `message` is in: its root, or its own thread when it is one."""
     return forget_thread(

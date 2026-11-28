@@ -23,10 +23,10 @@ from django.db.models import Q
 from django.utils import timezone
 
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.task.task_models import TaskDependency, TaskMaster, claim_project_task_number
+from origin.models.task.task_models import TaskDependency, TaskMaster, claim_project_task_numbers
 from origin.services import change_feed, member_events
 from origin.services.task_number_alias import remember_numbers
-from origin.views.utils.foreign_team_scope import forget_object_team
+from origin.views.utils.foreign_team_scope import forget_object_teams
 from origin.views.utils.note_role import NOTE_TYPE_TASK
 
 logger = logging.getLogger(__name__)
@@ -39,14 +39,21 @@ DEPTH_LIMIT = 10
 def collect_descendant_task_ids(root_task_id, depth_limit=DEPTH_LIMIT):
     """Every task below `root_task_id` in the `parent_task_id` chain
     (the root itself excluded)."""
+    return _descendants({root_task_id}, depth_limit)
+
+
+def _descendants(roots, depth_limit=DEPTH_LIMIT) -> set:
+    """Every task below any of `roots` (the roots themselves excluded), one query per level, so
+    the cost does not grow with the number of roots."""
+    roots = set(roots)
     collected = set()
-    frontier = {root_task_id}
+    frontier = roots
     for _ in range(depth_limit):
         if not frontier:
             break
         children = set(
             TaskMaster.objects.filter(parent_task_id__in=frontier)
-            .exclude(task_id__in=collected | {root_task_id})
+            .exclude(task_id__in=collected | roots)
             .values_list("task_id", flat=True)
         )
         if not children:
@@ -72,8 +79,7 @@ def milestone_subtree_task_ids(milestone) -> set:
     if milestone.task_id is not None:
         membership |= Q(parent_task_id=milestone.task_id)
     ids |= set(TaskMaster.objects.filter(membership).values_list("task_id", flat=True))
-    for task_id in list(ids):
-        ids |= collect_descendant_task_ids(task_id)
+    ids |= _descendants(ids)
     return {int(task_id) for task_id in ids if task_id is not None}
 
 
@@ -307,10 +313,8 @@ def relocate_tasks(
             TaskMaster.objects.filter(task_id__in=task_ids), cascade="project_move", **fields
         )
 
-        # Re-fetch AFTER the bulk update so each instance carries the new
-        # project — `claim_project_task_number` counts within `project_id`.
-        for task in TaskMaster.objects.filter(task_id__in=task_ids):
-            claim_project_task_number(task)
+        # AFTER the bulk update, so the numbers are counted in the new project.
+        claim_project_task_numbers(task_ids, project_id)
 
     return relocate_task_satellites(task_ids, project_id=project_id, team_id=team_id)
 
@@ -366,10 +370,8 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> int:
     # hides the move from exactly the requests that have to know about it
     # — see `forget_object_team`. Both kinds of row this function has just
     # rewritten are cached under that premise.
-    for task_id in task_ids:
-        forget_object_team("task", task_id)
-    for note_id in moved_note_ids:
-        forget_object_team("note", note_id, NOTE_TYPE_TASK)
+    forget_object_teams("task", task_ids)
+    forget_object_teams("note", moved_note_ids, NOTE_TYPE_TASK)
     # The chat card and the comment thread under it live in the project's chat (MIP-2505).
     from origin.services.task_card_move import move_task_cards
 
