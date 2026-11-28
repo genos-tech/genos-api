@@ -258,7 +258,7 @@ def _update_shared_surface_note(
             f"You must be the note owner, {member}, or have an explicit editor grant."
         )
 
-    if why := archived_note_refusal(note_type, note_id):
+    if why := archived_note_refusal(note_type, note_id, ctx.user_id):
         raise ToolError(f"{why} Nothing was changed.")
 
     return _apply_changes(

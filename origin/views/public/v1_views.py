@@ -56,6 +56,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services.milestone_service import sync_backing_task
 from origin.services.project_statuses import custom_status_ref
+from origin.services.share_roles import view_only_project_response
 from origin.services.task_card_post import post_task_created_card
 from origin.services.task_status_reason import (
     locked_status_change,
@@ -343,6 +344,8 @@ class TaskListCreateView(PublicApiView):
         if not in_team or not is_project_member(raw_project, request.user.id):
             # 404 rather than 403: project ids are sequential integers.
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if res := view_only_project_response(raw_project, request.user.id):
+            return res
 
         # MIP-2391: the same six values on create as on PATCH.
         if message := status_value_error(request.data.get("status") or "Open"):
@@ -388,6 +391,8 @@ class TaskDetailView(PublicApiView):
         task = self._task(request, task_id)
         if task is None:
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+        if res := view_only_project_response(task.project_id, request.user.id):
+            return res
 
         # An allowlist, not `**request.data`. The app's own task PUT
         # accepts a broad payload; a public API that forwarded arbitrary
