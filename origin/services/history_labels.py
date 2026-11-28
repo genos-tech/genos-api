@@ -30,7 +30,8 @@ Every reader of a row's names or custom field values goes through this: the task
 several tasks: only the asked task's project passes by itself, and a change to a task the reader
 cannot open is left out whole, MIP-2550) and the agent work report.
 The briefing's wording (`briefing.activity_event`, which the timeline, item lines and scheduled
-reports reuse) prints ids and no such name, so it has nothing to cut.
+reports reuse) and the agent work report take their names from here through `history_words`
+(MIP-2551), so no line holds an id.
 """
 
 from __future__ import annotations

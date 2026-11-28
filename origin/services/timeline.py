@@ -91,6 +91,7 @@ from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
 from origin.services import briefing, item_lines, member_events, note_scope, plain_text
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
+from origin.services.history_words import HistoryWords
 from origin.services.task_number_alias import with_display_id
 
 # --------------------------------------------------------------------------- #
@@ -623,9 +624,11 @@ def _activity_kind(row: TaskActivity) -> str:
     return "change"
 
 
-def _activity_event(sc: Scope, row: TaskActivity, *, task: TaskMaster, own: bool) -> TEv | None:
+def _activity_event(
+    sc: Scope, row: TaskActivity, *, task: TaskMaster, own: bool, words: HistoryWords
+) -> TEv | None:
     kind = _activity_kind(row)
-    shaped = briefing.activity_event(row, sc.me)
+    shaped = briefing.activity_event(row, sc.me, words)
     ev = TEv(
         at=row.ts_created_at,
         rank=RANK_ACTIVITY,
@@ -671,7 +674,12 @@ def _history(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMaster,
     if count:
         return _count_rows(sc, qs, time="ts_created_at")
     rows = _page_rows(sc, qs, time="ts_created_at", tie=("pk",), rank=RANK_ACTIVITY)
-    return [e for r in rows if (e := _activity_event(sc, r, task=task, own=own)) is not None]
+    words = briefing.activity_words(sc.ctx, rows, viewer_id=sc.me)
+    return [
+        e
+        for r in rows
+        if (e := _activity_event(sc, r, task=task, own=own, words=words)) is not None
+    ]
 
 
 # -- comments (the task's own, and the ones elsewhere that point at it) ------------------- #
@@ -936,9 +944,7 @@ def _message_event(sc: Scope, m: Message, *, via: str | None, in_chat: str | Non
         key=key,
         actor=str(m.sender_id) if m.sender_id else None,
         label="system" if notice else None,
-        text=_notice_sentence(m.metadata)
-        if notice
-        else sc.snippet(plain_text.message_text(m)),
+        text=_notice_sentence(m.metadata) if notice else sc.snippet(plain_text.message_text(m)),
         via=via,
         ref=None if notice else ("m", m.id),
         ident=f"m:{m.id}",
@@ -1151,8 +1157,11 @@ def _claim_events(sc: Scope, kinds: frozenset[str], count: bool, task: TaskMaste
             n += _deliveries(sc, kinds, True, task=task, own=False)
         return n
     out: list[TEv] = []
-    for row in _page_rows(sc, qs, time="ts_created_at", tie=("pk",), rank=RANK_ACTIVITY):
-        ev = _activity_event(sc, row, task=task, own=False)
+    page = _page_rows(sc, qs, time="ts_created_at", tie=("pk",), rank=RANK_ACTIVITY)
+    # A headline of a task the caller cannot open carries no words (below), so none are looked up.
+    words = briefing.activity_words(sc.ctx, page if can_open else [], viewer_id=sc.me)
+    for row in page:
+        ev = _activity_event(sc, row, task=task, own=False, words=words)
         if ev is None:
             continue
         if not can_open:

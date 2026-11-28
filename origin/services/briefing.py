@@ -68,6 +68,7 @@ from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPL
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import member_events, note_scope, section_perf
 from origin.services.channel_scope import chat_note_member_q, readable_chats_qs
+from origin.services.history_words import HistoryWords
 from origin.services.plain_text import body_text, message_text
 from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import zone_for_user_id
@@ -320,7 +321,30 @@ def _is_uuid(value: Any) -> bool:
         return False
 
 
-def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]:
+# Rows whose values are ids (a reporter, a milestone, a sprint): said by name, or not at all.
+_NAMED_VALUES = (
+    TaskActivityActionType.REPORTER,
+    TaskActivityActionType.MILESTONE_LINK,
+    TaskActivityActionType.SPRINT_LINK,
+)
+
+
+def activity_words(ctx: ToolContext, rows: list, *, viewer_id: Any) -> HistoryWords:
+    """The names the briefing's lines need for `rows`: only the rows whose values it prints as
+    ids are looked up, so a page without one costs no query."""
+    return HistoryWords(
+        ctx, [r for r in rows if r.action_type in _NAMED_VALUES], viewer_id=viewer_id
+    )
+
+
+def _activity_event(
+    row: TaskActivity,
+    me: str,
+    names: _Names,
+    words: HistoryWords | None = None,
+    *,
+    fence: bool = False,
+) -> dict[str, Any]:
     action = row.action_type
     kind = _KIND_OF_ACTION.get(action, "other")
     label = _FIELD_LABEL.get(action)
@@ -333,6 +357,16 @@ def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]
         else:
             summary = "changed the assignee"
             data = {"code": "assignee_changed"}
+    elif action in _NAMED_VALUES and (old is not None or new is not None):
+        pair = words.values(row) if words else None
+        if pair is None:
+            summary = f"changed the {label}"
+            data = {"code": "field_edited", "field": _FIELD_KEY[action]}
+        else:
+            old, new = (None if v is None else _short(v) for v in pair)
+            said = [wrap_workspace_content(v) if v and fence else v or "—" for v in (old, new)]
+            summary = f"{label}: {said[0]} → {said[1]}"
+            data = {"code": "field_changed", "field": _FIELD_KEY[action], "old": old, "new": new}
     elif label and (old is not None or new is not None):
         summary = f"{label}: {_short(old) or '—'} → {_short(new) or '—'}"
         data = {
@@ -382,11 +416,12 @@ def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]
     }
 
 
-def activity_event(row: TaskActivity, me: str) -> dict[str, Any]:
+def activity_event(row: TaskActivity, me: str, words: HistoryWords | None = None) -> dict[str, Any]:
     """One task activity row in the briefing's words ("status: Open → WIP", "linked a PR"),
     for the scheduled reports (MIP-1152): `summary`, who (`_actor` or the automation's
-    `_label`) and `at`."""
-    return _activity_event(row, me, None)  # type: ignore[arg-type]  # `names` is not read
+    `_label`) and `at`. `words` (a `HistoryWords` over the page) names a reporter, milestone or
+    sprint; without it such a row says what changed and no values (MIP-2551)."""
+    return _activity_event(row, me, None, words)  # type: ignore[arg-type]  # `names` is not read
 
 
 def _heat_of(events: list[dict[str, Any]]) -> int:
@@ -489,9 +524,12 @@ def _changed_tasks(
     readable = LabelAccess(ctx).tasks(candidate_ids)
 
     by_task: dict[int, list[dict[str, Any]]] = {}
+    words = activity_words(ctx, [a for a in activities if a.task_id in readable], viewer_id=me)
     for row in activities:
         if row.task_id in readable:
-            by_task.setdefault(row.task_id, []).append(_activity_event(row, me, names))
+            by_task.setdefault(row.task_id, []).append(
+                _activity_event(row, me, names, words, fence=True)
+            )
     for c in comments:
         if c.task_id in readable:
             by_task.setdefault(c.task_id, []).append(
@@ -1579,9 +1617,12 @@ def _did_in(
         {a.task_id for a in acts + automation} | {c.task_id for c in comments}
     )
     by_task: dict[int, list[tuple[datetime, dict[str, Any]]]] = {}
+    words = activity_words(
+        ctx, [a for a in acts + automation if a.task_id in readable], viewer_id=me
+    )
     for row in acts + automation:
         if row.task_id in readable:
-            event = _activity_event(row, me, names)
+            event = _activity_event(row, me, names, words, fence=True)
             via = (row.metadata or {}).get("via")
             via_kind = via.get("kind") if isinstance(via, dict) else None
             by_task.setdefault(row.task_id, []).append(

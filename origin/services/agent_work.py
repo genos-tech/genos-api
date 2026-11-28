@@ -15,8 +15,9 @@ Four sources, each with its own access rule, merged into one answer:
   so this block never holds a teammate's session and is empty while the log is switched off.
 
 **What a row says.** A custom field's values belong to the project the row was written in, so a
-reader who is not on it gets no text for that row (`history_labels`, MIP-2536). Names of other
-things never reach the text: a relation row prints ids.
+reader who is not on it gets no text for that row (`history_labels`, MIP-2536). No id reaches the
+text: people, relations, options and members are said by name or the row has no text
+(`history_words`, MIP-2551).
 
 **Who an agent is.** A row's agent is read through `via_for_viewer`: an API key is `api_key` for
 everyone; a connected Claude or ChatGPT is its family for everyone; any other connected app is
@@ -39,6 +40,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from django.db.models import Case, CharField, Count, F, Q, Value, When
@@ -56,6 +58,7 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import agent_sessions
 from origin.services.history_labels import member_project_ids
+from origin.services.history_words import PEOPLE_ACTIONS, RELATION_ACTIONS, HistoryWords
 from origin.services.mcp_client_family import APP_FAMILIES, app_family
 from origin.services.note_scope import readable_note_rows
 from origin.services.plain_text import body_text
@@ -295,7 +298,9 @@ def _custom_field_projects(viewer_id: Any, rows) -> set[int]:
     )
 
 
-def _activity_text(row: dict, comments: dict[tuple[int, int], Any], on: set[int]) -> str | None:
+def _activity_text(
+    row: dict, comments: dict[tuple[int, int], Any], on: set[int], words: HistoryWords
+) -> str | None:
     if row["action_type"] == A.CUSTOM_FIELD:
         # The task's current project passes: the viewer may open the task (`history_labels`).
         project_id = row["project_id"]
@@ -304,10 +309,29 @@ def _activity_text(row: dict, comments: dict[tuple[int, int], Any], on: set[int]
     if row["action_type"] == A.COMMENT_ADDED:
         body = comments.get((row["task_id"], row["comment_id"]))
         return _one_line(body_text(body)) if body else None
-    old, new = _scalar(row["old_value"]), _scalar(row["new_value"])
+    if row["action_type"] in (*PEOPLE_ACTIONS, *RELATION_ACTIONS, A.CUSTOM_FIELD):
+        pair = words.values(_as_row(row))
+        old, new = pair if pair is not None else (None, None)
+        old, new = _scalar(old), _scalar(new)
+    else:
+        old, new = _scalar(row["old_value"]), _scalar(row["new_value"])
     if old is not None and new is not None:
         return _one_line(f"{old} → {new}")
     return None
+
+
+def _as_row(r: dict) -> SimpleNamespace:
+    """A `.values()` row as `HistoryWords` reads one."""
+    return SimpleNamespace(
+        pk=r["activity_id"],
+        task_id=r["task_id"],
+        project_id=r["project_id"],
+        action_type=r["action_type"],
+        field_name=r["field_name"],
+        old_value=r["old_value"],
+        new_value=r["new_value"],
+        metadata=r["metadata"],
+    )
 
 
 # ── the report ───────────────────────────────────────────────────────────────
@@ -498,6 +522,8 @@ def _items(viewer_id, team_id, since, f: Filters, want: int) -> list[dict]:
                 "action_type",
                 "old_value",
                 "new_value",
+                "field_name",
+                "metadata",
                 "task_id",
                 "via_json",
                 "comment_id",
@@ -508,6 +534,8 @@ def _items(viewer_id, team_id, since, f: Filters, want: int) -> list[dict]:
         )
         comments = _comment_bodies(rows)
         on = _custom_field_projects(viewer_id, rows)
+        ctx = ToolContext(team_id=str(team_id), user_id=str(viewer_id))
+        words = HistoryWords(ctx, [_as_row(r) for r in rows], viewer_id=viewer_id)
         for r in rows:
             shown = via_for_viewer(r["via_json"], r["actor_id"], viewer_id)
             out.append(
@@ -518,7 +546,7 @@ def _items(viewer_id, team_id, since, f: Filters, want: int) -> list[dict]:
                     "agent": _agent_obj(_label_of(shown, r["actor_id"])),
                     "action": _kind_of_action(r["action_type"]),
                     "target": {"type": "task", "id": r["task_id"], "title": r["task__title"]},
-                    "text": _activity_text(r, comments, on),
+                    "text": _activity_text(r, comments, on, words),
                     "_project_id": r["task__project_id"],
                     "_sort": r["ts_created_at"],
                 }

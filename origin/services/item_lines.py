@@ -422,8 +422,9 @@ def _read_history(rd: _Reader) -> None:
         .exclude(actor__isnull=True, action_type=TaskActivityActionType.CREATED)
         .order_by("-ts_created_at", "-pk"),
     )
+    words = briefing.activity_words(rd.ctx, activities, viewer_id=rd.me)
     for row in activities:
-        shaped = briefing.activity_event(row, rd.me)
+        shaped = briefing.activity_event(row, rd.me, words)
         rd.add(
             row.task_id,
             Ev(

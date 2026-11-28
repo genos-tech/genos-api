@@ -221,6 +221,12 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ]
     )
 
+    words = briefing.activity_words(
+        ctx,
+        [r for _, r in done_rows[:MAX_LIST] + moved_rows[:MAX_LIST]],
+        viewer_id="" if params.get(SHARED_KEY) else ctx.user_id,
+    )
+
     def line(task: Any, said: str):
         return links.task_item(
             f"{task.display_id} · {task.title or 'untitled'}: {said}", task.task_id, said
@@ -229,7 +235,7 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     def moved_line(task: Any, row: TaskActivity):
         # In a chat other people read nothing is "you": the owner is one reader of several.
         viewer = "" if params.get(SHARED_KEY) else ctx.user_id
-        said = f"{briefing.activity_event(row, viewer)['summary']} by {who(row)}"
+        said = f"{briefing.activity_event(row, viewer, words)['summary']} by {who(row)}"
         return line(task, said)
 
     def capped(items: list, total: int) -> list:
