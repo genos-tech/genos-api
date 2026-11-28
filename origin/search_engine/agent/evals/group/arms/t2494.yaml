@@ -1,0 +1,7 @@
+# MIP-2494 (flag AGENT_CUSTOM_STATUS, default off): a project's own status names in the task and milestone reads and
+# writes and in `list_project_tags`. One optional parameter on the writes, one sentence on three reads.
+# No cases and NOT RUN. The arm keeps the flag in the all-flags-on checks.
+arm: t2494
+overrides:
+    AGENT_CUSTOM_STATUS: true
+requires: []

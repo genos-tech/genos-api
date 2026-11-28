@@ -151,6 +151,7 @@ STATUS_COLOR = {
     "WIP": "orange",
     "Pending": "purple",
     "Closed": "green",
+    "Rejected": "brown",
     "Deleted": "red",
 }
 PRIORITY_COLOR = {

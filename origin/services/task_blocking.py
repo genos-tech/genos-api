@@ -3,7 +3,7 @@
 Rules (product decision, 2026-07-13):
 
   * A task with at least one OPEN blocker (a `TaskDependency` whose
-    blocker task is not Closed/Deleted, not soft-deleted, and does not
+    blocker task is not Closed/Rejected/Deleted, not soft-deleted, and does not
     read as Closed/Deleted under a Closed/Deleted parent, grandparent or
     milestone: the closed-ancestor rule, MIP-1544) is automatically moved
     to status "Blocked". Closing, deleting or reopening an ancestor re-runs
@@ -52,13 +52,15 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
+from origin.services.task_status_values import FINISHED_STATUSES
+
 log = logging.getLogger(__name__)
 
 # A blocker in any of these states no longer blocks. Kept aligned with
-# the agent tools' closed set and the FE's isCurrentlyBlocked (which
-# checks `status !== "Closed"`; we additionally treat the "Deleted"
-# status as non-blocking — a tombstoned task must not hold work hostage).
-CLOSED_STATUSES = ("Closed", "Deleted")
+# the agent tools' finished set and the FE's isCurrentlyBlocked: Closed,
+# Rejected (will not be done, so nothing waits for it) and Deleted (a
+# tombstoned task must not hold work hostage).
+CLOSED_STATUSES = FINISHED_STATUSES
 
 # States from which a task may be auto-moved to "Blocked". Deliberately
 # excludes Closed/Deleted (adding a dependency to a finished task must

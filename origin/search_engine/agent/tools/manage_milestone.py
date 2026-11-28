@@ -41,6 +41,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
 from origin.search_engine.agent.parity import followups_on, parity_on
+from origin.search_engine.agent.tools import custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -154,6 +155,8 @@ def _allowed(action: str) -> set[str]:
     allowed = set(_ALLOWED.get(action, ()))
     if parity_on():
         allowed |= _ALLOWED_ON.get(action, set())
+    if custom_status.enabled() and action in ("create", "update"):
+        allowed.add(custom_status.ARG)
     return allowed
 
 
@@ -381,6 +384,10 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "one. Upgrade your plan to keep going."
         )
 
+    # MIP-2494 (flag `AGENT_CUSTOM_STATUS`): a status named the project's way also sets `status`.
+    choice = custom_status.choose(
+        project, custom_status.requested(args), requested_status=parsed.get("status")
+    )
     try:
         with transaction.atomic():
             milestone = create_milestone(
@@ -392,7 +399,8 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 reporter_id=uuid.UUID(str(ctx.user_id)),
                 title=parsed["title"],
                 description_blocks=parsed.get("description"),
-                status=parsed.get("status") or "Open",
+                status=choice.status or parsed.get("status") or "Open",
+                custom_status=choice.resolve_row(),
                 priority=parsed.get("priority"),
                 effort_level=parsed.get("effort_level"),
                 start_date=parsed.get("start_date"),
@@ -419,9 +427,11 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     post_milestone_created_card(milestone, actor_id=ctx.user_id)
 
     payload = _milestone_payload(milestone.milestone_id)
+    custom_status.add_to_milestones([payload])
     return {
         "action": "create",
         **payload,
+        **({"suggestions": [choice.suggestion]} if choice.suggestion else {}),
         "__summary__": f'Created milestone {_label(payload)} "{payload["title"]}"',
     }
 
@@ -474,12 +484,35 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ):
         raise ToolError(problem)
 
+    # MIP-2494 (flag `AGENT_CUSTOM_STATUS`). A move leaves the project's names behind.
+    named = custom_status.requested(args) if destination is None else None
+    choice = custom_status.choose(milestone.project, named, requested_status=parsed.get("status"))
+    left_out = [choice.suggestion] if choice.suggestion else []
+    if destination is not None and custom_status.requested(args) is not None:
+        left_out = [
+            {
+                "kind": custom_status.ARG,
+                "message": "`custom_status` was not applied: set it after the project move.",
+                "candidates": [],
+            }
+        ]
+    if choice.status:
+        parsed.setdefault("status", choice.status)
+
     fields: dict[str, Any] = {}
     changed: list[str] = []
     for key in ("title", "status", "priority", "effort_level"):
         if key in parsed and parsed[key] != getattr(milestone, key):
             fields[key] = parsed[key]
             changed.append(key)
+    if choice.clear and milestone.custom_status_id is not None:
+        fields["custom_status"] = None
+        changed.append("custom_status")
+    elif choice.writes_row:
+        row = choice.resolve_row()
+        if row is not None and row.status_id != milestone.custom_status_id:
+            fields["custom_status"] = row
+            changed.append("custom_status")
     # A fresh body always differs (every block gets a new id), so a description
     # that was sent is written unless both it and the stored one are empty.
     if "description" in parsed and (parsed["description"] or milestone.description):
@@ -540,9 +573,11 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if not changed:
         payload = _milestone_payload(milestone.milestone_id)
+        custom_status.add_to_milestones([payload])
         return {
             "action": "update",
             **payload,
+            **({"suggestions": left_out} if left_out else {}),
             "changed_fields": [],
             "__summary__": f"No changes applied to {_label(payload)}.",
         }
@@ -611,6 +646,7 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         notify_task_body_mentions(backing, actor_id=ctx.user_id)
 
     payload = _milestone_payload(milestone.milestone_id)
+    custom_status.add_to_milestones([payload])
     result: dict[str, Any] = {
         "action": "update",
         **payload,
@@ -622,6 +658,8 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ):
         # MIP-1997: no reason given: the status changed anyway, the reply suggests one.
         result["suggestions"] = suggestions
+    if left_out:
+        result["suggestions"] = [*result.get("suggestions", []), *left_out]
     if destination is not None:
         # What the move did, for the model to report and not to guess: the display ids are new, and
         # what belonged to the old project is gone.
@@ -873,6 +911,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(
             f"`action` must be one of {list(ACTIONS_ON if on else ACTIONS)} (got {action!r})."
         )
+    if not custom_status.enabled():  # ignored while the flag is off, not refused
+        args = {k: v for k, v in args.items() if k != custom_status.ARG}
     _check_arguments(action, args)
     check_body_size(args.get("description_markdown"), "description_markdown")
     return (_HANDLERS_ON if on else _HANDLERS)[action](args, ctx)

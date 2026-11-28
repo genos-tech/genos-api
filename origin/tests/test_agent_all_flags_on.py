@@ -73,7 +73,9 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # MIP-2329: the arm `t2328` puts `AGENT_INAPP_HELP_TOOL` (+587 characters: the declaration and two prompt lines) into the all-on
 # union: 142,962 with a Long member's block, so 143,500 (538 left). The arm is written, not run (no paid eval, Ken 2026-11-24).
 # MIP-2485: the arm `t2485` puts `list_my_waiting_comments` into the union: 143,890 with a Long member's block, so 144,500.
-ALL_ON_BUDGET_CHARS = 144_500
+# MIP-2494: the value "Rejected" (unflagged) and the arm `t2494` (`AGENT_CUSTOM_STATUS`: `custom_status` on five writes,
+# three description sentences): 145,846 with a Long member's block, so 146,000. Not measured by a paid eval.
+ALL_ON_BUDGET_CHARS = 146_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped

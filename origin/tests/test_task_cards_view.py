@@ -148,7 +148,8 @@ class TaskCardsViewTests(TestCase):
         hidden = self._task("Hidden blocker")
         seen = self._task("Seen blocker", assignee=self.holder)
         done = self._task("Done blocker", status="Closed", assignee=self.holder)
-        for blocker in (hidden, seen, done):
+        rejected = self._task("Rejected blocker", status="Rejected", assignee=self.holder)
+        for blocker in (hidden, seen, done, rejected):
             TaskDependency.objects.create(blocker_task=blocker, blocked_task=task, team=self.team)
         [mine] = self._cards(self.member, [task.task_id])
         self.assertEqual(mine["blockedByCount"], 2)
@@ -166,6 +167,7 @@ class TaskCardsViewTests(TestCase):
         )
         gone = child("gone", status="Deleted")
         self._task("under gone", parent_task_id=gone.task_id, milestone=self.milestone)
+        child("rejected", status="Rejected", milestone=self.milestone)
         MilestoneAssignees.objects.create(
             team=self.team, milestone=self.milestone, user=self.member
         )

@@ -33,6 +33,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
+from origin.services.task_status_values import FINISHED_STATUSES
 
 _MAX_DAYS = 365
 _MAX_LIMIT = 50
@@ -92,10 +93,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # MIP-1478: a task under a Closed or Deleted ancestor reads as Closed: not stale work.
         rule = ancestor_rule.rule_for_projects(scoped_project_ids, ctx.team_id)
         stale_qs = ancestor_rule.with_effective_status(stale_qs, rule).exclude(
-            eff_status__in=["Closed", "Deleted"]
+            eff_status__in=FINISHED_STATUSES
         )
     else:
-        stale_qs = stale_qs.exclude(status__in=["Closed", "Deleted"])
+        stale_qs = stale_qs.exclude(status__in=FINISHED_STATUSES)
     qs = (
         stale_qs.select_related("project")
         # The later of the task's own edit and the progress under it; the oldest
@@ -145,7 +146,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 GET_STALE_TASKS = Tool(
     name="get_stale_tasks",
     description=(
-        "Return non-Closed tasks with no activity for at least "
+        "Return unfinished (not Closed or Rejected) tasks with no activity for at least "
         "`stale_days` days, oldest first. Activity is the task's own last "
         "edit and any progress under it, so a milestone or parent whose "
         "sub-tasks are moving is not stale. Use to identify stuck work — "

@@ -37,22 +37,24 @@ from django.db.models import Case, CharField, F, QuerySet, Value, When
 
 from origin.models.task.task_models import TaskMaster
 from origin.services import task_ancestry
+from origin.services.task_status_values import UNCOUNTED_STATUSES
 
 FLAG = "AGENT_CLOSED_ANCESTOR_RULE"
 
 #: Sentence added to the declaration of every tool whose result the flag changes, by kind.
 COUNTS_ADDITION = (
-    " A task under a Closed or Deleted parent, grandparent or milestone reads as Closed (or "
-    "Deleted) here even when its own status is still open: it is counted as closed, never as open or "
-    "overdue, as the app's progress bars do."
+    " A task under a Closed, Rejected or Deleted parent, grandparent or milestone reads as that "
+    "status here even when its own status is still open: it is counted as closed, never as open or "
+    "overdue, and one that reads as Rejected or Deleted is not progress, as in the app."
 )
 FOCUS_ADDITION = (
-    " A task under a Closed or Deleted parent, grandparent or milestone counts as Closed even when "
-    "its own status is still open, so it is not listed."
+    " A task under a Closed, Rejected or Deleted parent, grandparent or milestone counts as "
+    "finished even when its own status is still open, so it is not listed."
 )
 ROWS_ADDITION = (
     " `effective_status` is the status a task reads as: a task under a Closed or Deleted parent, "
-    "grandparent or milestone counts as Closed or Deleted even when its own `status` is still open, "
+    "grandparent or milestone counts as Closed, Rejected or Deleted even when its own `status` is "
+    "still open, "
     "and then `closed_by_ancestor` names that ancestor. Do not count such a task as open work."
 )
 
@@ -67,10 +69,11 @@ class Rule(NamedTuple):
 
     closed: frozenset[int]  # read as Closed, own status is not
     deleted: frozenset[int]  # read as Deleted, own status is not
+    rejected: frozenset[int] = frozenset()  # read as Rejected, own status is not
 
     @property
     def not_open(self) -> frozenset[int]:
-        return self.closed | self.deleted
+        return self.closed | self.deleted | self.rejected
 
 
 def rule_for_projects(project_ids, team_id) -> Rule:
@@ -88,13 +91,16 @@ def rule_for_projects(project_ids, team_id) -> Rule:
     own = {r[0]: r[4] for r in rows}
     closed: set[int] = set()
     deleted: set[int] = set()
+    rejected: set[int] = set()
     for task_id, found in verdicts.items():
         reads = task_ancestry.effective(own[task_id], found).status
         if reads == task_ancestry.CLOSED and own[task_id] != task_ancestry.CLOSED:
             closed.add(task_id)
         elif reads == task_ancestry.DELETED and own[task_id] != task_ancestry.DELETED:
             deleted.add(task_id)
-    return Rule(frozenset(closed), frozenset(deleted))
+        elif reads == task_ancestry.REJECTED and own[task_id] != task_ancestry.REJECTED:
+            rejected.add(task_id)
+    return Rule(frozenset(closed), frozenset(deleted), frozenset(rejected))
 
 
 def with_effective_status(qs: QuerySet, rule: Rule) -> QuerySet:
@@ -103,6 +109,8 @@ def with_effective_status(qs: QuerySet, rule: Rule) -> QuerySet:
     whens = []
     if rule.deleted:
         whens.append(When(task_id__in=sorted(rule.deleted), then=Value(task_ancestry.DELETED)))
+    if rule.rejected:
+        whens.append(When(task_id__in=sorted(rule.rejected), then=Value(task_ancestry.REJECTED)))
     if rule.closed:
         whens.append(When(task_id__in=sorted(rule.closed), then=Value(task_ancestry.CLOSED)))
     expression = (
@@ -112,11 +120,22 @@ def with_effective_status(qs: QuerySet, rule: Rule) -> QuerySet:
 
 
 def read_by_rule(qs: QuerySet, rule: Rule | None) -> tuple[QuerySet, str]:
-    """`(qs, status field)` for a counting tool: `(qs, "status")` untouched with no rule, else the
-    queryset annotated, without the tasks that read as Deleted, and `"eff_status"`."""
+    """`(qs, status field)` for a counting tool, without the tasks that are no progress (Rejected,
+    MIP-2494, and Deleted): `(qs, "status")` with no rule, else the queryset annotated and
+    `"eff_status"`. A caller with no rule has already left its own Deleted rows out."""
     if rule is None:
-        return qs, "status"
-    return with_effective_status(qs, rule).exclude(eff_status=task_ancestry.DELETED), "eff_status"
+        return qs.exclude(status=task_ancestry.REJECTED), "status"
+    return (
+        with_effective_status(qs, rule).exclude(eff_status__in=UNCOUNTED_STATUSES),
+        "eff_status",
+    )
+
+
+def count_reading(qs: QuerySet, rule: Rule | None, status: str) -> int:
+    """How many of `qs` read as `status`: the separate Rejected / Deleted row of a breakdown."""
+    if rule is None:
+        return qs.filter(status=status).distinct().count()
+    return with_effective_status(qs, rule).filter(eff_status=status).distinct().count()
 
 
 def row_fields(task_ids: list[Any], ctx) -> dict[int, dict[str, Any]]:

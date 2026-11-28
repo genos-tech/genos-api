@@ -34,6 +34,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from origin.models.task.task_models import TaskMaster
+from origin.services.task_status_values import FINISHED_STATUSES
 
 #: Candidates per entry (parents, blockers).
 MAX_CANDIDATES = 3
@@ -43,7 +44,7 @@ SCAN_LIMIT = 400
 #: Characters of the new task's body used as extra words (its title counts double).
 BODY_CHARS = 600
 #: Statuses that are no longer open work, so never offered as a parent or a blocker.
-_DONE = ("Closed", "Deleted")
+_DONE = FINISHED_STATUSES
 #: Titles shown to the agent are cut here: the list stays one short block.
 _TITLE_CHARS = 90
 

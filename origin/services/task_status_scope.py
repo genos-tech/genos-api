@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 
-STATUS_LABELS = ("Open", "WIP", "Blocked", "Pending", "Closed", "Deleted")
+STATUS_LABELS = ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected", "Deleted")
 
 
 class BadStatuses(ValueError):

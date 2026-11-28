@@ -194,7 +194,8 @@ class OnPublishesTests(SimpleTestCase):
         self.assertEqual(set(on_props) - set(off_props), CREATE_NEW)
         self.assertEqual({k: on_props[k] for k in off_props}, off_props)
         self.assertEqual(
-            on_props["status"]["enum"], ["Open", "WIP", "Blocked", "Pending", "Closed"]
+            on_props["status"]["enum"],
+            ["Open", "WIP", "Blocked", "Pending", "Closed", "Rejected"],
         )
         self.assertNotIn("Deleted", on_props["status"]["enum"])
         self.assertEqual(on_props["links"]["type"], "ARRAY")

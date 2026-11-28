@@ -38,6 +38,7 @@ from origin.services.dashboard_page import (
 )
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.schedule_jobs.report_kit import plain
+from origin.services.task_status_values import FINISHED_STATUSES, UNCOUNTED_STATUSES
 
 OPEN_STATUSES = ("Open", "WIP", "Blocked", "Pending")
 # A project with more open work than this shows its soonest-due part.
@@ -101,7 +102,7 @@ class Open:
             TaskDependency.objects.filter(
                 blocked_task_id__in=list(self.tasks), blocker_task__is_deleted=False
             )
-            .exclude(blocker_task__status__in=("Closed", "Deleted"))
+            .exclude(blocker_task__status__in=FINISHED_STATUSES)
             .order_by("id")
             .values_list("blocked_task_id", "blocker_task_id")
         )
@@ -250,7 +251,7 @@ def meters(
             team_id=ctx.team_id, project_id=project_id, is_deleted=False
         ).order_by(
             Case(
-                When(status__in=("Closed", "Deleted"), then=Value(1)),
+                When(status__in=FINISHED_STATUSES, then=Value(1)),
                 default=Value(0),
                 output_field=IntegerField(),
             ),
@@ -270,12 +271,12 @@ def meters(
             continue
         work = TaskMaster.objects.filter(milestone_work_q(milestone), project_id=project_id)
         counts = Counter(statuses_of(work, rule).values())
-        total = sum(n for status, n in counts.items() if status != "Deleted")
+        total = sum(n for status, n in counts.items() if status not in UNCOUNTED_STATUSES)
         ids = work.values("task_id")
         finished = total and counts["Closed"] == total
         if finished and not closed_tasks(ids, since):
             continue
-        if not total and milestone.status in ("Closed", "Deleted"):
+        if not total and milestone.status in FINISHED_STATUSES:
             continue
         rows.append(
             {
@@ -353,7 +354,8 @@ def milestone_layout(
     work_q = TaskMaster.objects.filter(milestone_work_q(milestone))
     ids = work_q.values("task_id")
     counts = dict(summary.get("status_breakdown") or {})
-    counts.pop("Deleted", None)
+    for gone in UNCOUNTED_STATUSES:
+        counts.pop(gone, None)
     hero = {
         "type": "hero",
         "done": counts.get("Closed", 0),

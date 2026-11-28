@@ -69,6 +69,7 @@ from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import member_events, note_scope, section_perf
 from origin.services.channel_scope import chat_note_member_q, readable_chats_qs
 from origin.services.plain_text import body_text, message_text
+from origin.services.task_status_values import FINISHED_STATUSES
 from origin.services.user_time import zone_for_user_id
 
 log = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ DID_LOOKED = 5
 LOOKED_POOL = 40
 LOOKED_CHECKS = 15
 
-_ACTIVE_TASK_EXCLUDE = ["Closed", "Deleted"]
+_ACTIVE_TASK_EXCLUDE = list(FINISHED_STATUSES)
 _COMMENT_ACTIONS = (
     TaskActivityActionType.COMMENT_ADDED,
     TaskActivityActionType.COMMENT_EDITED,

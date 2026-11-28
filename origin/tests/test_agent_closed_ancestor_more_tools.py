@@ -73,7 +73,7 @@ class CountsTests(MoreTools):
             TaskMaster.objects.filter(project=self.project, is_init_task=False, is_deleted=False)
         )
         found = effective_statuses([t.task_id for t in tasks], self.team.team_id)
-        counts = {s: 0 for s in ("Open", "WIP", "Blocked", "Pending", "Closed")}
+        counts = {s: 0 for s in ("Open", "WIP", "Blocked", "Pending", "Closed", "Rejected")}
         overdue = 0
         for t in tasks:
             reads = found[t.task_id].status

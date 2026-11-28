@@ -28,6 +28,7 @@ from typing import Any
 
 from origin.models.common.member_importance_models import MARK_ON_IT
 from origin.search_engine.agent.parity import FOLLOWUPS_FLAG, PARITY_FLAG, flag_on
+from origin.search_engine.agent.tools import custom_status as _custom_status
 from origin.search_engine.agent.tools.create_calendar_event import (
     PARITY_PROPERTIES as _CALENDAR_ACCOUNT,
 )
@@ -144,6 +145,21 @@ ADDITIONS: tuple[ParamAddition, ...] = (
     ParamAddition("fetch_note", _BLOCKS_FLAG, properties=_BLOCKS_PROPERTIES),
     # MIP-2456 (AGENT_TODO_DAYS_AHEAD): to-dos dated after today.
     ParamAddition("list_uncompleted_todos", _DAYS_AHEAD_FLAG, properties=_DAYS_AHEAD_PROPERTIES),
+    # MIP-2494 (AGENT_CUSTOM_STATUS): a project's own status name on the writes.
+    *(
+        ParamAddition(name, _custom_status.FLAG, properties=_custom_status.PROPERTIES)
+        for name in ("create_task", "update_task", "manage_milestone")
+    ),
+    ParamAddition(
+        "create_task_plan",
+        _custom_status.FLAG,
+        nested=(("tasks", _custom_status.ROW_PROPERTIES),),
+    ),
+    ParamAddition(
+        "update_tasks_bulk",
+        _custom_status.FLAG,
+        nested=(("updates", _custom_status.ROW_PROPERTIES),),
+    ),
 )
 
 

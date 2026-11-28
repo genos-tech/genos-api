@@ -31,7 +31,7 @@ from django.db.models import Count, Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools import ancestor_rule
+from origin.search_engine.agent.tools import ancestor_rule, custom_status
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.milestone_order import order_of_work
 from origin.search_engine.agent.tools.project_gone import in_deleted_project
@@ -46,7 +46,7 @@ from origin.services.user_time import today_for_user_id
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"]
 _PRIORITY_LABELS = ["Minimal", "Low", "Normal", "High", "Critical"]
 _EFFORT_LABELS = ["Minimal", "Low", "Moderate", "High", "Extensive"]
-_CLOSED_STATUSES = ["Closed", "Deleted"]
+_CLOSED_STATUSES = ["Closed", "Rejected", "Deleted"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -128,6 +128,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     agg = qs.aggregate(**annotations)
 
     status_breakdown = {label: agg.get(f"_status_{label}", 0) or 0 for label in _STATUS_LABELS}
+    status_breakdown["Rejected"] = ancestor_rule.count_reading(
+        TaskMaster.objects.filter(milestone_work_q(m)), rule, "Rejected"
+    )
     deleted_q = Q(status="Deleted")
     if rule is not None:
         deleted_q |= Q(task_id__in=sorted(rule.deleted))  # gone under a Deleted ancestor
@@ -169,7 +172,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         m, member_project_ids, skip_ids=rule.not_open if rule is not None else frozenset()
     )
 
-    return {
+    result = {
         "milestone_id": m.milestone_id,
         "project_id": m.project_id,
         "project_name": m.project.project_name if m.project_id else None,
@@ -201,6 +204,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             f"{order['blocked_count']} waiting on blockers"
         ),
     }
+    custom_status.add_to_milestones([result])  # MIP-2494 (flag `AGENT_CUSTOM_STATUS`)
+    return result
 
 
 GET_MILESTONE_SUMMARY = Tool(
@@ -208,6 +213,7 @@ GET_MILESTONE_SUMMARY = Tool(
     description=(
         "Return task-count statistics for one milestone: total tasks, "
         "status_breakdown (Open / WIP / Blocked / Pending / Closed, plus a separate "
+        "Rejected row for tasks that will not be done, which are not part of the total, and a "
         "Deleted row for tasks with status Deleted, which are gone: they "
         "are NOT in total_tasks or the other breakdowns and do not count as "
         "closed), priority_breakdown (Minimal/Low/Normal/High/Critical), "

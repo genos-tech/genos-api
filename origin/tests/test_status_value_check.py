@@ -11,11 +11,11 @@ from origin.models.task.task_models import TaskMaster
 from origin.services.task_status_values import VALID_STATUS_VALUES, status_value_error
 from origin.tests.test_base import BaseAPITestCase
 
-LISTED = "Open, WIP, Blocked, Pending, Closed, Deleted"
+LISTED = "Open, WIP, Blocked, Pending, Closed, Rejected, Deleted"
 
 
 class StatusValueHelperTests(BaseAPITestCase):
-    def test_the_six_pass_and_others_fail(self):
+    def test_the_system_values_pass_and_others_fail(self):
         for value in VALID_STATUS_VALUES:
             self.assertIsNone(status_value_error(value))
         for value in ("banana", "open", "", None, 3, ["Open"]):
