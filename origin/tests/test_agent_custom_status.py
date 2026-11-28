@@ -220,3 +220,50 @@ class ReadTests(ToolBase):
         self.assertFalse(ProjectStatus.objects.filter(project=self.project).exists())
         self.add("Doing", "WIP")
         self.assertIn({"name": "Doing", "category": "WIP"}, statuses())
+
+
+@flag(True)
+class UnfitNameWordingTests(ToolBase):
+    """MIP-2546: the paid eval's two failures. The model asked instead of proposing the write, and
+    did not name the statuses after a left-out name."""
+
+    def test_the_writes_say_an_unlisted_name_is_no_reason_to_stop(self):
+        for name in WRITES:
+            schema = with_flagged_params(name, REGISTRY[name].parameters_schema)
+            said = schema["properties"]["custom_status"]["description"]
+            self.assertIn("no reason to stop or ask", said, name)
+
+    def test_update_and_create_lead_with_what_to_tell_the_member(self):
+        task = self.task("Open")
+        updated = self.run_tool(
+            "update_task", task_id=task.task_id, custom_status="Ready for QA", priority="High"
+        )
+        only = self.run_tool("update_task", task_id=task.task_id, custom_status="Ready for QA")
+        made = self.run_tool(
+            "create_task",
+            project_id=self.project.project_id,
+            title="New",
+            custom_status="Ready for QA",
+        )
+        for result in (updated, only, made):
+            self.assertEqual(next(iter(result)), "tell_the_member")
+            (entry,) = [s for s in result["suggestions"] if s["kind"] == "custom_status"]
+            self.assertIn("naming the statuses in `candidates`", entry["message"])
+            self.assertIn("was not applied", entry["message"])
+            self.assertIn({"name": "In Review", "category": "Open"}, entry["candidates"])
+        self.assertEqual(updated["changed_fields"], ["priority"])
+
+    def test_no_notice_for_a_name_that_fits_or_a_call_without_one(self):
+        task = self.task("Open")
+        for args in ({"custom_status": "In Review"}, {"priority": "Low"}):
+            result = self.run_tool("update_task", task_id=task.task_id, **args)
+            self.assertNotIn("tell_the_member", result, args)
+
+    def test_nothing_changes_while_the_flag_is_off(self):
+        task = self.task("Open")
+        with flag(False):
+            result = self.run_tool(
+                "update_task", task_id=task.task_id, custom_status="Ready for QA", priority="High"
+            )
+        self.assertNotIn("tell_the_member", result)
+        self.assertNotIn("suggestions", result)

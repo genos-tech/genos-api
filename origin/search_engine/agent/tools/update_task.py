@@ -559,13 +559,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         and not move_parent
         and not move_project
     ):
-        return {
-            "task_id": task_id,
-            "changed_fields": [],
-            **({"body_hash": body_hash(task.content)} if (edit_modes or base_hash) else {}),
-            **({"suggestions": left_out} if left_out else {}),
-            "__summary__": f"No changes applied to task {task.display_id}.",
-        }
+        return custom_status.lead_with_notice(
+            {
+                "task_id": task_id,
+                "changed_fields": [],
+                **({"body_hash": body_hash(task.content)} if (edit_modes or base_hash) else {}),
+                **({"suggestions": left_out} if left_out else {}),
+                "__summary__": f"No changes applied to task {task.display_id}.",
+            },
+            choice,
+        )
 
     # What the move did, for the model to say and not to guess (flag on only; None keeps the move
     # from counting anything).
@@ -687,13 +690,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # was re-derived by `sync_backing_task`).
     hash_field = {"body_hash": body_hash(task.content)} if (edit_modes or base_hash) else {}
     if not changed:
-        return {
-            "task_id": task_id,
-            "changed_fields": [],
-            **hash_field,
-            **({"suggestions": left_out} if left_out else {}),
-            "__summary__": f"No changes applied to task {task.display_id}.",
-        }
+        return custom_status.lead_with_notice(
+            {
+                "task_id": task_id,
+                "changed_fields": [],
+                **hash_field,
+                **({"suggestions": left_out} if left_out else {}),
+                "__summary__": f"No changes applied to task {task.display_id}.",
+            },
+            choice,
+        )
     result = {
         "task_id": task_id,
         "changed_fields": changed,
@@ -726,7 +732,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         result["__summary__"] += move_report_clauses(move_report, destination.project_name)
     if undo_capture is not None and (image := undo_capture.finish(update_fields)):
         result[UNDO_KEY] = image
-    return result
+    return custom_status.lead_with_notice(result, choice)
 
 
 #: What a refused move says besides the shared sentence (MIP-1609). The app's PUT says "send

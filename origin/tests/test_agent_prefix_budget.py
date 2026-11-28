@@ -124,7 +124,9 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # MIP-2494: the unflagged system status "Rejected" (enums and the sentences about it) and `AGENT_CUSTOM_STATUS`
 # (default OFF, arm `t2494`: `custom_status` on five writes and a sentence on three reads). Production with the flag off
 # stays under 143,000; with every flag on 144,391, so the constant goes up to 144,500. NOT measured by a paid eval.
-BUDGET_CHARS = 144_500
+# MIP-2546: one sentence on `custom_status` (3 write tools, flag on only: send an unlisted name, do not stop to ask). The
+# flag-off prefix does not move; with every flag on it passes 144,500, so the constant goes up to 145,000. Not measured.
+BUDGET_CHARS = 145_000
 
 
 def _declared_chars() -> int:
