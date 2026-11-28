@@ -200,7 +200,7 @@ from origin.search_engine.spend_limits import (
     month_spend_usd_micro,
     monthly_limit_reached,
 )
-from origin.services import automation_engine
+from origin.services import automation_engine, webhook_enqueue
 from origin.services.demo_ai_limits import (
     DEMO_AI_MAX_EFFORT,
     DEMO_AI_PROVIDER,
@@ -3008,7 +3008,8 @@ def _stream_ndjson(
         try:
             # This thread serves no request: automation rules for what the answer
             # wrote run when it ends (MIP-2498).
-            with automation_engine.batch():
+            # Webhooks outside automation, so what a rule wrote joins the same event.
+            with webhook_enqueue.batch(), automation_engine.batch():
                 pause_descriptor = worker_target(emit, cancel_event)
         except Exception as e:  # noqa: BLE001
             # The reference, not the exception: the client sees this, and

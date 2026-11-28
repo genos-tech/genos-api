@@ -49,7 +49,7 @@ from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMas
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskAttachments, TaskComments, TaskMaster
-from origin.services import automation_engine, task_progress
+from origin.services import automation_engine, task_progress, webhook_enqueue
 from origin.services.activity_suppression import activity_suppressed
 from origin.services.calendar_sync import (
     LINK_ONLY_FIELDS,
@@ -819,9 +819,13 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             },
         )
         instance._activity_finalized_creation = True
+        # The draft was never announced, so this is the task's `task.created` (MIP-2586).
+        _schedule_task_webhook(instance, created=True)
         automation_engine.offer(instance, AutomationTrigger.CREATED)
         return
     if getattr(instance, "_activity_finalized_creation", False):
+        # No history for the rest of the finishing save, but the announced task takes it.
+        _schedule_task_webhook(instance, created=False)
         return
 
     # Soft-delete / restore takes precedence over a plain status diff.
@@ -1082,9 +1086,9 @@ def _schedule_task_webhook(instance, *, created: bool, status_changed_to=None) -
     """Best-effort: an integration is an observer, and an observer must
     never be able to fail the action it observes."""
     try:
-        from origin.services.webhook_enqueue import schedule_task_event
-
-        schedule_task_event(instance, created=created, status_changed_to=status_changed_to)
+        webhook_enqueue.schedule_task_event(
+            instance, created=created, status_changed_to=status_changed_to
+        )
     except Exception:  # noqa: BLE001 — never break a task write
         _webhook_logger.warning(
             "task webhook scheduling failed for task=%s", instance.pk, exc_info=True

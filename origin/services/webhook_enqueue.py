@@ -24,6 +24,12 @@ naive per-save hook therefore sent THREE webhooks for one thing
 happening, two of them `task.updated` for a task that had just been
 created. `_pending_for_transaction` collapses them.
 
+The app does not run a request in one transaction (`ATOMIC_REQUESTS` is
+off), so a transaction is not one user action on its own. A request, or a
+worker's `batch()`, therefore HOLDS what has committed and queues it when
+it ends, one event per task (MIP-2586). A rolled-back write never gets
+there: its `on_commit` callback is discarded.
+
 ## Delivery rows are created, not sent
 
 Enqueue is a DB insert. `webhook_deliver_tick` does the sending, which
@@ -33,7 +39,10 @@ is what keeps a slow customer endpoint out of the request path.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 
+from django.core.signals import request_finished, request_started
 from django.db import transaction
 
 from origin.models.common.webhook_models import (
@@ -228,6 +237,59 @@ _EVENT_PRECEDENCE = {
 }
 
 
+# Committed task events of the request or `batch()` running in this context, as
+# `{task_pk: (team_id, event, payload, scope)}`; None outside one.
+_held: ContextVar[dict | None] = ContextVar("webhook_held", default=None)
+
+
+def _keep_specific(existing, event: str) -> str:
+    """The event to announce when `event` joins an `existing` entry of the same task."""
+    if existing is not None and _EVENT_PRECEDENCE.get(existing[1], 0) >= _EVENT_PRECEDENCE.get(
+        event, 0
+    ):
+        return existing[1]
+    return event
+
+
+def _flush_held() -> None:
+    held = _held.get()
+    if not held:
+        return
+    _held.set({})
+    read: dict = {}
+    for team_id, event, payload, scope in held.values():
+        enqueue_event(team_id, event, payload, scope, endpoints_read=read)
+
+
+@contextmanager
+def batch():
+    """Collapse the task events of a block that serves no request: one per task, queued at the
+    end (even if the block raised: what committed is still true)."""
+    token = _held.set({})
+    try:
+        yield
+    finally:
+        try:
+            _flush_held()
+        finally:
+            _held.reset(token)
+
+
+def _on_request_started(**kwargs) -> None:
+    _held.set({})
+
+
+def _on_request_finished(**kwargs) -> None:
+    try:
+        _flush_held()
+    finally:
+        _held.set(None)
+
+
+request_started.connect(_on_request_started, dispatch_uid="webhook_request_started")
+request_finished.connect(_on_request_finished, dispatch_uid="webhook_request_finished")
+
+
 def _pending_for_transaction() -> dict:
     """Per-transaction `{task_id: (team_id, event, payload)}`.
 
@@ -274,6 +336,10 @@ def _flush_one(registry: dict, task_pk, read: _CommitEndpoints) -> None:
     if entry is None:
         return
     team_id, event, payload, scope = entry
+    held = _held.get()
+    if held is not None:
+        held[task_pk] = (team_id, _keep_specific(held.get(task_pk), event), payload, scope)
+        return
     enqueue_event(team_id, event, payload, scope, endpoints_read=read.by_team)
 
 
@@ -285,8 +351,11 @@ def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
     state that then rolls back — leaving an integrator holding a task
     that never existed.
 
-    One event per task per transaction, never one per save and never one
-    per changed field.
+    One event per task per transaction (per request or `batch()`, see
+    `_held`), never one per save and never one per changed field.
+
+    Outside a transaction `on_commit` runs at once, so the entry is stored
+    BEFORE its callback is registered (MIP-2586).
     """
     if getattr(task, "is_init_task", False):
         return
@@ -306,23 +375,23 @@ def schedule_task_event(task, *, created: bool, status_changed_to=None) -> None:
 
     registry = _pending_for_transaction()
     existing = registry.get(task.pk)
-    if existing is not None:
-        # Keep the more specific event, but always refresh the payload:
-        # the later save is the more complete picture of the row.
-        keep = existing[1]
-        if _EVENT_PRECEDENCE.get(keep, 0) >= _EVENT_PRECEDENCE.get(event, 0):
-            event = keep
-    else:
+    # Keep the more specific event, but always refresh the payload: the later
+    # save is the more complete picture of the row. Scope refreshed alongside
+    # it: a task moved between projects mid-transaction must be filtered by
+    # where it ended up.
+    registry[task.pk] = (
+        team_id,
+        _keep_specific(existing, event),
+        task_payload(task),
+        {"project_id": task.project_id},
+    )
+    if existing is None:
         # Only the FIRST event for this TASK registers a callback, so it
         # runs once no matter how many saves follow — and it owns only
         # this task, so a rolled-back sibling can never ride along.
         task_pk = task.pk
         read = _endpoints_for_transaction()
         transaction.on_commit(lambda: _flush_one(registry, task_pk, read))
-
-    # Scope refreshed alongside the payload: a task moved between
-    # projects mid-transaction must be filtered by where it ended up.
-    registry[task.pk] = (team_id, event, task_payload(task), {"project_id": task.project_id})
 
 
 def schedule_comment_event(comment, task) -> None:
