@@ -10,7 +10,6 @@ Files are real: a temporary MEDIA_ROOT, so "the file left storage" is checked, n
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 
 from django.core.files.base import ContentFile
@@ -21,6 +20,7 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskAttachments, TaskBodyAttachmentFact, TaskMaster
 from origin.services import demo_seeder
 from origin.services.project_delete import delete_project
+from origin.tests.media_support import remove_media_root
 from origin.tests.test_base import BaseAPITestCase
 
 _MEDIA_ROOT = tempfile.mkdtemp(prefix="test-task-files-hard-delete-")
@@ -31,7 +31,7 @@ class TaskFilesBase(BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
-        shutil.rmtree(_MEDIA_ROOT, ignore_errors=True)
+        remove_media_root(_MEDIA_ROOT)
 
     def setUp(self):
         super().setUp()

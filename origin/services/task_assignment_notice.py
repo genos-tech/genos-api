@@ -59,34 +59,66 @@ def notify_task_assigned(task, *, actor_id, previous_assignee_id) -> list[Activi
         new_id = str(task.assignee_id) if task.assignee_id else None
         if new_id is None or new_id == str(previous_assignee_id or "") or new_id == str(actor_id):
             return []
-        channel = _pm_channel(task.project_id)
-        if channel is None:
-            return []
-        card = (
-            Message.objects.select_related("channel", "sender")
-            .filter(channel=channel, task_id=task.task_id, is_thread_reply=False)
-            .filter(deleted_at__isnull=True)
-            .order_by("seq")
-            .first()
-        )
-        if card is None:
-            post_task_created_card(task, actor_id=actor_id)
-            return []
-        actor = CustomUser.objects.filter(id=actor_id).first()
-        if actor is None:
-            return []
-        activities = v3_activity.create_task_assign_activity(
-            message=card, recipient_id=new_id, actor=actor
-        )
-        webpush_dispatch.schedule_push_for_activities(activities)
-        for activity in activities:
-            realtime_push.push_activity(activity)
-        return activities
+        return _tell_on_card(task, new_id, actor_id=actor_id)
     except Exception:  # noqa: BLE001 — the assignee is saved; an observer must not fail the write
         log.warning(
             "task assignment notice failed task=%s", getattr(task, "task_id", None), exc_info=True
         )
         return []
+
+
+def notify_task_moved_by_rule(task, *, actor_id) -> list[Activity]:
+    """Tell the assignee that a project rule moved their task (MIP-2500).
+
+    The assignment's row, on the card the move brought to the new chat, flagged `ruleMove`.
+    `actor_id` is the rule's owner, whom the move acts as. A task with no card gets one, whose
+    `@`-mention tells them. Never raises.
+    """
+    try:
+        task = (
+            TaskMaster.objects.select_related("project", "assignee", "reporter")
+            .filter(task_id=task.task_id)
+            .first()
+        )
+        if task is None or task.project_id is None or task.is_milestone:
+            return []
+        assignee_id = str(task.assignee_id) if task.assignee_id else None
+        if assignee_id is None or assignee_id == str(actor_id):
+            return []
+        return _tell_on_card(task, assignee_id, actor_id=actor_id, extra={"ruleMove": True})
+    except Exception:  # noqa: BLE001 — the task is moved; an observer must not fail the write
+        log.warning(
+            "task rule-move notice failed task=%s", getattr(task, "task_id", None), exc_info=True
+        )
+        return []
+
+
+def _tell_on_card(task, recipient_id, *, actor_id, extra=None) -> list[Activity]:
+    """The task-assign activity on `task`'s card, delivered. With no card, one is posted
+    instead: its `@`-mention is the notification."""
+    channel = _pm_channel(task.project_id)
+    if channel is None:
+        return []
+    card = (
+        Message.objects.select_related("channel", "sender")
+        .filter(channel=channel, task_id=task.task_id, is_thread_reply=False)
+        .filter(deleted_at__isnull=True)
+        .order_by("seq")
+        .first()
+    )
+    if card is None:
+        post_task_created_card(task, actor_id=actor_id)
+        return []
+    actor = CustomUser.objects.filter(id=actor_id).first()
+    if actor is None:
+        return []
+    activities = v3_activity.create_task_assign_activity(
+        message=card, recipient_id=recipient_id, actor=actor, extra=extra
+    )
+    webpush_dispatch.schedule_push_for_activities(activities)
+    for activity in activities:
+        realtime_push.push_activity(activity)
+    return activities
 
 
 def notify_milestone_assigned(milestone, *, actor_id, added_user_ids) -> list[Activity]:
