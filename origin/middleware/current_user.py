@@ -118,6 +118,27 @@ def via_override(via):
             del _state.via
 
 
+@contextmanager
+def acting_as(user, via):
+    """Write as `user`, reported as `via`, for the block; then put back what was there.
+
+    For work done in somebody else's name from inside a request or a worker (an automation
+    rule running as its owner): `set_current_user` / `clear_current_user` would lose the
+    request's own identity.
+    """
+    had = {attr: getattr(_state, attr) for attr in ("user", "via") if hasattr(_state, attr)}
+    _state.user = user
+    _state.via = via
+    try:
+        yield
+    finally:
+        for attr in ("user", "via"):
+            if attr in had:
+                setattr(_state, attr, had[attr])
+            elif hasattr(_state, attr):
+                delattr(_state, attr)
+
+
 def clear_current_user():
     """Drop the explicit user/source and cached request from this thread."""
     for attr in ("user", "via", "request", "run_id"):
