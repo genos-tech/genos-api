@@ -915,6 +915,14 @@ def _message_kind_q(kinds: frozenset[str]):
     return q
 
 
+def _notice_sentence(metadata: dict) -> str:
+    """The fixed sentence of a system notice. A rule that moved a milestone says so (MIP-2540)."""
+    sentence = SYSTEM_NOTICES[metadata["systemNotice"]]
+    if metadata["systemNotice"] == "task_moved_by_rule" and metadata.get("movedMilestone"):
+        return sentence.replace("moved a task", "moved a milestone")
+    return sentence
+
+
 def _message_event(sc: Scope, m: Message, *, via: str | None, in_chat: str | None) -> TEv:
     notice = _is_notice(m)
     kind = "notice" if notice else "reply" if m.is_thread_reply else "message"
@@ -928,7 +936,7 @@ def _message_event(sc: Scope, m: Message, *, via: str | None, in_chat: str | Non
         key=key,
         actor=str(m.sender_id) if m.sender_id else None,
         label="system" if notice else None,
-        text=SYSTEM_NOTICES[m.metadata["systemNotice"]]
+        text=_notice_sentence(m.metadata)
         if notice
         else sc.snippet(plain_text.message_text(m)),
         via=via,
