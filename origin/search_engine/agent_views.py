@@ -59,7 +59,7 @@ from typing import Any, Callable, Iterable, Iterator
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Count, Prefetch, Q
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -102,6 +102,7 @@ from origin.search_engine.agent.controller import (
     OUTPUT_TRUNCATED_MESSAGE,
     _chat_source,
     _note_source,
+    approval_card,
     pending_step_of,
     reconstruct_sources_for_run,
     resume_agent,
@@ -4278,17 +4279,17 @@ class AgentSessionsListView(AuthenticatedAPIView):
         if not sessions:
             return Response({"sessions": []})
 
-        # Hydrate per-session metadata in one extra query each. With the
-        # caps above this is bounded; on a real workspace this is
-        # dominated by AgentRun read latency, not query count.
-        # If history list latency ever matters, switch to a single
-        # GROUP BY query. Not worth it at this scale.
+        # Two queries for all the rows, however many there are (MIP-2604).
+        runs_qs = AgentRun.objects.filter(session__in=sessions)
+        turn_counts = dict(runs_qs.values_list("session_id").annotate(n=Count("run_id")).order_by())
+        first_queries = dict(
+            runs_qs.order_by("session_id", "started_at")
+            .distinct("session_id")
+            .values_list("session_id", "query")
+        )
         sessions_payload = []
         for s in sessions:
-            runs_qs = AgentRun.objects.filter(session=s)
-            turn_count = runs_qs.count()
-            first_run = runs_qs.order_by("started_at").only("query").first()
-            first_query = (first_run.query if first_run else "") or ""
+            first_query = first_queries.get(s.session_id) or ""
             if len(first_query) > self._FIRST_QUERY_PREVIEW_LEN:
                 first_query = first_query[: self._FIRST_QUERY_PREVIEW_LEN].rstrip() + "…"
             sessions_payload.append(
@@ -4297,7 +4298,7 @@ class AgentSessionsListView(AuthenticatedAPIView):
                     "created_at": s.created_at.isoformat(),
                     "last_active_at": s.last_active_at.isoformat(),
                     "first_query": first_query,
-                    "turn_count": turn_count,
+                    "turn_count": turn_counts.get(s.session_id, 0),
                     "is_pinned": s.pinned_at is not None,
                     "scope": session_scope.scope_of(s),
                 }
@@ -4348,11 +4349,13 @@ class AgentSessionDetailView(AuthenticatedAPIView):
     (team_id, user_id) — a UUID guess returns 404, not someone else's
     conversation.
 
-    Only runs with a final answer OR an error message are returned —
-    in-flight runs (status="running" / "awaiting_approval") and runs
-    that wrote no answer at all are filtered out. This keeps the
-    read-only archive coherent: every visible row is a completed
-    exchange.
+    Returned: every run with a final answer or an error message, and every
+    cancelled or awaiting-approval run even without one (MIP-2604), so a listed
+    session never opens empty for those. A run still "running", and an ask refused
+    before it began, are left out.
+
+    A turn awaiting approval also has `pending_approval` (the object of the
+    `tool_call_pending_approval` event without `type`, or null).
 
     `sources` on each turn is rebuilt from the persisted
     `AgentStep.result_json` so inline `[task:N]` / `[chat:...]` /
@@ -4370,7 +4373,8 @@ class AgentSessionDetailView(AuthenticatedAPIView):
                     "run_id":     "<uuid>",
                     "query":      "...",
                     "answer":     "...",          # final_answer_text
-                    "status":     "done|error|step_cap|rejected",
+                    "status":     "done|error|step_cap|rejected|cancelled|awaiting_approval",
+                    "pending_approval": {...} | null,  # awaiting_approval only
                     "error":      "..." | null,   # error_message when status=error
                     "started_at": "<iso>",
                     "sources":    [SpotlightResult-shaped dict, ...]
@@ -4712,8 +4716,13 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
     modal open). Prefetches `steps` so `reconstruct_sources_for_run`
     runs without N+1 queries.
 
-    Skips runs with neither a final answer nor an error — those are
-    abandoned mid-stream runs that would render as empty bubbles.
+    A run with neither a final answer nor an error is still a turn when it was
+    cancelled or is waiting for an approval (MIP-2604): the history list shows its
+    session, so skipping it opened an empty conversation. Any other such run (still
+    running, or an ask refused before it began) is left out.
+
+    A run awaiting approval also carries `pending_approval`: the card the stream sent
+    when it paused, or null when there is nothing left to decide.
     """
     runs = (
         AgentRun.objects.filter(session=session)
@@ -4729,7 +4738,7 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
     for r in runs:
         answer = r.final_answer_text or ""
         error = r.error_message or ""
-        if not answer and not error:
+        if not answer and not error and r.status not in ("cancelled", "awaiting_approval"):
             continue
         out.append(
             {
@@ -4748,9 +4757,45 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
                 # and that nothing changed since) is checked when it is tried, not
                 # here: a restored turn shows Undo, and the click may be refused.
                 "undo": [info for step in r.steps.all() if (info := undo.step_info(step))],
+                **(
+                    {"pending_approval": _pending_card_of(r)}
+                    if r.status == "awaiting_approval"
+                    else {}
+                ),
             }
         )
     return out
+
+
+def _pending_card_of(run: AgentRun) -> dict[str, Any] | None:
+    """The approval card of a paused run, built again from its stored step, or None.
+
+    Only ever sent to the run's own asker (every caller of `_build_turns_payload`
+    reads one person's session), who was handed the same token when it paused;
+    `/decide/` checks the person, the token and the status again. Never raises: a
+    card that cannot be built costs the buttons, not the whole conversation.
+    """
+    try:
+        step = pending_step_of(run)
+        if step is None or run.pending_approval_token is None:
+            return None
+        ctx = ToolContext(
+            team_id=run.team_id,
+            user_id=run.user_id,
+            resolved_mentions=tuple(run.mentions or ()),
+            locale=run.locale or "",
+        )
+        return approval_card(
+            step.tool_name,
+            step.arguments_json or {},
+            step=step.step_index,
+            approval_token=run.pending_approval_token,
+            run_id=run.run_id,
+            ctx=ctx,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Could not rebuild the approval card of run %s", run.run_id)
+        return None
 
 
 class AgentRunFeedbackView(AuthenticatedAPIView):
