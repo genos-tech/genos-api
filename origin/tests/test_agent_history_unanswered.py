@@ -21,9 +21,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from origin.search_engine import agent_views
-from origin.search_engine.models import AgentRun, AgentSession, AgentStep
-
 from origin.search_engine.agent.controller import PENDING_APPROVAL_MARKER
+from origin.search_engine.models import AgentRun, AgentSession, AgentStep
 
 from .test_agent_decide_edits import DecideEditBase
 
