@@ -200,6 +200,7 @@ from origin.search_engine.spend_limits import (
     month_spend_usd_micro,
     monthly_limit_reached,
 )
+from origin.services import automation_engine
 from origin.services.demo_ai_limits import (
     DEMO_AI_MAX_EFFORT,
     DEMO_AI_PROVIDER,
@@ -3005,7 +3006,10 @@ def _stream_ndjson(
         # log lines would carry no reference.
         request_id_token = bind_request_id(request_id)
         try:
-            pause_descriptor = worker_target(emit, cancel_event)
+            # This thread serves no request: automation rules for what the answer
+            # wrote run when it ends (MIP-2498).
+            with automation_engine.batch():
+                pause_descriptor = worker_target(emit, cancel_event)
         except Exception as e:  # noqa: BLE001
             # The reference, not the exception: the client sees this, and
             # the run row keeps it (MIP-622).

@@ -363,6 +363,12 @@ class ExportThrottle(WindowRateThrottle):
     scope = "export"
 
 
+class AutomationDryRunThrottle(WindowRateThrottle):
+    """One call reads up to a couple of thousand tasks of a project (MIP-2498)."""
+
+    scope = "automation_dry_run"
+
+
 class InviteThrottle(WindowRateThrottle):
     """Each address in an invite is an email sent to someone the caller
     chose, so the budget is in addresses, not requests — 30 requests an
