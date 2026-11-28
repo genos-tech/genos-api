@@ -30,7 +30,7 @@ task to another chat, MIP-2505).
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import F, Max
+from django.db.models import F, Max, Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework import status
@@ -69,6 +69,7 @@ from origin.services.mention_extractor import (
 from origin.services.share_roles import view_only_channel_response
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import (
+    MAX_MESSAGES_PER_DELTA,
     apply_row_count_cap,
     build_delta_response,
     capture_server_time,
@@ -752,6 +753,48 @@ class MessagesDeltaView(AuthenticatedAPIView):
             exclude_user_ids=[request.user.id],
         )
         return Response(response_data, status=status.HTTP_201_CREATED)
+
+
+class OlderMessagesView(AuthenticatedAPIView):
+    """GET /api/v3/channels/{channel_id}/messages/older/?before={message_id}
+
+    The page of top-level messages just before one the client already holds (MIP-2487: a jump to
+    a pinned message older than the first load). At most `MAX_MESSAGES_PER_DELTA` rows, oldest
+    first, deleted ones left out, the viewer's history window applied. `hasMore` says whether
+    older ones remain. `before` must be a message of this chat.
+    """
+
+    def get(self, request, channel_id):
+        channel = _verify_member_or_404(channel_id, request.user)
+        before_id = as_uuid(request.GET.get("before"))
+        if before_id is None:
+            return Response(
+                {"error": "before must be a message id."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        before = Message.objects.filter(id=before_id, channel=channel).first()
+        if before is None:
+            raise Http404("Message not found.")
+        qs = Message.objects.filter(
+            Q(ts_sent_at__lt=before.ts_sent_at)
+            | Q(ts_sent_at=before.ts_sent_at, id__lt=before.id),
+            channel=channel,
+            is_thread_reply=False,
+            deleted_at__isnull=True,
+        )
+        _days, cutoff = _retention_cutoff(request.user)
+        if cutoff is not None:
+            qs = qs.filter(ts_sent_at__gte=cutoff)
+        newest_first = qs.order_by("-ts_sent_at", "-id")
+        ids = list(newest_first.values_list("id", flat=True)[: MAX_MESSAGES_PER_DELTA + 1])
+        page = _prefetched_messages(
+            Message.objects.filter(id__in=ids[:MAX_MESSAGES_PER_DELTA])
+        ).order_by("ts_sent_at", "id")
+        return Response(
+            {
+                "messages": MessageSerializer(page, many=True).data,
+                "hasMore": len(ids) > MAX_MESSAGES_PER_DELTA,
+            }
+        )
 
 
 class ThreadMessagesDeltaView(AuthenticatedAPIView):

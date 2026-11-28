@@ -630,6 +630,37 @@ class Flag(models.Model):
         ]
 
 
+class MessagePin(models.Model):
+    """A message pinned in a chat, for everyone in it (MIP-2487).
+
+    Not `Pin` above, which is one person's sidebar pin of a whole chat. One row per message: a
+    pin is shared, so a second member pinning the same message changes nothing. `channel` is a
+    copy of the message's channel, so listing and counting a chat's pins is one index; a reader
+    also checks `message__channel`, because a moved task card keeps its row in another chat.
+    """
+
+    #: The most pins one chat may hold.
+    LIMIT_PER_CHANNEL = 50
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    channel = models.ForeignKey(Channel, on_delete=models.CASCADE, related_name="message_pins")
+    message = models.OneToOneField(Message, on_delete=models.CASCADE, related_name="channel_pin")
+    # Null once that account is gone: the pin is the chat's, not the person's.
+    pinned_by = models.ForeignKey(
+        CustomUser,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="message_pins_made",
+        to_field="id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["channel", "ts_created_at"], name="msgpin_channel_ts_idx"),
+        ]
+
+
 class MessageReminder(models.Model):
     """ "Remind me about this message at T" — a due row, one per (user,
     message), drained by the `message_reminder_tick` cron.
