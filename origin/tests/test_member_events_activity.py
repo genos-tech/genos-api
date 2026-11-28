@@ -58,6 +58,7 @@ from origin.services.account_deletion import delete_account
 from origin.services.account_export import build_export
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.tests.test_briefing import BriefingBase
+from origin.tests.test_member_events import one_bucket
 from origin.views.utils.note_role import ROLE_OWNER
 
 PURGE_TODO = "origin.services.todo_items.purge_todo_item"
@@ -420,6 +421,7 @@ class TestNoteShares(Base):
     def key(self):
         return f"personal:{self.note.note_id}"
 
+    @one_bucket()
     def test_the_page_notes_who_shared_with_whom_and_who_stopped(self):
         self.rest()
         self.assertEqual(self.post().status_code, 200)
