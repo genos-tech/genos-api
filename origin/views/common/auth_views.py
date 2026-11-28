@@ -899,11 +899,8 @@ class CookieTokenRefreshView(TokenRefreshView):
     serializer_class = _ScrubbingTokenRefreshSerializer
     throttle_classes = [TokenRefreshThrottle]
 
-    # Refresh reads the httpOnly cookie, never the body (MIP-1882). POST is the way in; GET stays
-    # for one release so a cached frontend keeps working while it rolls over, then it goes.
-    def get(self, request: Request, *args, **kwargs):
-        return self._refresh_from_cookie(request)
-
+    # Refresh reads the httpOnly cookie, never the body (MIP-1882). POST only: a state-changing
+    # GET could be set off by a plain navigation (MIP-1908).
     def post(self, request: Request, *args, **kwargs):
         return self._refresh_from_cookie(request)
 

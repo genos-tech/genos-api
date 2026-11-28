@@ -84,9 +84,8 @@ class RefreshCookiePersistenceTests(BaseAPITestCase):
         # Rotation re-sets the cookie. If that path issued a session cookie,
         # the fix would silently lapse for anyone who stayed signed in.
         self._signin()
-        # GET, not POST: the view reads the token from the cookie rather
-        # than the body (`CookieTokenRefreshView.get`).
-        resp = self.client.get(reverse("token_refresh"))
+        # No body: the view reads the token from the cookie.
+        resp = self.client.post(reverse("token_refresh"))
         self.assertEqual(resp.status_code, 200, resp.content[:200])
         self.assertEqual(resp.cookies["refresh"]["max-age"], REFRESH_MAX_AGE)
 
