@@ -89,7 +89,7 @@ _TASK = {
             "required": ["id", "name", "category"],
             "properties": {
                 "id": {"type": "integer"},
-                "name": {"type": "string", "example": "In Review"},
+                "name": {"type": "string", "example": "Ready"},
                 "category": {"type": "string", "example": "Open"},
             },
         },

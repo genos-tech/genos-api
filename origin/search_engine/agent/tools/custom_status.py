@@ -2,7 +2,7 @@
 `SEARCH_ENGINE["AGENT_CUSTOM_STATUS"]` (default off).
 
 `status` stays the system value every tool and automation reads; `custom_status` is the NAME the
-project gives it ("In Review", "Ready to start"). With the flag on:
+project gives it ("Ready", "Ready to start"). With the flag on:
 
   * reads add `custom_status` to a task or milestone that has one;
   * writes take an optional `custom_status` name, which also sets `status` to its category;
@@ -31,6 +31,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.parity import flag_on
 from origin.services.project_statuses import (
     BUILTIN_STATUSES,
+    builtin_name,
     ensure_project_statuses,
     list_statuses,
 )
@@ -81,7 +82,7 @@ def project_status_choices(project: ProjectMaster) -> list[dict[str, str]]:
     built-in list while nobody has set the project's up. Reads only."""
     rows = list_statuses(project)
     if not rows:
-        return [{"name": name, "category": category} for name, category in BUILTIN_STATUSES]
+        return [{"name": builtin_name(k), "category": category} for k, category in BUILTIN_STATUSES]
     return [{"name": r.name, "category": r.category} for r in rows if r.archived_at is None]
 
 
@@ -170,12 +171,16 @@ def choose(
             return _left_out(project, "that status is turned off in this project.")
         category = row.category
     else:
-        found = next(((n, c) for n, c in BUILTIN_STATUSES if _clean(n) == wanted), None)
+        # By the name, or by the key a built-in had as its name before ("In Review").
+        found = next(
+            ((k, c) for k, c in BUILTIN_STATUSES if wanted in (_clean(k), _clean(builtin_name(k)))),
+            None,
+        )
         if found is None:
             return _left_out(project, "this project has no status with that name.")
-        name, category = found
+        key, category = found
         # A built-in that is its category's own name needs no row: `status` says it already.
-        builtin_key = name if name != category else None
+        builtin_key = key if key != category else None
     if requested_status not in (None, "") and requested_status != category:
         return _left_out(
             project, f"it belongs to `status` {category}, not {requested_status} as sent."

@@ -45,7 +45,7 @@ class FlagOffTests(ToolBase):
         with flag(False):
             task = self.task("Open", custom=self.builtin("In Review"))
             self.run_tool("update_task", task_id=task.task_id, custom_status="WIP", priority="Low")
-            self.assertEqual(self.name_of(task), ("Open", "In Review"))
+            self.assertEqual(self.name_of(task), ("Open", "Ready"))
             self.assertNotIn("custom_status", self.run_tool("fetch_task", task_id=task.task_id))
             tags = self.run_tool("list_project_tags", project_id=self.project.project_id)
             self.assertNotIn("statuses", tags)
@@ -72,10 +72,12 @@ class WriteTests(ToolBase):
         self.assertIn("custom_status", result["changed_fields"])
         self.assertNotIn("suggestions", result)
 
-    def test_in_review_works_before_anyone_set_the_project_up(self):
-        task = self.task("Open")
-        self.run_tool("update_task", task_id=task.task_id, custom_status="In Review")
-        self.assertEqual(self.name_of(task), ("Open", "In Review"))
+    def test_ready_works_before_anyone_set_the_project_up(self):
+        # "In Review" was the built-in's name (MIP-2602): a client that still says it is served.
+        for said in ("Ready", "In Review"):
+            task = self.task("Open")
+            self.run_tool("update_task", task_id=task.task_id, custom_status=said)
+            self.assertEqual(self.name_of(task), ("Open", "Ready"), said)
 
     def test_a_plain_category_name_writes_no_rows(self):
         task = self.task("Open")
@@ -90,7 +92,7 @@ class WriteTests(ToolBase):
         for args in (
             {"custom_status": "Nope"},
             {"custom_status": "Old"},
-            {"custom_status": "In Review", "status": "Closed"},
+            {"custom_status": "Ready", "status": "Closed"},
         ):
             task = self.task("Open")
             result = self.run_tool(
@@ -103,7 +105,7 @@ class WriteTests(ToolBase):
             status = args.get("status", "Open")
             self.assertEqual(self.name_of(task), (status, None), args)
             (entry,) = [s for s in result["suggestions"] if s["kind"] == "custom_status"]
-            self.assertIn({"name": "In Review", "category": "Open"}, entry["candidates"])
+            self.assertIn({"name": "Ready", "category": "Open"}, entry["candidates"])
             self.assertNotIn("Old", [c["name"] for c in entry["candidates"]])
 
     def test_only_a_bad_name_changes_nothing_and_says_why(self):
@@ -122,9 +124,9 @@ class WriteTests(ToolBase):
             "create_task",
             project_id=self.project.project_id,
             title="Review me",
-            custom_status="In Review",
+            custom_status="Ready",
         )
-        self.assertEqual((result["status"], result["custom_status"]), ("Open", "In Review"))
+        self.assertEqual((result["status"], result["custom_status"]), ("Open", "Ready"))
         wrong = self.run_tool(
             "create_task",
             project_id=self.project.project_id,
@@ -181,10 +183,10 @@ class WriteTests(ToolBase):
             "manage_milestone",
             action="update",
             milestone_id=milestone.milestone_id,
-            custom_status="In Review",
+            custom_status="Ready",
             reason="back to review",
         )
-        self.assertEqual((changed["status"], changed["custom_status"]), ("Open", "In Review"))
+        self.assertEqual((changed["status"], changed["custom_status"]), ("Open", "Ready"))
 
 
 @flag(True)
@@ -193,20 +195,20 @@ class ReadTests(ToolBase):
         named = self.task("Open", custom=self.builtin("In Review"))
         plain = self.task("Open")
         self.assertEqual(
-            self.run_tool("fetch_task", task_id=named.task_id)["custom_status"], "In Review"
+            self.run_tool("fetch_task", task_id=named.task_id)["custom_status"], "Ready"
         )
         self.assertNotIn("custom_status", self.run_tool("fetch_task", task_id=plain.task_id))
         rows = self.run_tool("list_tasks", project_id=self.project.project_id)["tasks"]
         names = {r["task_id"]: r.get("custom_status") for r in rows}
-        self.assertEqual((names[named.task_id], names[plain.task_id]), ("In Review", None))
+        self.assertEqual((names[named.task_id], names[plain.task_id]), ("Ready", None))
 
     def test_milestone_reads_carry_it(self):
         row = self.builtin("In Review")
         m = create_milestone(self.project, reporter_id=self.user.id, title="M", custom_status=row)
         listed = self.run_tool("list_milestones", project_id=self.project.project_id)
-        self.assertEqual(listed["milestones"][0]["custom_status"], "In Review")
+        self.assertEqual(listed["milestones"][0]["custom_status"], "Ready")
         summary = self.run_tool("get_milestone_summary", milestone_id=m.milestone_id)
-        self.assertEqual(summary["custom_status"], "In Review")
+        self.assertEqual(summary["custom_status"], "Ready")
 
     def test_list_project_tags_lists_the_names_with_their_category(self):
         def statuses():
@@ -215,7 +217,7 @@ class ReadTests(ToolBase):
             ]
 
         before = statuses()
-        self.assertIn({"name": "In Review", "category": "Open"}, before)
+        self.assertIn({"name": "Ready", "category": "Open"}, before)
         self.assertIn({"name": "Rejected", "category": "Rejected"}, before)
         self.assertFalse(ProjectStatus.objects.filter(project=self.project).exists())
         self.add("Doing", "WIP")
@@ -250,12 +252,12 @@ class UnfitNameWordingTests(ToolBase):
             (entry,) = [s for s in result["suggestions"] if s["kind"] == "custom_status"]
             self.assertIn("naming the statuses in `candidates`", entry["message"])
             self.assertIn("was not applied", entry["message"])
-            self.assertIn({"name": "In Review", "category": "Open"}, entry["candidates"])
+            self.assertIn({"name": "Ready", "category": "Open"}, entry["candidates"])
         self.assertEqual(updated["changed_fields"], ["priority"])
 
     def test_no_notice_for_a_name_that_fits_or_a_call_without_one(self):
         task = self.task("Open")
-        for args in ({"custom_status": "In Review"}, {"priority": "Low"}):
+        for args in ({"custom_status": "Ready"}, {"priority": "Low"}):
             result = self.run_tool("update_task", task_id=task.task_id, **args)
             self.assertNotIn("tell_the_member", result, args)
 
