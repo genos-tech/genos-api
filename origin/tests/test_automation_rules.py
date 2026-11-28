@@ -25,6 +25,7 @@ from origin.models.project.prj_models import (
     ProjectCustomField,
     ProjectMaster,
     ProjectMembers,
+    ProjectStatus,
     ProjectTags,
 )
 from origin.models.task.automation_models import AutomationRule, AutomationRun
@@ -888,6 +889,64 @@ class RulesApiTests(AutomationTestBase):
         self.assertEqual(list(destinations()), [gone, gone])
         AutomationRule.objects.update(destination_project=None)
         self.assertEqual(list(destinations()), [gone, gone])
+
+    def gone_rule(self):
+        """A rule whose destination row is gone, holding values that belonged to it."""
+        self.tag(self.x, "secret-tag")
+        status = ProjectStatus.objects.create(
+            team=self.team, project=self.x, category="Open", name="Secret column", sort_order=1
+        )
+        rule_id = self.create(
+            conditions=[],
+            set_custom_status_id=status.status_id,
+            set_assignee_id=str(self.user.id),
+            add_tag="secret-tag",
+        ).data["ruleId"]
+        editor = self.person("ed")
+        self.join(self.a, editor, "editor")
+        AutomationRule.objects.update(
+            destination_project=None,
+            set_custom_status=status,
+            disabled_reason="owner_not_on_destination",
+        )
+        return rule_id, editor
+
+    def test_the_values_of_a_destination_whose_row_is_gone_are_hidden_from_everyone(self):
+        # MIP-2559
+        rule_id, editor = self.gone_rule()
+        for reader in (self.user, editor):
+            self.authenticate(reader)
+            shown = self.client.get(self.detail(rule_id)).data
+            listed = self.client.get(self.url()).data["rules"][0]
+            for data in (shown, listed):
+                self.assertEqual(
+                    (data["addTag"], data["setCustomStatusId"], data["setAssigneeId"]),
+                    (None, None, None),
+                )
+                self.assertEqual(data["disabledReason"], "destination")
+                self.assertTrue(data["destination"]["gone"])
+                self.assertNotIn("secret-tag", json.dumps(data))
+
+    def test_giving_a_gone_destination_rule_a_move_or_none_adopts_no_old_value(self):
+        # MIP-2559: what nobody can read must not come back through a partial edit.
+        for destination in (None, "x"):
+            AutomationRule.objects.all().delete()
+            rule_id, _ = self.gone_rule()
+            self.tag(self.a, "secret-tag")
+            self.authenticate(self.user)
+            patched = self.client.patch(
+                self.detail(rule_id),
+                {"destination_project_id": destination and self.x.project_id},
+                format="json",
+            )
+            self.assertEqual(patched.status_code, 200, patched.data)
+            rule = AutomationRule.objects.get(id=rule_id)
+            self.assertEqual(
+                (rule.add_tag, rule.set_assignee_id, rule.set_custom_status_id), ("", None, None)
+            )
+            ProjectTags.objects.all().delete()
+            ProjectStatus.objects.all().delete()
+            get_user_model().objects.filter(username="ed").delete()
 
     def test_a_rule_of_another_project_is_not_reached_through_this_one(self):
         rule_id = self.create().data["ruleId"]
